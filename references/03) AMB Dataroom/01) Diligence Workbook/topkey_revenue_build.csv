@@ -1,0 +1,40 @@
+"Topkey, Inc. - Revenue Build",,,,,,,,,,,
+Profit and Loss - months in the YTD period ended August 2026,,,,,,,,,,,
+Transcribed from low-resolution screenshots. Figures are BEST-EFFORT and should be verified.,,,,,,,,,,,
+,,,,,,,,,,,
+Line Item,Jan-26,Feb-26,Mar-26,Apr-26,May-26,Jun-26,Jul-26,Aug-26,YTD-2026 (8 mo),FY-2025,Confidence
+Customer Platform Fee - Revenue,"$126,116","$137,971","$149,659","$164,671","$156,781","$179,121","$200,261","$212,201","$1,338,880","$985,901",Medium - digits 2-3 and last 3 are uncertain
+Implementation Fees,"$1,802","$1,872","$2,355","$2,536","$3,150","$2,512","$2,497","$2,509","$19,270","$10,562","High - short numbers, reads cleanly"
+Interchange Revenue - AMEX,–,–,–,–,–,–,"$8,139",–,"$8,139",–,High - only Jul-2026 is non-zero
+Total Interchange Share - Topkey,"$7,206","$11,371","$13,734","$14,564","$13,666","$16,277","$14,988","$14,761","$105,904","$57,549",Medium-High
+Operating Interest Income,"$13,744","$16,372","$11,455","$15,668","$19,685","$21,548","$24,995","$31,395","$153,128","$191,884","Medium - FY-2025 could be 151,884 or 191,884"
+Total Revenue (computed from lines above),"$148,868","$167,586","$177,203","$197,439","$193,282","$219,458","$250,880","$260,866","$1,625,321","$1,245,896",Derived
+Total Revenue (as printed on sheet),"$148,868","$167,586","$181,153","$196,988","$195,690","$219,768","$252,598","$261,916","$1,625,314","$1,246,298",Medium
+Difference (printed less computed),–,–,"$3,950",($451),"$2,408",$310,"$1,718","$1,050",($7),$402,Transcription error indicator
+,,,,,,,,,,,
+Revenue mix % of total (using computed total),,,,,,,,,,,
+Customer Platform Fee - Revenue,$85,$82,$85,$83,$81,$82,$80,$81,$82,$79,
+Implementation Fees,$1,$1,$1,$1,$2,$1,$1,$1,$1,$1,
+Interchange Revenue - AMEX,–,–,–,–,–,–,$3,–,$1,–,
+Total Interchange Share - Topkey,$5,$7,$8,$7,$7,$7,$6,$6,$7,$5,
+Operating Interest Income,$9,$10,$7,$8,$10,$10,$10,$12,$9,$15,
+,,,,,,,,,,,
+Month-over-month growth % (computed total revenue),,,,,,,,,,,
+Total Revenue MoM %,,12.6,5.7,11.4,-2.1,13.5,14.3,4,,,
+,,,,,,,,,,,
+Below the revenue line (for reference),,,,,,,,,,,
+Cost of Goods Sold,22656,21117,22636,29876,23901,24109,25625,26236,189072,205918,Medium
+Gross Profit (as printed),133861,146299,158517,167548,171789,195899,227361,235280,1436242,1040380,Medium-High
+Gross Margin % (printed GP / printed revenue),89.9,87.3,87.5,85.1,87.8,89.1,90,89.8,88.4,83.5,Derived
+,,,,,,,,,,,
+NOTES ON ACCURACY,,,,,,,,,,,
+1. Source images are heavily compressed; several digits are not recoverable with certainty. Treat every figure as approximate.,,,,,,,,,,,
+"2. Where the printed total and the sum of the components disagree, the 'Difference' row shows the gap. Gaps are generally under ~2% of revenue.",,,,,,,,,,,
+"3. Cells that reconcile cleanly and are therefore most reliable: YTD-2026 Total Revenue 1,625,314 less COGS 189,072 = Gross Profit 1,436,242 (exact).",,,,,,,,,,,
+"4. May-2026 also reconciles exactly: Total Revenue 195,690 less COGS 23,901 = Gross Profit 171,789.",,,,,,,,,,,
+"5. Customer Platform Fee YTD of 1,338,880 was solved from the YTD total rather than read directly; a direct read suggested 1,328,880.",,,,,,,,,,,
+"6. Apr-2026 platform fee could be 154,671 instead of 164,671. The YTD total favours 164,671.",,,,,,,,,,,
+"7. Operating Interest Income FY-2025 reads as 151,884 but 191,884 is required for the FY-2025 total to foot. 191,884 is used here.",,,,,,,,,,,
+"8. Interchange Revenue - AMEX appears only in Jul-2026 (8,139); all other months are dashes on the sheet.",,,,,,,,,,,
+"9. The sheet also shows a single Jan-2025 column with total revenue of roughly 1,353, essentially all interchange share. Excluded above as it is a partial view.",,,,,,,,,,,
+"10. Row 9 on the sheet is followed by row 12, so rows 10-11 are hidden or grouped and may contain additional interchange detail not visible in the screenshots.",,,,,,,,,,,
