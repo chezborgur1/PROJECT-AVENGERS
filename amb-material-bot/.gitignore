@@ -11,8 +11,3 @@ deals/
 requests/live-*.csv
 
 *.log
-
-# Reference materials (may contain client data): keep local only.
-references/model-templates/*
-references/cims/*
-!references/*/.gitkeep

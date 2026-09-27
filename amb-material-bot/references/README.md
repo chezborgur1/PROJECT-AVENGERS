@@ -1,8 +1,8 @@
 # Reference library
 
-Drop your own materials here so future versions of the bot can match AMB's house style.
+AMB's own materials, used as context for the house style of the models and CIMs the bot builds.
 
-- `model-templates/`: Excel models you like (.xlsx)
+- `model-templates/`: Excel models (.xlsx)
 - `cims/`: past CIMs and teasers (.pptx / .pdf)
 
-The contents of these folders are git-ignored because they may contain client data. They stay on your computer.
+These folders are committed to this private repo.
