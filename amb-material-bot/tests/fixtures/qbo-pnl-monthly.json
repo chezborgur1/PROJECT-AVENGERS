@@ -1,0 +1,41 @@
+{
+  "Header": { "ReportName": "ProfitAndLoss", "SummarizeColumnsBy": "Month" },
+  "Columns": {
+    "Column": [
+      { "ColTitle": "", "ColType": "Account" },
+      { "ColTitle": "Jul 2024", "ColType": "Money", "MetaData": [{ "Name": "StartDate", "Value": "2024-07-01" }, { "Name": "EndDate", "Value": "2024-07-31" }] },
+      { "ColTitle": "Jun 2025", "ColType": "Money", "MetaData": [{ "Name": "StartDate", "Value": "2025-06-01" }, { "Name": "EndDate", "Value": "2025-06-30" }] },
+      { "ColTitle": "Jul 2025", "ColType": "Money", "MetaData": [{ "Name": "StartDate", "Value": "2025-07-01" }, { "Name": "EndDate", "Value": "2025-07-31" }] },
+      { "ColTitle": "Total", "ColType": "Money" }
+    ]
+  },
+  "Rows": {
+    "Row": [
+      {
+        "type": "Section", "group": "Income",
+        "Header": { "ColData": [{ "value": "Income" }, { "value": "" }, { "value": "" }, { "value": "" }, { "value": "" }] },
+        "Rows": { "Row": [
+          { "type": "Data", "ColData": [{ "value": "Crown & Bridge Sales", "id": "1" }, { "value": "100000.00" }, { "value": "120000.00" }, { "value": "130000.00" }, { "value": "350000.00" }] }
+        ] },
+        "Summary": { "ColData": [{ "value": "Total Income" }, { "value": "100000.00" }, { "value": "120000.00" }, { "value": "130000.00" }, { "value": "350000.00" }] }
+      },
+      {
+        "type": "Section", "group": "Expenses",
+        "Header": { "ColData": [{ "value": "Expenses" }, { "value": "" }, { "value": "" }, { "value": "" }, { "value": "" }] },
+        "Rows": { "Row": [
+          {
+            "type": "Section",
+            "Header": { "ColData": [{ "value": "Payroll Expenses" }, { "value": "" }, { "value": "" }, { "value": "" }, { "value": "" }] },
+            "Rows": { "Row": [
+              { "type": "Data", "ColData": [{ "value": "Taxes" }, { "value": "4000.00" }, { "value": "5000.00" }, { "value": "5500.00" }, { "value": "14500.00" }] }
+            ] },
+            "Summary": { "ColData": [{ "value": "Total Payroll Expenses" }, { "value": "4000.00" }, { "value": "5000.00" }, { "value": "5500.00" }, { "value": "14500.00" }] }
+          },
+          { "type": "Data", "ColData": [{ "value": "Lab Rent" }, { "value": "3000.00" }, { "value": "3000.00" }, { "value": "3100.00" }, { "value": "9100.00" }] }
+        ] },
+        "Summary": { "ColData": [{ "value": "Total Expenses" }, { "value": "7000.00" }, { "value": "8000.00" }, { "value": "8600.00" }, { "value": "23600.00" }] }
+      },
+      { "type": "Section", "group": "NetIncome", "Summary": { "ColData": [{ "value": "Net Income" }, { "value": "93000.00" }, { "value": "112000.00" }, { "value": "121400.00" }, { "value": "326400.00" }] } }
+    ]
+  }
+}

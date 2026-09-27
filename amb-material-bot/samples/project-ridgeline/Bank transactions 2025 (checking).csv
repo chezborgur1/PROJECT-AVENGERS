@@ -1,0 +1,872 @@
+Date,Description,Amount
+2025-01-01,ACH credit - customer payment,5128.39
+2025-01-01,Ally auto loan pmt,-5054.73
+2025-01-01,Ferguson HVAC supply,-23848.16
+2025-01-01,Fuel - WEX,-21030.70
+2025-01-02,Card settlement - ServiceTitan Pay,2801.19
+2025-01-02,Ferguson HVAC supply,-3082.67
+2025-01-02,Fuel - WEX,-22639.03
+2025-01-03,Ferguson HVAC supply,-15930.62
+2025-01-03,Ferguson HVAC supply,-3901.41
+2025-01-03,Mobile deposit,1742.00
+2025-01-03,Mobile deposit,7382.14
+2025-01-03,Remote deposit capture,3956.98
+2025-01-03,Stripe payout,2983.09
+2025-01-03,Stripe payout,5084.85
+2025-01-04,Fuel - WEX,-16405.80
+2025-01-04,Johnstone Supply,-15922.83
+2025-01-04,Payroll - Gusto,-21450.02
+2025-01-05,ACH credit - customer payment,4112.30
+2025-01-05,ACH credit - customer payment,4867.66
+2025-01-05,Fuel - WEX,-14062.89
+2025-01-05,Rent - Maple Ave LLC,-21691.25
+2025-01-05,Rent - Maple Ave LLC,-7428.06
+2025-01-05,Stripe payout,2526.34
+2025-01-05,Stripe payout,2580.26
+2025-01-06,Card settlement - ServiceTitan Pay,1902.22
+2025-01-06,Johnstone Supply,-19640.54
+2025-01-06,Johnstone Supply,-8125.37
+2025-01-07,Card settlement - ServiceTitan Pay,5130.32
+2025-01-07,Fuel - WEX,-5314.12
+2025-01-08,Stripe payout,3735.84
+2025-01-09,ACH credit - customer payment,4427.82
+2025-01-09,ACH credit - customer payment,5225.70
+2025-01-10,ACH credit - customer payment,4118.73
+2025-01-10,Remote deposit capture,1651.69
+2025-01-10,Remote deposit capture,5207.38
+2025-01-10,Rent - Maple Ave LLC,-21788.14
+2025-01-11,Ally auto loan pmt,-2735.53
+2025-01-11,Card settlement - ServiceTitan Pay,7633.24
+2025-01-11,Rent - Maple Ave LLC,-7721.79
+2025-01-12,ACH credit - customer payment,7473.53
+2025-01-12,Ally auto loan pmt,-10057.84
+2025-01-12,Stripe payout,5057.50
+2025-01-13,ACH credit - customer payment,1978.61
+2025-01-13,Fuel - WEX,-10876.00
+2025-01-14,Mobile deposit,2931.45
+2025-01-15,ACH credit - customer payment,5448.34
+2025-01-15,Fuel - WEX,-12870.11
+2025-01-15,Online transfer from savings xxxx4471,14877.75
+2025-01-16,Card settlement - ServiceTitan Pay,6793.88
+2025-01-16,Mobile deposit,2016.03
+2025-01-17,ACH credit - customer payment,2758.72
+2025-01-17,Johnstone Supply,-4945.16
+2025-01-18,Ally auto loan pmt,-19807.79
+2025-01-18,Card settlement - ServiceTitan Pay,4632.80
+2025-01-18,Payroll - Gusto,-19316.36
+2025-01-19,ACH credit - customer payment,5208.77
+2025-01-19,Card settlement - ServiceTitan Pay,5092.07
+2025-01-20,ACH credit - customer payment,5525.62
+2025-01-20,Ally auto loan pmt,-8987.37
+2025-01-20,Mobile deposit,5867.39
+2025-01-20,Rent - Maple Ave LLC,-17390.70
+2025-01-21,Remote deposit capture,5033.60
+2025-01-22,ACH credit - customer payment,2216.40
+2025-01-22,Card settlement - ServiceTitan Pay,4927.30
+2025-01-22,Mobile deposit,4996.23
+2025-01-23,Johnstone Supply,-13682.33
+2025-01-23,Mobile deposit,1660.36
+2025-01-24,ACH credit - customer payment,1956.66
+2025-01-25,Remote deposit capture,1723.69
+2025-01-25,Rent - Maple Ave LLC,-20250.02
+2025-01-25,Stripe payout,7636.01
+2025-01-27,Rent - Maple Ave LLC,-5293.81
+2025-01-28,ACH credit - customer payment,6067.68
+2025-01-28,Remote deposit capture,6500.87
+2025-02-01,Card settlement - ServiceTitan Pay,3400.19
+2025-02-01,Fuel - WEX,-9290.20
+2025-02-01,Mobile deposit,7431.60
+2025-02-01,Stripe payout,2468.53
+2025-02-02,Card settlement - ServiceTitan Pay,4186.07
+2025-02-02,Ferguson HVAC supply,-7855.48
+2025-02-03,Ferguson HVAC supply,-17232.60
+2025-02-03,Fuel - WEX,-9151.92
+2025-02-03,Payroll - Gusto,-24649.46
+2025-02-03,Rent - Maple Ave LLC,-7155.01
+2025-02-04,Fuel - WEX,-22295.92
+2025-02-04,Fuel - WEX,-11889.78
+2025-02-04,Payroll - Gusto,-7740.76
+2025-02-05,Fuel - WEX,-21465.31
+2025-02-05,Fuel - WEX,-6660.31
+2025-02-05,Remote deposit capture,1261.35
+2025-02-05,Remote deposit capture,4327.90
+2025-02-05,Remote deposit capture,5061.81
+2025-02-05,Rent - Maple Ave LLC,-16621.26
+2025-02-06,Rent - Maple Ave LLC,-21062.45
+2025-02-06,Rent - Maple Ave LLC,-11640.76
+2025-02-06,Stripe payout,3676.66
+2025-02-06,Stripe payout,5986.76
+2025-02-07,Card settlement - ServiceTitan Pay,6300.64
+2025-02-07,Fuel - WEX,-4722.66
+2025-02-07,Johnstone Supply,-8985.35
+2025-02-08,Rent - Maple Ave LLC,-13795.43
+2025-02-08,Stripe payout,5758.76
+2025-02-09,Ally auto loan pmt,-22479.74
+2025-02-11,Card settlement - ServiceTitan Pay,7337.34
+2025-02-11,Remote deposit capture,3960.21
+2025-02-12,Ferguson HVAC supply,-7448.03
+2025-02-14,Remote deposit capture,7404.40
+2025-02-14,Stripe payout,2459.15
+2025-02-15,ACH credit - customer payment,5225.36
+2025-02-15,Online transfer from savings xxxx4471,9153.76
+2025-02-15,Remote deposit capture,3359.31
+2025-02-16,Card settlement - ServiceTitan Pay,2498.34
+2025-02-16,Mobile deposit,1791.36
+2025-02-16,Remote deposit capture,5694.21
+2025-02-17,Ally auto loan pmt,-13535.79
+2025-02-17,Fuel - WEX,-9469.23
+2025-02-17,Mobile deposit,6929.31
+2025-02-17,Remote deposit capture,5221.61
+2025-02-17,Stripe payout,4199.57
+2025-02-17,Stripe payout,5766.90
+2025-02-18,ACH credit - customer payment,1752.56
+2025-02-18,Fuel - WEX,-13432.17
+2025-02-18,Fuel - WEX,-11850.77
+2025-02-18,Mobile deposit,6803.19
+2025-02-18,Mobile deposit,7160.24
+2025-02-18,Payroll - Gusto,-19359.84
+2025-02-18,Stripe payout,5816.10
+2025-02-19,ACH credit - customer payment,2744.91
+2025-02-20,Johnstone Supply,-13538.16
+2025-02-20,Mobile deposit,6463.58
+2025-02-20,Remote deposit capture,6267.90
+2025-02-23,Johnstone Supply,-12130.13
+2025-02-24,Johnstone Supply,-1957.85
+2025-02-24,Mobile deposit,2494.60
+2025-02-24,Mobile deposit,5080.34
+2025-02-24,Stripe payout,6174.66
+2025-02-25,Payroll - Gusto,-13431.28
+2025-02-25,Remote deposit capture,3432.92
+2025-02-25,Stripe payout,1998.48
+2025-02-25,Stripe payout,5267.16
+2025-02-26,Ferguson HVAC supply,-24334.86
+2025-02-26,Mobile deposit,6185.37
+2025-02-26,Payroll - Gusto,-22580.12
+2025-02-26,Stripe payout,3752.55
+2025-02-27,Remote deposit capture,4264.62
+2025-02-27,Stripe payout,1887.61
+2025-02-27,Stripe payout,5029.81
+2025-02-28,ACH credit - customer payment,3398.48
+2025-03-01,Card settlement - ServiceTitan Pay,1931.23
+2025-03-01,Card settlement - ServiceTitan Pay,8990.87
+2025-03-01,Mobile deposit,1721.80
+2025-03-01,Payroll - Gusto,-4627.69
+2025-03-01,Rent - Maple Ave LLC,-13988.93
+2025-03-02,ACH credit - customer payment,4905.47
+2025-03-02,Mobile deposit,6417.52
+2025-03-02,Stripe payout,3723.60
+2025-03-03,Ally auto loan pmt,-4964.49
+2025-03-03,Card settlement - ServiceTitan Pay,3736.29
+2025-03-03,Remote deposit capture,5671.55
+2025-03-04,ACH credit - customer payment,5849.14
+2025-03-05,ACH credit - customer payment,9485.20
+2025-03-05,Johnstone Supply,-18517.66
+2025-03-06,Stripe payout,8857.31
+2025-03-07,Stripe payout,3044.03
+2025-03-08,ACH credit - customer payment,4811.67
+2025-03-08,Card settlement - ServiceTitan Pay,7937.46
+2025-03-08,Fuel - WEX,-7699.13
+2025-03-08,Mobile deposit,9284.41
+2025-03-08,Remote deposit capture,5127.23
+2025-03-09,ACH credit - customer payment,6524.93
+2025-03-09,Rent - Maple Ave LLC,-18965.61
+2025-03-10,Ally auto loan pmt,-14842.40
+2025-03-10,Card settlement - ServiceTitan Pay,5603.41
+2025-03-10,Stripe payout,3667.79
+2025-03-11,Rent - Maple Ave LLC,-24641.13
+2025-03-12,Card settlement - ServiceTitan Pay,7222.39
+2025-03-12,Payroll - Gusto,-10350.53
+2025-03-12,Stripe payout,3026.58
+2025-03-13,Card settlement - ServiceTitan Pay,8697.37
+2025-03-13,Mobile deposit,1734.53
+2025-03-13,Mobile deposit,6580.26
+2025-03-13,Payroll - Gusto,-12756.74
+2025-03-14,Stripe payout,3657.12
+2025-03-15,Ally auto loan pmt,-2693.34
+2025-03-15,Online transfer from savings xxxx4471,19364.56
+2025-03-15,Payroll - Gusto,-19084.24
+2025-03-16,Card settlement - ServiceTitan Pay,5805.36
+2025-03-16,Johnstone Supply,-20516.64
+2025-03-17,Ally auto loan pmt,-14859.27
+2025-03-17,Ally auto loan pmt,-3660.64
+2025-03-17,Card settlement - ServiceTitan Pay,4185.15
+2025-03-17,Payroll - Gusto,-19024.61
+2025-03-17,Stripe payout,3222.92
+2025-03-18,ACH credit - customer payment,5515.73
+2025-03-18,Card settlement - ServiceTitan Pay,9037.55
+2025-03-19,Mobile deposit,1881.55
+2025-03-19,Rent - Maple Ave LLC,-17548.04
+2025-03-20,Rent - Maple Ave LLC,-16604.93
+2025-03-20,Stripe payout,1679.83
+2025-03-21,Card settlement - ServiceTitan Pay,2291.43
+2025-03-21,Ferguson HVAC supply,-2529.02
+2025-03-21,Fuel - WEX,-18745.52
+2025-03-21,Fuel - WEX,-13107.80
+2025-03-21,Stripe payout,9354.59
+2025-03-22,ACH credit - customer payment,3354.23
+2025-03-22,ACH credit - customer payment,5675.90
+2025-03-22,Card settlement - ServiceTitan Pay,2554.36
+2025-03-22,Johnstone Supply,-19523.80
+2025-03-23,Ally auto loan pmt,-10653.64
+2025-03-23,Card settlement - ServiceTitan Pay,9483.66
+2025-03-23,Rent - Maple Ave LLC,-6903.61
+2025-03-23,Stripe payout,3804.11
+2025-03-25,Ferguson HVAC supply,-6922.30
+2025-03-25,Mobile deposit,6925.57
+2025-03-26,Ally auto loan pmt,-4773.73
+2025-03-27,Mobile deposit,7969.95
+2025-03-27,Payroll - Gusto,-20920.61
+2025-03-27,Rent - Maple Ave LLC,-22460.65
+2025-03-28,Ferguson HVAC supply,-16952.28
+2025-03-28,Johnstone Supply,-7017.46
+2025-03-28,Remote deposit capture,3688.08
+2025-04-01,ACH credit - customer payment,4177.85
+2025-04-01,Card settlement - ServiceTitan Pay,8222.29
+2025-04-01,Rent - Maple Ave LLC,-21959.46
+2025-04-02,ACH credit - customer payment,7523.86
+2025-04-02,Card settlement - ServiceTitan Pay,10801.47
+2025-04-03,ACH credit - customer payment,2586.04
+2025-04-03,Card settlement - ServiceTitan Pay,4429.17
+2025-04-04,Card settlement - ServiceTitan Pay,6238.74
+2025-04-04,Stripe payout,8749.70
+2025-04-06,ACH credit - customer payment,5374.47
+2025-04-06,Johnstone Supply,-14563.04
+2025-04-06,Rent - Maple Ave LLC,-5298.94
+2025-04-07,Ally auto loan pmt,-22790.06
+2025-04-07,Fuel - WEX,-7850.64
+2025-04-07,Mobile deposit,7267.81
+2025-04-08,Card settlement - ServiceTitan Pay,10101.14
+2025-04-08,Ferguson HVAC supply,-5073.60
+2025-04-08,Fuel - WEX,-10894.29
+2025-04-09,Card settlement - ServiceTitan Pay,4628.97
+2025-04-09,Mobile deposit,10807.28
+2025-04-10,Card settlement - ServiceTitan Pay,10403.34
+2025-04-11,Ferguson HVAC supply,-10155.18
+2025-04-11,Fuel - WEX,-11544.44
+2025-04-11,Stripe payout,2484.34
+2025-04-13,Card settlement - ServiceTitan Pay,3778.75
+2025-04-13,Card settlement - ServiceTitan Pay,6204.21
+2025-04-13,Fuel - WEX,-19027.25
+2025-04-13,Remote deposit capture,6087.94
+2025-04-14,Card settlement - ServiceTitan Pay,2501.09
+2025-04-14,Card settlement - ServiceTitan Pay,2709.66
+2025-04-14,Card settlement - ServiceTitan Pay,3248.36
+2025-04-14,Remote deposit capture,10227.63
+2025-04-14,Rent - Maple Ave LLC,-19446.73
+2025-04-15,Ferguson HVAC supply,-19903.02
+2025-04-15,Fuel - WEX,-23917.67
+2025-04-15,Online transfer from savings xxxx4471,8836.14
+2025-04-15,Remote deposit capture,4338.51
+2025-04-16,Ally auto loan pmt,-6670.59
+2025-04-16,Mobile deposit,6313.59
+2025-04-16,Payroll - Gusto,-3218.74
+2025-04-17,Ally auto loan pmt,-16296.23
+2025-04-18,Ferguson HVAC supply,-7236.01
+2025-04-18,Remote deposit capture,5062.12
+2025-04-18,Rent - Maple Ave LLC,-10767.64
+2025-04-18,Stripe payout,9735.57
+2025-04-19,Johnstone Supply,-4458.03
+2025-04-21,Card settlement - ServiceTitan Pay,5113.09
+2025-04-21,Ferguson HVAC supply,-8569.65
+2025-04-21,Stripe payout,5309.04
+2025-04-22,ACH credit - customer payment,6173.66
+2025-04-22,Payroll - Gusto,-23625.03
+2025-04-23,Mobile deposit,10795.44
+2025-04-24,Card settlement - ServiceTitan Pay,6776.67
+2025-04-24,Rent - Maple Ave LLC,-16712.68
+2025-04-24,Rent - Maple Ave LLC,-7613.97
+2025-04-24,Stripe payout,10607.34
+2025-04-25,Card settlement - ServiceTitan Pay,2626.29
+2025-04-25,Card settlement - ServiceTitan Pay,4392.57
+2025-04-25,Fuel - WEX,-3497.58
+2025-04-25,Payroll - Gusto,-13206.43
+2025-04-25,Stripe payout,2828.70
+2025-04-26,ACH credit - customer payment,8571.63
+2025-04-26,Ally auto loan pmt,-6250.33
+2025-04-26,Fuel - WEX,-24254.61
+2025-04-27,ACH credit - customer payment,6024.18
+2025-04-27,Ally auto loan pmt,-21603.37
+2025-04-28,Ferguson HVAC supply,-3676.06
+2025-04-28,Mobile deposit,6392.57
+2025-04-28,Payroll - Gusto,-4490.30
+2025-05-01,Mobile deposit,6896.48
+2025-05-02,Card settlement - ServiceTitan Pay,4353.53
+2025-05-02,Fuel - WEX,-14485.97
+2025-05-02,Fuel - WEX,-2970.63
+2025-05-02,Johnstone Supply,-6081.12
+2025-05-03,Ally auto loan pmt,-9468.13
+2025-05-03,Stripe payout,2532.71
+2025-05-03,Stripe payout,12840.65
+2025-05-04,Payroll - Gusto,-7724.95
+2025-05-04,Remote deposit capture,5527.03
+2025-05-04,Remote deposit capture,9895.56
+2025-05-06,ACH credit - customer payment,4886.43
+2025-05-06,Mobile deposit,4726.07
+2025-05-06,Remote deposit capture,9385.52
+2025-05-06,Stripe payout,4326.87
+2025-05-07,Fuel - WEX,-19192.81
+2025-05-07,Fuel - WEX,-9880.79
+2025-05-07,Mobile deposit,8498.86
+2025-05-07,Mobile deposit,13215.55
+2025-05-08,ACH credit - customer payment,7041.27
+2025-05-08,Card settlement - ServiceTitan Pay,10646.95
+2025-05-08,Fuel - WEX,-3021.23
+2025-05-08,Payroll - Gusto,-12666.94
+2025-05-09,Johnstone Supply,-24005.71
+2025-05-09,Johnstone Supply,-1588.63
+2025-05-09,Mobile deposit,6298.82
+2025-05-10,Stripe payout,8044.53
+2025-05-11,ACH credit - customer payment,3105.04
+2025-05-11,Ferguson HVAC supply,-24536.01
+2025-05-11,Johnstone Supply,-12328.36
+2025-05-11,Stripe payout,6758.26
+2025-05-12,ACH credit - customer payment,3597.26
+2025-05-12,ACH credit - customer payment,7654.49
+2025-05-13,Mobile deposit,8146.41
+2025-05-14,Ferguson HVAC supply,-20577.88
+2025-05-14,Fuel - WEX,-4618.62
+2025-05-14,Mobile deposit,5703.85
+2025-05-14,Payroll - Gusto,-2657.55
+2025-05-15,Card settlement - ServiceTitan Pay,8022.71
+2025-05-15,Ferguson HVAC supply,-9097.77
+2025-05-15,Fuel - WEX,-20060.27
+2025-05-15,Online transfer from savings xxxx4471,19464.07
+2025-05-16,ACH credit - customer payment,5091.06
+2025-05-16,Ferguson HVAC supply,-10258.79
+2025-05-16,Ferguson HVAC supply,-1704.57
+2025-05-16,Remote deposit capture,12631.93
+2025-05-16,Stripe payout,9129.50
+2025-05-20,Payroll - Gusto,-7661.05
+2025-05-20,Stripe payout,2221.99
+2025-05-20,Stripe payout,5286.82
+2025-05-21,Payroll - Gusto,-2070.03
+2025-05-22,ACH credit - customer payment,11983.60
+2025-05-22,Mobile deposit,10941.25
+2025-05-23,ACH credit - customer payment,2224.36
+2025-05-23,Mobile deposit,11481.69
+2025-05-23,Rent - Maple Ave LLC,-8937.37
+2025-05-24,ACH credit - customer payment,2820.23
+2025-05-24,Fuel - WEX,-2211.63
+2025-05-24,Johnstone Supply,-20834.75
+2025-05-24,Mobile deposit,8251.64
+2025-05-24,Remote deposit capture,10107.64
+2025-05-25,Ally auto loan pmt,-23036.80
+2025-05-25,Card settlement - ServiceTitan Pay,3307.77
+2025-05-25,Ferguson HVAC supply,-15770.47
+2025-05-25,Fuel - WEX,-2455.26
+2025-05-26,Ally auto loan pmt,-3356.85
+2025-05-26,Card settlement - ServiceTitan Pay,2624.52
+2025-05-27,Card settlement - ServiceTitan Pay,9358.11
+2025-05-27,Johnstone Supply,-20817.19
+2025-06-01,Ally auto loan pmt,-24674.23
+2025-06-02,Card settlement - ServiceTitan Pay,12215.20
+2025-06-02,Stripe payout,5121.78
+2025-06-02,Stripe payout,12288.91
+2025-06-03,ACH credit - customer payment,4869.78
+2025-06-03,Fuel - WEX,-15078.20
+2025-06-03,Stripe payout,9110.01
+2025-06-04,ACH credit - customer payment,3321.41
+2025-06-04,Fuel - WEX,-13026.98
+2025-06-04,Remote deposit capture,13687.59
+2025-06-05,Johnstone Supply,-8157.43
+2025-06-05,Payroll - Gusto,-2714.84
+2025-06-05,Remote deposit capture,5593.49
+2025-06-05,Rent - Maple Ave LLC,-20452.00
+2025-06-06,Ally auto loan pmt,-6626.22
+2025-06-06,Fuel - WEX,-4168.17
+2025-06-06,Remote deposit capture,8019.90
+2025-06-06,Rent - Maple Ave LLC,-19966.90
+2025-06-07,Mobile deposit,5429.73
+2025-06-07,Mobile deposit,5462.48
+2025-06-07,Mobile deposit,14906.38
+2025-06-08,Ally auto loan pmt,-11005.39
+2025-06-09,Mobile deposit,6195.23
+2025-06-09,Mobile deposit,8289.90
+2025-06-10,Ally auto loan pmt,-7357.58
+2025-06-10,Mobile deposit,4838.25
+2025-06-10,Remote deposit capture,2564.92
+2025-06-11,Stripe payout,12035.74
+2025-06-12,ACH credit - customer payment,13581.76
+2025-06-12,Fuel - WEX,-19666.78
+2025-06-12,Payroll - Gusto,-5012.48
+2025-06-12,Remote deposit capture,14701.74
+2025-06-12,Rent - Maple Ave LLC,-13354.88
+2025-06-12,Stripe payout,9263.74
+2025-06-13,ACH credit - customer payment,13507.22
+2025-06-13,Ally auto loan pmt,-5177.25
+2025-06-13,Card settlement - ServiceTitan Pay,10656.95
+2025-06-13,Payroll - Gusto,-14962.32
+2025-06-13,Rent - Maple Ave LLC,-10135.08
+2025-06-14,Card settlement - ServiceTitan Pay,3769.67
+2025-06-14,Card settlement - ServiceTitan Pay,5773.93
+2025-06-14,Mobile deposit,2972.96
+2025-06-14,Mobile deposit,5407.41
+2025-06-15,Online transfer from savings xxxx4471,11512.46
+2025-06-15,Remote deposit capture,4175.92
+2025-06-16,Johnstone Supply,-2754.30
+2025-06-17,Ferguson HVAC supply,-23249.25
+2025-06-17,Fuel - WEX,-5700.95
+2025-06-18,ACH credit - customer payment,13892.11
+2025-06-18,Rent - Maple Ave LLC,-2396.02
+2025-06-20,Fuel - WEX,-14426.22
+2025-06-20,Remote deposit capture,7789.89
+2025-06-20,Stripe payout,6013.03
+2025-06-21,Fuel - WEX,-3527.92
+2025-06-21,Johnstone Supply,-16752.15
+2025-06-21,Stripe payout,7198.07
+2025-06-22,Card settlement - ServiceTitan Pay,8327.43
+2025-06-22,Remote deposit capture,5665.05
+2025-06-23,Ally auto loan pmt,-17673.09
+2025-06-23,Remote deposit capture,5455.32
+2025-06-24,Ferguson HVAC supply,-2465.83
+2025-06-26,ACH credit - customer payment,6037.57
+2025-06-26,Ferguson HVAC supply,-8587.96
+2025-06-27,Card settlement - ServiceTitan Pay,5695.18
+2025-06-27,Johnstone Supply,-4266.68
+2025-06-27,Mobile deposit,5865.88
+2025-06-27,Payroll - Gusto,-24425.34
+2025-06-28,Card settlement - ServiceTitan Pay,8131.52
+2025-06-28,Ferguson HVAC supply,-20985.91
+2025-06-28,Stripe payout,4680.91
+2025-07-01,Ferguson HVAC supply,-18125.61
+2025-07-01,Fuel - WEX,-5862.96
+2025-07-01,Mobile deposit,11045.44
+2025-07-01,Payroll - Gusto,-2945.92
+2025-07-01,Remote deposit capture,4784.61
+2025-07-02,Card settlement - ServiceTitan Pay,7153.47
+2025-07-02,Payroll - Gusto,-9384.63
+2025-07-02,Rent - Maple Ave LLC,-20790.70
+2025-07-02,Rent - Maple Ave LLC,-19899.89
+2025-07-02,Stripe payout,3823.41
+2025-07-04,Johnstone Supply,-6958.97
+2025-07-04,Payroll - Gusto,-15897.03
+2025-07-04,Remote deposit capture,3460.81
+2025-07-04,Remote deposit capture,6466.55
+2025-07-05,ACH credit - customer payment,5549.20
+2025-07-05,Card settlement - ServiceTitan Pay,5820.82
+2025-07-05,Rent - Maple Ave LLC,-19880.67
+2025-07-06,ACH credit - customer payment,6781.35
+2025-07-06,Card settlement - ServiceTitan Pay,3093.18
+2025-07-06,Payroll - Gusto,-22925.94
+2025-07-06,Remote deposit capture,10647.89
+2025-07-07,Ally auto loan pmt,-15789.95
+2025-07-07,Remote deposit capture,4384.29
+2025-07-08,ACH credit - customer payment,11280.85
+2025-07-08,Remote deposit capture,9631.62
+2025-07-08,Stripe payout,11241.91
+2025-07-09,ACH credit - customer payment,2561.22
+2025-07-09,Card settlement - ServiceTitan Pay,10224.01
+2025-07-09,Remote deposit capture,9402.97
+2025-07-09,Remote deposit capture,9706.01
+2025-07-09,Rent - Maple Ave LLC,-2734.52
+2025-07-10,Payroll - Gusto,-8556.25
+2025-07-10,Remote deposit capture,3677.78
+2025-07-10,Remote deposit capture,9388.91
+2025-07-11,Card settlement - ServiceTitan Pay,6630.96
+2025-07-11,Mobile deposit,11592.72
+2025-07-12,Ally auto loan pmt,-16671.70
+2025-07-12,Card settlement - ServiceTitan Pay,10230.43
+2025-07-12,Mobile deposit,2674.55
+2025-07-12,Remote deposit capture,7073.46
+2025-07-12,Remote deposit capture,7090.64
+2025-07-13,Johnstone Supply,-24227.68
+2025-07-13,Stripe payout,6352.04
+2025-07-14,Remote deposit capture,11388.39
+2025-07-15,Ally auto loan pmt,-23523.19
+2025-07-15,Ferguson HVAC supply,-6809.79
+2025-07-15,Online transfer from savings xxxx4471,13753.86
+2025-07-15,Payroll - Gusto,-18931.24
+2025-07-15,Payroll - Gusto,-2996.21
+2025-07-15,Stripe payout,3386.41
+2025-07-17,Rent - Maple Ave LLC,-16576.89
+2025-07-17,Stripe payout,9871.31
+2025-07-18,Remote deposit capture,8425.45
+2025-07-19,Ferguson HVAC supply,-6298.33
+2025-07-19,Mobile deposit,2843.02
+2025-07-20,Fuel - WEX,-5227.65
+2025-07-21,ACH credit - customer payment,9847.75
+2025-07-21,ACH credit - customer payment,9955.99
+2025-07-21,Ally auto loan pmt,-17462.02
+2025-07-21,Mobile deposit,3613.87
+2025-07-21,Remote deposit capture,3965.82
+2025-07-22,Ally auto loan pmt,-24339.46
+2025-07-22,Card settlement - ServiceTitan Pay,3308.54
+2025-07-22,Card settlement - ServiceTitan Pay,11903.57
+2025-07-22,Ferguson HVAC supply,-4843.26
+2025-07-23,Ally auto loan pmt,-1649.21
+2025-07-24,Card settlement - ServiceTitan Pay,7166.77
+2025-07-24,Fuel - WEX,-7339.68
+2025-07-24,Mobile deposit,6969.22
+2025-07-24,Mobile deposit,11650.85
+2025-07-24,Mobile deposit,12048.58
+2025-07-24,Rent - Maple Ave LLC,-23656.99
+2025-07-26,Card settlement - ServiceTitan Pay,2938.43
+2025-07-27,Ally auto loan pmt,-5604.03
+2025-07-28,ACH credit - customer payment,2425.25
+2025-07-28,Fuel - WEX,-19011.90
+2025-08-01,ACH credit - customer payment,7941.54
+2025-08-01,Card settlement - ServiceTitan Pay,3524.09
+2025-08-01,Remote deposit capture,3161.59
+2025-08-02,Mobile deposit,9753.99
+2025-08-03,Remote deposit capture,12011.58
+2025-08-04,Mobile deposit,11800.83
+2025-08-04,Stripe payout,4495.90
+2025-08-05,Ally auto loan pmt,-15461.08
+2025-08-05,Ferguson HVAC supply,-20179.86
+2025-08-05,Fuel - WEX,-17059.35
+2025-08-05,Mobile deposit,5448.93
+2025-08-06,ACH credit - customer payment,2339.17
+2025-08-07,Card settlement - ServiceTitan Pay,11638.47
+2025-08-07,Mobile deposit,11451.27
+2025-08-07,Payroll - Gusto,-16492.55
+2025-08-07,Remote deposit capture,11134.32
+2025-08-07,Stripe payout,9730.56
+2025-08-08,Ally auto loan pmt,-6001.98
+2025-08-08,Fuel - WEX,-5396.09
+2025-08-08,Rent - Maple Ave LLC,-9174.22
+2025-08-09,Mobile deposit,9204.43
+2025-08-09,Remote deposit capture,9247.36
+2025-08-10,Card settlement - ServiceTitan Pay,11418.06
+2025-08-10,Ferguson HVAC supply,-23549.80
+2025-08-10,Johnstone Supply,-11559.43
+2025-08-10,Mobile deposit,12154.59
+2025-08-10,Rent - Maple Ave LLC,-20923.32
+2025-08-11,ACH credit - customer payment,8563.75
+2025-08-11,Ferguson HVAC supply,-7579.17
+2025-08-11,Remote deposit capture,10718.51
+2025-08-12,ACH credit - customer payment,4247.01
+2025-08-12,Ally auto loan pmt,-9176.51
+2025-08-12,Card settlement - ServiceTitan Pay,8919.83
+2025-08-12,Remote deposit capture,8596.55
+2025-08-13,Fuel - WEX,-22458.28
+2025-08-15,Online transfer from savings xxxx4471,19158.05
+2025-08-15,Rent - Maple Ave LLC,-22300.45
+2025-08-15,Rent - Maple Ave LLC,-19675.73
+2025-08-16,Mobile deposit,2358.03
+2025-08-16,Mobile deposit,11135.55
+2025-08-16,Remote deposit capture,9202.18
+2025-08-16,Stripe payout,2491.19
+2025-08-17,ACH credit - customer payment,9253.66
+2025-08-17,Johnstone Supply,-5281.72
+2025-08-17,Mobile deposit,5234.47
+2025-08-18,Ally auto loan pmt,-5520.96
+2025-08-18,Remote deposit capture,2863.90
+2025-08-19,Card settlement - ServiceTitan Pay,3552.47
+2025-08-19,Ferguson HVAC supply,-4462.34
+2025-08-20,Ferguson HVAC supply,-18498.40
+2025-08-20,Mobile deposit,6569.12
+2025-08-21,Ferguson HVAC supply,-23682.12
+2025-08-21,Johnstone Supply,-9857.00
+2025-08-21,Payroll - Gusto,-13021.86
+2025-08-21,Payroll - Gusto,-10240.82
+2025-08-22,Mobile deposit,2218.81
+2025-08-22,Payroll - Gusto,-6092.65
+2025-08-23,Ally auto loan pmt,-19992.93
+2025-08-23,Ally auto loan pmt,-16688.05
+2025-08-23,Card settlement - ServiceTitan Pay,6901.89
+2025-08-23,Mobile deposit,8480.51
+2025-08-24,Johnstone Supply,-11720.69
+2025-08-24,Johnstone Supply,-5484.44
+2025-08-24,Mobile deposit,8680.31
+2025-08-24,Payroll - Gusto,-11420.05
+2025-08-24,Payroll - Gusto,-5368.14
+2025-08-25,Card settlement - ServiceTitan Pay,4298.86
+2025-08-25,Mobile deposit,5617.07
+2025-08-26,ACH credit - customer payment,9532.06
+2025-08-26,Stripe payout,4527.43
+2025-08-27,Card settlement - ServiceTitan Pay,5431.58
+2025-08-28,ACH credit - customer payment,4746.00
+2025-08-28,Card settlement - ServiceTitan Pay,10902.13
+2025-09-01,Rent - Maple Ave LLC,-20274.45
+2025-09-02,Mobile deposit,7622.77
+2025-09-03,ACH credit - customer payment,4168.57
+2025-09-03,Rent - Maple Ave LLC,-8385.32
+2025-09-04,Mobile deposit,10254.26
+2025-09-04,Remote deposit capture,2160.29
+2025-09-04,Stripe payout,6151.90
+2025-09-05,Rent - Maple Ave LLC,-13047.25
+2025-09-06,Ally auto loan pmt,-22441.68
+2025-09-06,Stripe payout,5836.81
+2025-09-07,ACH credit - customer payment,9125.21
+2025-09-07,Fuel - WEX,-20104.35
+2025-09-07,Fuel - WEX,-17780.63
+2025-09-07,Stripe payout,4108.72
+2025-09-07,Stripe payout,7658.42
+2025-09-08,Ferguson HVAC supply,-12621.18
+2025-09-09,Card settlement - ServiceTitan Pay,10480.68
+2025-09-09,Remote deposit capture,6190.79
+2025-09-10,ACH credit - customer payment,4472.04
+2025-09-10,Ally auto loan pmt,-16765.78
+2025-09-11,Fuel - WEX,-12895.60
+2025-09-12,ACH credit - customer payment,10295.21
+2025-09-12,Ferguson HVAC supply,-23325.07
+2025-09-12,Ferguson HVAC supply,-16878.46
+2025-09-12,Mobile deposit,8291.17
+2025-09-12,Rent - Maple Ave LLC,-15187.70
+2025-09-13,ACH credit - customer payment,2067.89
+2025-09-13,ACH credit - customer payment,8186.20
+2025-09-13,Remote deposit capture,8239.78
+2025-09-13,Rent - Maple Ave LLC,-7458.41
+2025-09-14,ACH credit - customer payment,8764.59
+2025-09-14,Card settlement - ServiceTitan Pay,3710.47
+2025-09-14,Rent - Maple Ave LLC,-5868.41
+2025-09-15,Johnstone Supply,-19944.80
+2025-09-15,Online transfer from savings xxxx4471,12021.51
+2025-09-15,Remote deposit capture,4446.80
+2025-09-15,Rent - Maple Ave LLC,-22243.04
+2025-09-15,Stripe payout,4302.69
+2025-09-16,Remote deposit capture,10206.74
+2025-09-17,Card settlement - ServiceTitan Pay,4826.11
+2025-09-17,Card settlement - ServiceTitan Pay,10240.29
+2025-09-17,Mobile deposit,1998.84
+2025-09-17,Payroll - Gusto,-18934.93
+2025-09-17,Stripe payout,4676.25
+2025-09-17,Stripe payout,8759.61
+2025-09-18,Payroll - Gusto,-12882.71
+2025-09-18,Payroll - Gusto,-7715.62
+2025-09-18,Rent - Maple Ave LLC,-21211.87
+2025-09-19,Card settlement - ServiceTitan Pay,3153.28
+2025-09-20,Payroll - Gusto,-17208.76
+2025-09-20,Payroll - Gusto,-15094.45
+2025-09-20,Rent - Maple Ave LLC,-3507.41
+2025-09-21,Card settlement - ServiceTitan Pay,4301.60
+2025-09-21,Card settlement - ServiceTitan Pay,10554.99
+2025-09-22,Payroll - Gusto,-6429.11
+2025-09-23,Stripe payout,11485.11
+2025-09-24,Remote deposit capture,8441.05
+2025-09-24,Stripe payout,6640.28
+2025-09-25,Fuel - WEX,-9836.53
+2025-09-25,Mobile deposit,6457.17
+2025-09-25,Mobile deposit,8876.18
+2025-09-25,Mobile deposit,10173.21
+2025-09-26,ACH credit - customer payment,10647.35
+2025-09-26,Ferguson HVAC supply,-13970.22
+2025-09-26,Stripe payout,3466.87
+2025-09-27,Ally auto loan pmt,-22786.44
+2025-09-27,Stripe payout,2136.36
+2025-09-28,Ferguson HVAC supply,-7784.48
+2025-09-28,Ferguson HVAC supply,-5863.09
+2025-09-28,Fuel - WEX,-2840.98
+2025-10-01,ACH credit - customer payment,4376.90
+2025-10-01,ACH credit - customer payment,9121.91
+2025-10-01,Rent - Maple Ave LLC,-17230.11
+2025-10-02,ACH credit - customer payment,4444.42
+2025-10-02,Ally auto loan pmt,-24387.85
+2025-10-02,Card settlement - ServiceTitan Pay,6184.36
+2025-10-02,Johnstone Supply,-19689.54
+2025-10-02,Mobile deposit,2072.49
+2025-10-02,Payroll - Gusto,-22258.30
+2025-10-02,Rent - Maple Ave LLC,-2251.27
+2025-10-02,Stripe payout,7183.38
+2025-10-04,Ferguson HVAC supply,-12599.80
+2025-10-04,Johnstone Supply,-23916.48
+2025-10-04,Mobile deposit,9840.44
+2025-10-04,Stripe payout,7849.49
+2025-10-05,Remote deposit capture,2955.19
+2025-10-05,Remote deposit capture,7680.30
+2025-10-06,ACH credit - customer payment,8024.59
+2025-10-06,Ferguson HVAC supply,-24209.35
+2025-10-06,Fuel - WEX,-15810.28
+2025-10-06,Rent - Maple Ave LLC,-20343.44
+2025-10-07,Mobile deposit,8271.23
+2025-10-09,Rent - Maple Ave LLC,-14871.26
+2025-10-10,Ally auto loan pmt,-11571.20
+2025-10-10,Johnstone Supply,-18641.89
+2025-10-11,Card settlement - ServiceTitan Pay,7664.29
+2025-10-11,Johnstone Supply,-23795.86
+2025-10-11,Stripe payout,6557.30
+2025-10-12,Stripe payout,2680.82
+2025-10-13,Card settlement - ServiceTitan Pay,5132.12
+2025-10-13,Remote deposit capture,2016.31
+2025-10-13,Remote deposit capture,4074.26
+2025-10-13,Remote deposit capture,5720.87
+2025-10-14,Mobile deposit,3389.86
+2025-10-15,Johnstone Supply,-19938.67
+2025-10-15,Mobile deposit,5689.08
+2025-10-15,Online transfer from savings xxxx4471,6243.87
+2025-10-15,Rent - Maple Ave LLC,-18988.87
+2025-10-16,ACH credit - customer payment,4467.83
+2025-10-16,Ferguson HVAC supply,-22550.65
+2025-10-16,Fuel - WEX,-19785.19
+2025-10-16,Mobile deposit,2990.11
+2025-10-18,Card settlement - ServiceTitan Pay,7044.60
+2025-10-18,Mobile deposit,3309.24
+2025-10-18,Remote deposit capture,1808.75
+2025-10-18,Rent - Maple Ave LLC,-13205.27
+2025-10-19,ACH credit - customer payment,4552.86
+2025-10-19,Johnstone Supply,-8371.12
+2025-10-19,Mobile deposit,5459.72
+2025-10-19,Remote deposit capture,3703.21
+2025-10-19,Remote deposit capture,3970.38
+2025-10-20,Mobile deposit,4595.47
+2025-10-20,Remote deposit capture,9711.99
+2025-10-20,Rent - Maple Ave LLC,-24470.03
+2025-10-21,Mobile deposit,4269.98
+2025-10-21,Mobile deposit,5048.29
+2025-10-21,Payroll - Gusto,-11534.50
+2025-10-21,Stripe payout,5610.69
+2025-10-22,ACH credit - customer payment,2410.81
+2025-10-22,Ally auto loan pmt,-3372.49
+2025-10-22,Johnstone Supply,-22967.75
+2025-10-22,Mobile deposit,9832.54
+2025-10-22,Stripe payout,8799.07
+2025-10-23,Ally auto loan pmt,-9302.94
+2025-10-23,Rent - Maple Ave LLC,-21604.13
+2025-10-24,Fuel - WEX,-12540.35
+2025-10-24,Payroll - Gusto,-8388.87
+2025-10-25,ACH credit - customer payment,4011.36
+2025-10-26,Card settlement - ServiceTitan Pay,2414.82
+2025-10-26,Mobile deposit,7346.90
+2025-10-26,Remote deposit capture,6942.08
+2025-10-27,ACH credit - customer payment,3120.53
+2025-10-27,Ferguson HVAC supply,-15626.73
+2025-10-28,Card settlement - ServiceTitan Pay,4439.14
+2025-10-28,Mobile deposit,2825.06
+2025-10-28,Payroll - Gusto,-6628.76
+2025-11-01,Mobile deposit,3876.90
+2025-11-02,Ally auto loan pmt,-22757.45
+2025-11-02,Johnstone Supply,-23617.43
+2025-11-02,Mobile deposit,7030.37
+2025-11-02,Stripe payout,2020.95
+2025-11-03,Mobile deposit,6743.03
+2025-11-03,Stripe payout,3282.74
+2025-11-04,Rent - Maple Ave LLC,-24043.47
+2025-11-05,Card settlement - ServiceTitan Pay,6222.15
+2025-11-05,Card settlement - ServiceTitan Pay,7452.32
+2025-11-05,Fuel - WEX,-24011.92
+2025-11-05,Johnstone Supply,-19241.34
+2025-11-06,ACH credit - customer payment,3223.83
+2025-11-07,Payroll - Gusto,-5188.47
+2025-11-07,Rent - Maple Ave LLC,-19083.25
+2025-11-07,Stripe payout,1429.84
+2025-11-07,Stripe payout,3426.40
+2025-11-08,ACH credit - customer payment,4088.33
+2025-11-08,Fuel - WEX,-4216.84
+2025-11-08,Mobile deposit,7325.06
+2025-11-08,Rent - Maple Ave LLC,-6710.46
+2025-11-09,Card settlement - ServiceTitan Pay,6736.30
+2025-11-09,Johnstone Supply,-14765.19
+2025-11-09,Remote deposit capture,5684.21
+2025-11-11,ACH credit - customer payment,7770.88
+2025-11-11,Stripe payout,2882.48
+2025-11-12,ACH credit - customer payment,5472.42
+2025-11-12,Card settlement - ServiceTitan Pay,6271.62
+2025-11-12,Ferguson HVAC supply,-9301.51
+2025-11-12,Fuel - WEX,-10421.68
+2025-11-12,Johnstone Supply,-10666.13
+2025-11-12,Remote deposit capture,5576.88
+2025-11-13,Payroll - Gusto,-16266.71
+2025-11-13,Remote deposit capture,7709.33
+2025-11-14,Mobile deposit,8023.31
+2025-11-15,Ally auto loan pmt,-22398.95
+2025-11-15,Ferguson HVAC supply,-20477.52
+2025-11-15,Ferguson HVAC supply,-10216.41
+2025-11-15,Ferguson HVAC supply,-7760.32
+2025-11-15,Johnstone Supply,-9080.29
+2025-11-15,Online transfer from savings xxxx4471,14597.63
+2025-11-15,Remote deposit capture,3077.06
+2025-11-16,Card settlement - ServiceTitan Pay,7172.78
+2025-11-16,Mobile deposit,7136.08
+2025-11-16,Remote deposit capture,7070.95
+2025-11-17,Remote deposit capture,7142.51
+2025-11-17,Remote deposit capture,7895.89
+2025-11-17,Rent - Maple Ave LLC,-18879.91
+2025-11-18,Card settlement - ServiceTitan Pay,4677.04
+2025-11-19,Ally auto loan pmt,-11870.08
+2025-11-19,Card settlement - ServiceTitan Pay,7202.80
+2025-11-19,Remote deposit capture,6272.91
+2025-11-19,Stripe payout,2838.84
+2025-11-20,Johnstone Supply,-22384.63
+2025-11-20,Mobile deposit,7139.33
+2025-11-21,Payroll - Gusto,-23975.87
+2025-11-21,Payroll - Gusto,-12562.05
+2025-11-22,Ally auto loan pmt,-10738.28
+2025-11-22,Payroll - Gusto,-12495.61
+2025-11-24,Payroll - Gusto,-5735.63
+2025-11-25,Fuel - WEX,-2810.54
+2025-11-26,Card settlement - ServiceTitan Pay,4413.19
+2025-11-26,Mobile deposit,3359.33
+2025-11-27,Ferguson HVAC supply,-3327.98
+2025-11-27,Mobile deposit,4716.78
+2025-11-27,Payroll - Gusto,-7560.73
+2025-11-27,Remote deposit capture,5720.48
+2025-11-28,ACH credit - customer payment,2039.65
+2025-11-28,Mobile deposit,7565.91
+2025-11-28,Remote deposit capture,5343.15
+2025-11-28,Remote deposit capture,6892.14
+2025-11-28,Stripe payout,1717.75
+2025-12-01,Mobile deposit,5259.11
+2025-12-01,Remote deposit capture,7211.55
+2025-12-02,Payroll - Gusto,-21841.76
+2025-12-02,Stripe payout,3363.39
+2025-12-03,Mobile deposit,5618.67
+2025-12-03,Mobile deposit,7523.15
+2025-12-03,Mobile deposit,7544.72
+2025-12-03,Remote deposit capture,5199.39
+2025-12-04,Ally auto loan pmt,-5906.15
+2025-12-04,Card settlement - ServiceTitan Pay,3475.07
+2025-12-04,Payroll - Gusto,-4356.26
+2025-12-04,Rent - Maple Ave LLC,-5705.83
+2025-12-05,Ally auto loan pmt,-15407.58
+2025-12-05,Card settlement - ServiceTitan Pay,6958.57
+2025-12-05,Mobile deposit,3544.65
+2025-12-05,Remote deposit capture,2253.60
+2025-12-06,Payroll - Gusto,-23533.15
+2025-12-06,Stripe payout,3357.19
+2025-12-06,Stripe payout,4437.71
+2025-12-07,Mobile deposit,2575.21
+2025-12-07,Remote deposit capture,1642.77
+2025-12-08,Mobile deposit,4081.78
+2025-12-08,Remote deposit capture,1753.02
+2025-12-08,Stripe payout,3255.78
+2025-12-08,Stripe payout,8531.59
+2025-12-09,Payroll - Gusto,-12423.87
+2025-12-09,Remote deposit capture,2774.29
+2025-12-10,Mobile deposit,5158.11
+2025-12-11,Card settlement - ServiceTitan Pay,8200.21
+2025-12-11,Fuel - WEX,-7148.86
+2025-12-11,Fuel - WEX,-6218.44
+2025-12-11,Rent - Maple Ave LLC,-11736.17
+2025-12-12,Ferguson HVAC supply,-21956.67
+2025-12-12,Remote deposit capture,4486.51
+2025-12-12,Stripe payout,8588.67
+2025-12-13,Payroll - Gusto,-19757.32
+2025-12-13,Rent - Maple Ave LLC,-11381.38
+2025-12-14,ACH credit - customer payment,2326.12
+2025-12-14,Fuel - WEX,-19749.62
+2025-12-14,Mobile deposit,6056.00
+2025-12-15,Ally auto loan pmt,-7101.63
+2025-12-15,Online transfer from savings xxxx4471,18894.68
+2025-12-15,Payroll - Gusto,-9741.44
+2025-12-15,Remote deposit capture,2639.52
+2025-12-15,Remote deposit capture,4685.98
+2025-12-15,Rent - Maple Ave LLC,-2598.90
+2025-12-17,Card settlement - ServiceTitan Pay,7197.26
+2025-12-17,Ferguson HVAC supply,-24009.73
+2025-12-19,Ally auto loan pmt,-19395.52
+2025-12-19,Card settlement - ServiceTitan Pay,4606.19
+2025-12-19,Card settlement - ServiceTitan Pay,4973.32
+2025-12-19,Fuel - WEX,-19044.60
+2025-12-19,Johnstone Supply,-20653.52
+2025-12-19,Mobile deposit,4679.44
+2025-12-19,Remote deposit capture,3193.05
+2025-12-20,ACH credit - customer payment,3618.66
+2025-12-20,Johnstone Supply,-23071.34
+2025-12-20,Johnstone Supply,-16263.86
+2025-12-22,Payroll - Gusto,-6798.74
+2025-12-22,Rent - Maple Ave LLC,-1771.53
+2025-12-22,Stripe payout,4782.01
+2025-12-23,Card settlement - ServiceTitan Pay,3196.89
+2025-12-24,ACH credit - customer payment,5179.91
+2025-12-24,Ferguson HVAC supply,-7643.35
+2025-12-25,ACH credit - customer payment,6120.19
+2025-12-25,Card settlement - ServiceTitan Pay,7317.80
+2025-12-26,Remote deposit capture,8334.43
+2025-12-27,ACH credit - customer payment,5538.15
+2025-12-27,Ally auto loan pmt,-16465.67
+2025-12-27,Ally auto loan pmt,-13851.96
+2025-12-27,Card settlement - ServiceTitan Pay,2509.49
+2025-12-27,Mobile deposit,7603.67
+2025-12-28,Ally auto loan pmt,-2758.50
+2025-12-28,Ferguson HVAC supply,-4959.68
+2025-12-28,Mobile deposit,4300.74

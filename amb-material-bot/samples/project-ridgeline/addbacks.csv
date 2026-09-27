@@ -1,0 +1,9 @@
+year,description,amount,type
+2023,Owner's personal vehicle,16000,discretionary
+2024,Owner's personal vehicle,17000,discretionary
+2025,Owner's personal vehicle,18000,discretionary
+2024,Legal fees: settled customer dispute (one-time),24000,non_recurring
+2025,Owner family cell phones & personal meals,6000,discretionary
+2023,Charitable contributions,5000,discretionary
+2024,Charitable contributions,6000,discretionary
+2025,Charitable contributions,7500,discretionary

@@ -1,0 +1,3 @@
+request_id,priority,status,received_date,due_date,requested_by,business_name,code_name,industry,location,entity_type,year_founded,employees,fiscal_year_end,source_folder,quickbooks_realm_id,owner_replacement_salary,asking_price,notes,output_folder,last_run,last_error
+REQ-0001,P1,new,2026-09-21,2026-10-02,Frank,Ridgeline Comfort Services LLC,Project Ridgeline,Residential & commercial HVAC and plumbing services,"Columbus, OH",S-Corp,2009,24,12-31,samples/project-ridgeline,,95000,,Fictional sample deal for demo and tests,,,
+REQ-0002,P2,needs_info,2026-09-24,2026-10-16,Frank,Example Dental Lab Inc,Project Crown,Dental laboratory,"Tampa, FL",C-Corp,1998,12,06-30,deals/project-crown,,110000,,Waiting on FY2025 tax return and bank statements,,,

@@ -1,0 +1,13 @@
+node_modules/
+.env
+
+# QuickBooks OAuth refresh tokens (one per client company).
+.qbo-tokens.json
+
+# Real client material never goes in git: deliverables, source documents,
+# and the live request list. Only the fictional sample is tracked.
+output/
+deals/
+requests/live-*.csv
+
+*.log
