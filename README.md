@@ -12,3 +12,10 @@ with its own README, dependencies and tests.
 Create a new top-level folder with its own `README.md` and, if it has code,
 its own `package.json` and tests. Keep client data out of git: every section
 ignores its own `output/`, `deals/`, `.env` and credential files.
+
+## Setup on your computer
+
+1. Install [Git](https://git-scm.com/downloads) and [Node.js LTS](https://nodejs.org).
+2. `git clone https://github.com/grzepcasey-ui/project-avengers`
+3. Windows: double-click `setup.bat`. Mac: `bash setup.sh`.
+4. Drop reference models into `amb-material-bot/references/model-templates/` and past CIMs into `amb-material-bot/references/cims/`. These stay local and are never uploaded.
