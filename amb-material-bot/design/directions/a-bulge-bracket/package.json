@@ -1,0 +1,6 @@
+{
+  "name": "amb-cim-direction-a",
+  "private": true,
+  "type": "commonjs",
+  "description": "Direction A (bulge-bracket classic) CIM sample deck. Run: node build-deck.js"
+}
