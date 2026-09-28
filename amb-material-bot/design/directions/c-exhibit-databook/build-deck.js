@@ -86,7 +86,7 @@ const D = {
     N2: { label: 'Charitable contributions', vals: [5.0, 6.0, 7.5] },
     N3: { label: 'One-time legal settlement', vals: [0, 24.0, 0] },
     N4: { label: 'Family phones and personal meals', vals: [0, 0, 6.0] },
-    S1: { label: 'Owner compensation in excess of market', vals: [85.0, 95.0, 105.0] },
+    S1: { label: 'Excess owner compensation', vals: [85.0, 95.0, 105.0] },
   },
   ownerPaid: [180.0, 190.0, 200.0],
   replacementSalary: 95.0,
@@ -204,9 +204,10 @@ function run(t, o = {}) { return { text: t, options: Object.assign({ fontFace: S
 function exhibit(slide, x, y, w, title, units, annotation) {
   const runs = [run(title, { bold: true, color: C.ink, fontSize: 9.5 })];
   if (units) runs.push(run('  ' + units, { color: C.muted, fontSize: 9.5 }));
-  const tw = annotation ? w * 0.6 : w;
+  // the one annotation per chart (2.6) sits right-aligned on the header line; it gets 55% of the width so a CAGR pair fits on one line
+  const tw = annotation ? +(w * 0.45).toFixed(3) : w;
   text(slide, runs, { x, y, w: tw, h: 0.25, valign: 'bottom', fontSize: 9.5 });
-  if (annotation) text(slide, annotation, { x: x + w * 0.6, y, w: w * 0.4, h: 0.25, valign: 'bottom', align: 'right', fontSize: 8, color: C.muted });
+  if (annotation) text(slide, annotation, { x: +(x + w * 0.45).toFixed(3), y, w: +(w * 0.55).toFixed(3), h: 0.25, valign: 'bottom', align: 'right', fontSize: 8, color: C.muted });
   hline(slide, x, y + 0.25, w, C.ink, 0.5);
   return y + 0.33;
 }
@@ -233,15 +234,19 @@ function numTable(slide, spec) {
     if (g && !g.gap && g.group === c.group) { g.n += 1; return; }
     groups.push({ group: c.group, i, n: 1 });
   });
-  const tier1 = [];
-  groups.forEach((g) => {
-    if (g.gap) { tier1.push(cell('', {})); return; }
-    tier1.push(cell(g.group || '', { colspan: g.n > 1 ? g.n : undefined, fill: { color: C.maroon }, color: C.white, bold: true, fontSize: 8, align: 'center' }));
-  });
-  out.push(tier1); rh.push(headH);
+  // tier 1 is drawn only when at least one period group is named; a table of
+  // plain columns gets the single-tier header AMB uses on its client lists
+  if (cols.some((c) => c.group)) {
+    const tier1 = [];
+    groups.forEach((g) => {
+      if (g.gap) { tier1.push(cell('', {})); return; }
+      tier1.push(cell(g.group || '', { colspan: g.n > 1 ? g.n : undefined, fill: { color: C.maroon }, color: C.white, bold: true, fontSize: 8, align: 'center' }));
+    });
+    out.push(tier1); rh.push(headH);
+  }
   const tier2 = cols.map((c, i) => {
     if (c.kind === 'gap') return cell('', {});
-    const align = c.kind === 'num' ? 'right' : c.kind === 'obs' || c.kind === 'ref' ? 'center' : 'left';
+    const align = c.kind === 'num' ? (c.left ? 'left' : 'right') : c.kind === 'obs' || c.kind === 'ref' ? 'center' : 'left';
     return cell(i === 0 ? name : c.head || '', { fill: { color: C.maroon }, color: C.white, bold: true, fontSize: 8, align });
   });
   out.push(tier2); rh.push(headH);
@@ -413,10 +418,10 @@ const NOTE_FIN = 'Figures in USD thousands unless noted. Financials are as provi
   y = numTable(s, {
     x: ax, y, name: 'Metric',
     cols: [
-      { w: 2.05, kind: 'label', group: '' },
-      { w: 0.68, kind: 'num', head: FY[0], group: 'Fiscal year' }, { w: 0.68, kind: 'num', head: FY[1], group: 'Fiscal year' }, { w: 0.68, kind: 'num', head: FY[2], group: 'Fiscal year' },
+      { w: 2.25, kind: 'label', group: '' },
+      { w: 0.66, kind: 'num', head: FY[0], group: 'Fiscal year' }, { w: 0.66, kind: 'num', head: FY[1], group: 'Fiscal year' }, { w: 0.66, kind: 'num', head: FY[2], group: 'Fiscal year' },
       { w: GAP, kind: 'gap' },
-      { w: 2.5, kind: 'text', head: 'Context', group: '' },
+      { w: 2.46, kind: 'text', head: 'Context', group: '' },
       { w: 0.4, kind: 'obs', head: 'Obs.', group: '' },
     ],
     rows: [
@@ -426,10 +431,10 @@ const NOTE_FIN = 'Figures in USD thousands unless noted. Financials are as provi
       { type: 'line', label: 'Reported EBITDA', vals: T.reported.map((v) => k(v)), text: `Margin ${pct(rm[0])} to ${pct(rm[2])}` },
       { type: 'key', label: 'Adj. EBITDA', note: '2', vals: T.adjusted.map((v) => k(v, { dollar: true })), text: `After $${T.totalAdj25.toFixed(1)}K of FY2025 adjustments (p. 4)`, obs: 'C' },
       { type: 'ratio', label: '% margin', vals: am.map((v) => pct(v)), text: `Up ${delta(am[0], am[2])} in two years` },
-      { type: 'line', label: 'Seller’s discretionary earnings (SDE)', note: '2', vals: T.sde.map((v) => k(v)), text: `Adj. EBITDA plus $${D.replacementSalary.toFixed(0)}K replacement salary` },
+      { type: 'line', label: 'Seller’s discretionary earnings', note: '2', vals: T.sde.map((v) => k(v)), text: `SDE: Adj. EBITDA + $${D.replacementSalary.toFixed(0)}K replacement salary` },
       { type: 'ratio', label: '% margin', vals: sm.map((v) => pct(v)), text: '' },
       { type: 'section', label: 'Operating (1)' },
-      { type: 'line', label: 'Maintenance agreement members (#)', vals: ['', '', D.members.toLocaleString('en-US')], text: `${D.renewal}% renewal; two tune-ups a year`, obs: 'D' },
+      { type: 'line', label: 'Agreement members (#)', vals: ['', '', D.members.toLocaleString('en-US')], text: `${D.renewal}% renewal; two tune-ups a year`, obs: 'D' },
       { type: 'line', label: 'Largest customer (% of revenue)', vals: ['', '', pct(100 * D.customers[0][3] / T.revenue[2])], text: `Top 10 are ${pct(100 * T.top10 / T.revenue[2])}, all commercial` },
       { type: 'line', label: 'Employees (#)', vals: ['', '', String(D.employees)], text: `${D.fieldStaff} in the field; ops manager 11 years’ tenure` },
       { type: 'line', label: 'Revenue per employee', vals: ['', '', k(T.revenue[2] / D.employees)], text: `$${(T.revenue[2] / D.fieldStaff).toFixed(1)}K per field employee` },
@@ -477,7 +482,7 @@ const NOTE_FIN = 'Figures in USD thousands unless noted. Financials are as provi
     section: 'Financial performance',
     title: `Revenue grew at a ${pct(cagr(T.revenue[0], T.revenue[2], 2))} CAGR to ${money(T.revenue[2])} in FY2025 while gross margin held at 61–62% and Reported EBITDA doubled to ${money(T.reported[2])}`,
     source: SOURCE_FIN,
-    note: NOTE_FIN + ' Cost of revenue comprises equipment, parts and materials and installation labor; service technician wages are in operating expenses.',
+    note: NOTE_FIN + ' Cost of revenue is equipment, parts, materials and installation labor; technician wages are in operating expenses.',
     foot: ['Net income before interest, income taxes, depreciation and amortization. The Company is an S corporation and pays no entity-level income tax.'],
   });
   const ax = colX(1), aw = spanW(1, 6);
@@ -554,7 +559,7 @@ const NOTE_FIN = 'Figures in USD thousands unless noted. Financials are as provi
   page(s, {
     num: 4,
     section: 'Adjusted EBITDA',
-    title: `Adj. EBITDA of ${money(T.adjusted[2])} in FY2025 reflects $200K of owner pay reset to a $95K market salary and $${T.normTotal[2].toFixed(1)}K of itemized normalization add-backs`,
+    title: `Adj. EBITDA of ${money(T.adjusted[2])} in FY2025 reflects $200K of owner pay reset to a $95K market salary plus $${T.normTotal[2].toFixed(1)}K of itemized add-backs`,
     source: 'Company financial statements (QuickBooks Online), FY2023–FY2025; general ledger detail; payroll register; Seller add-back list; AMB Advisory analysis.',
     note: 'Figures in USD thousands. Adj. EBITDA and SDE are non-GAAP measures. Positive adjustments increase EBITDA. Financials are as provided by the Seller and have not been independently audited.',
     foot: [
@@ -602,13 +607,13 @@ const NOTE_FIN = 'Figures in USD thousands unless noted. Financials are as provi
       ratio('% margin', sm),
     ],
   });
-  callout(s, ax, y + 0.16, aw, 6.45 - (y + 0.16), 'Takeaway:', `Of the $${T.totalAdj25.toFixed(1)}K of FY2025 adjustments, $${A.S1.vals[2].toFixed(1)}K is owner pay above a $${D.replacementSalary.toFixed(0)}K general-manager salary. A buyer who hires a manager underwrites Adj. EBITDA of ${money(T.adjusted[2])}; an owner-operator underwrites SDE of ${money(T.sde[2])}.`);
+  callout(s, ax, y + 0.14, aw, 6.4 - (y + 0.14), 'Takeaway:', `Of the $${T.totalAdj25.toFixed(1)}K of FY2025 adjustments, $${A.S1.vals[2].toFixed(1)}K is owner pay above a $${D.replacementSalary.toFixed(0)}K general-manager salary. A buyer who hires a manager underwrites Adj. EBITDA of ${money(T.adjusted[2])}; an owner-operator underwrites SDE of ${money(T.sde[2])}.`);
 
   // Exhibit B: adjustment support (cols 7-12)
   const bx = colX(7), bw = spanW(7, 12);
   let y2 = exhibit(s, bx, BAND.top, bw, 'Adjustment support', '(FY2025, $000s)');
   y2 = textTable(s, {
-    x: bx, y: y2, colW: [0.45, 1.3, 3.3, +(bw - 5.05).toFixed(3)], head: ['Ref', 'Adjustment', 'Basis', 'Evidence'], fontSize: 8, rowH: [0.42, 0.42, 0.42, 0.42, 0.52], refCol: 0, firstBold: false,
+    x: bx, y: y2, colW: [0.45, 1.25, 3.1, +(bw - 4.8).toFixed(3)], head: ['Ref', 'Adjustment', 'Basis', 'Evidence'], fontSize: 8, rowH: [0.42, 0.42, 0.42, 0.42, 0.5], refCol: 0, firstBold: false,
     rows: [
       ['[N1]', A.N1.label, `Lease, fuel and insurance on the owner’s personal truck, not used in the fleet, coded to vehicle expense: $${A.N1.vals[2].toFixed(1)}K per GL account 6420 and the lease agreement.`, 'Documented'],
       ['[N2]', A.N2.label, `Donations to youth sports leagues and a church capital campaign, $${A.N2.vals[2].toFixed(1)}K per GL account 6810; no customer relationship attached.`, 'Documented'],
@@ -643,7 +648,7 @@ const NOTE_FIN = 'Figures in USD thousands unless noted. Financials are as provi
   let y = exhibit(s, ax, BAND.top, aw, 'Revenue mix by service line', '(% of revenue)', `Commercial plus agreements: ${share2(0)}% to ${share2(2)}% of revenue`);
   const chartH = 2.6;
   s.addChart(pptx.ChartType.bar, [
-    { name: 'Residential service and replacement', labels: FY, values: mixPct(D.revenue.residential) },
+    { name: 'Residential', labels: FY, values: mixPct(D.revenue.residential) },
     { name: 'Commercial', labels: FY, values: mixPct(D.revenue.commercial) },
     { name: 'Maintenance agreements', labels: FY, values: mixPct(D.revenue.agreements) },
   ], Object.assign({}, chartBase, {
@@ -681,26 +686,26 @@ const NOTE_FIN = 'Figures in USD thousands unless noted. Financials are as provi
   y2 = numTable(s, {
     x: bx, y: y2, name: 'Customer', rowH: 0.19,
     cols: [
-      { w: 0.66, kind: 'label', group: '' },
-      { w: 1.5, kind: 'strtext', head: 'Type', group: '' },
-      { w: 0.46, kind: 'num', head: 'Since', group: '' },
-      { w: 0.66, kind: 'num', head: 'Revenue', group: '' },
-      { w: 0.56, kind: 'num', head: '% total', group: '' },
-      { w: 0.56, kind: 'num', head: 'Cum. %', group: '' },
-      { w: 1.3, kind: 'strtext', head: 'Basis', group: '' },
+      { w: 0.9, kind: 'label', group: '' },
+      { w: 1.48, kind: 'strtext', head: 'Type', group: '' },
+      { w: 0.44, kind: 'num', head: 'Since', group: '' },
+      { w: 0.64, kind: 'num', head: 'Revenue', group: '' },
+      { w: 0.54, kind: 'num', head: '% total', group: '' },
+      { w: 0.54, kind: 'num', head: 'Cum. %', group: '' },
+      { w: 1.2, kind: 'strtext', head: 'Basis', group: '' },
       { w: 0.38, kind: 'obs', head: 'Obs.', group: '' },
     ].map((c) => (c.kind === 'strtext' ? Object.assign(c, { kind: 'num', left: true }) : c)),
     rows: custRows.concat([
-      { type: 'subtotal', label: 'Top 10', vals: ['', '', k(T.top10, { dollar: true }), pct(100 * T.top10 / T.revenue[2]), '', `${pct(100 * T.top10 / D.revenue.commercial[2], 0)} of commercial`], obs: 'B' },
-      { type: 'line', label: 'Remaining customers', vals: ['', '', k(T.remaining), pct(100 * T.remaining / T.revenue[2]), '', 'Residential and small commercial'] },
-      { type: 'key', label: 'Total revenue', vals: ['', '', k(T.revenue[2], { dollar: true }), '100.0%', '', ''] },
+      { type: 'subtotal', label: 'Top 10', vals: [`${pct(100 * T.top10 / D.revenue.commercial[2], 0)} of commercial`, '', k(T.top10, { dollar: true }), pct(100 * T.top10 / T.revenue[2]), '', ''], obs: 'B' },
+      { type: 'line', label: 'Remaining', vals: ['Residential and other', '', k(T.remaining), pct(100 * T.remaining / T.revenue[2]), '', ''] },
+      { type: 'key', label: 'Total', vals: ['', '', k(T.revenue[2], { dollar: true }), '100.0%', '', ''] },
     ]),
   });
   observations(s, bx, y2 + 0.14, bw, [
     ['A', `The largest customer, C-001, is ${pct(100 * D.customers[0][3] / T.revenue[2])} of FY2025 revenue (${money(D.customers[0][3])}):`, `a four-location restaurant group served since ${D.customers[0][2]} on a preventive-maintenance contract plus time-and-materials repairs.`],
     ['B', `The top 10 customers are ${pct(100 * T.top10 / T.revenue[2])} of revenue and all commercial;`, `they are ${pct(100 * T.top10 / D.revenue.commercial[2], 0)} of commercial revenue, so the commercial line rests on relationships the owner personally holds (page 7).`],
     ['C', `Commercial revenue grew from ${money(D.revenue.commercial[0])} to ${money(D.revenue.commercial[2])} in two years (${pct(cagr(D.revenue.commercial[0], D.revenue.commercial[2], 2))} CAGR),`, `driven by annual preventive-maintenance contracts with property managers and four restaurant groups; two property managers have requested quotes on additional buildings (1).`],
-    ['D', `Maintenance agreements produced ${money(D.revenue.agreements[2])} (9% of revenue) from ${D.members.toLocaleString('en-US')} members`, `at about $${Math.round(1000 * D.revenue.agreements[2] / D.members)} each; the ${D.renewal}% renewal rate and the 15% repair discount feed residential repair and replacement work (1).`],
+    ['D', `Maintenance agreements produced ${money(D.revenue.agreements[2])} (9% of revenue) from ${D.members.toLocaleString('en-US')} members`, `at about $${Math.round(1000 * D.revenue.agreements[2] / D.members)} each; the ${D.renewal}% renewal rate feeds residential repair and replacement leads (1).`],
   ], { rowH: 0.43 });
 }
 
@@ -710,7 +715,7 @@ const NOTE_FIN = 'Figures in USD thousands unless noted. Financials are as provi
   page(s, {
     num: 6,
     section: 'Operations and people',
-    title: `An 11-year operations manager runs dispatch for ${D.fieldStaff} field staff across ${D.vehicles} vehicles from a leased 8,000 sq ft shop under contract through 2029`,
+    title: `An 11-year operations manager runs dispatch for ${D.fieldStaff} field staff and ${D.vehicles} vehicles from an 8,000 sq ft shop leased through 2029`,
     source: 'Management; payroll register; lease agreement; Company financial statements (QuickBooks Online), FY2025; AMB Advisory analysis.',
     note: 'Headcount as of September 2026. Employees other than management are described by role only. Figures in USD thousands unless noted.',
     foot: ['Per management; not independently verified.', 'The Seller prefers a buyer who retains the Ridgeline name and all employees.'],
@@ -719,18 +724,44 @@ const NOTE_FIN = 'Figures in USD thousands unless noted. Financials are as provi
   const para = (lead, body, last) => [run(lead + ' ', { bold: true, fontSize: 9.5, color: C.ink }), run(body, { fontSize: 9.5, color: C.ink, breakLine: !last })];
   const revPerEmp = T.revenue[2] / D.employees, revPerField = T.revenue[2] / D.fieldStaff;
   const prose = [].concat(
-    para('Management and staffing.', `Ridgeline employs ${D.employees} people: 14 service technicians, a 4-person install crew, an operations manager, 3 customer service and dispatch staff, a bookkeeper and the owner. Lisa Tran, the operations manager, has been with the Company 11 years, runs dispatch and daily scheduling in ServiceTitan, and is expected to stay after closing. Technicians are paid hourly plus a spiff on each maintenance agreement sold, which is how ${D.members.toLocaleString('en-US')} memberships were built without a dedicated sales role; there is no union. Revenue per employee was $${revPerEmp.toFixed(1)}K in FY2025, and $${revPerField.toFixed(1)}K per field employee.`),
-    para('Owner role and transition.', `Mark Delaney founded the Company in 2009 after 12 years as a lead technician at a regional contractor. He works about 45 hours a week on estimating large replacements, commercial relationships, vendor terms and hiring (1). He is retiring at 61, will remain full time for up to 12 months after closing, and will introduce each commercial account to the buyer. Page 7 sets out who assumes each responsibility.`),
-    para('Fleet, facility and systems.', `The Company runs 18 service vans and 2 install trucks, all owned and financed with vehicle loans; vehicle, fuel and maintenance cost $${D.opex.vehicle[2].toFixed(1)}K in FY2025 (${pct(100 * D.opex.vehicle[2] / T.revenue[2])} of revenue). It operates from an 8,000 sq ft leased shop and office on Maple Ave in Columbus under a lease that runs through 2029 with a 5-year renewal option; the landlord is unrelated to the owner and rent was $${D.opex.rent[2].toFixed(1)}K in FY2025. ServiceTitan handles dispatch, invoicing and memberships and QuickBooks Online the accounting, so the financial records tie to job-level data.`),
+    para('Management and staffing.', `Ridgeline employs ${D.employees} people: 14 service technicians, a 4-person install crew, an operations manager, 3 customer service and dispatch staff, a bookkeeper and the owner. Lisa Tran, the operations manager, has been with the Company 11 years, runs dispatch and daily scheduling in ServiceTitan, and is expected to stay after closing. Technicians are paid hourly plus a spiff on each maintenance agreement sold, which is how ${D.members.toLocaleString('en-US')} memberships were built without a dedicated sales role; there is no union. Revenue per field employee was $${revPerField.toFixed(1)}K in FY2025.`),
+    para('Owner role and transition.', `Mark Delaney founded the Company in 2009. He works about 45 hours a week on estimating large replacements, commercial relationships, vendor terms and hiring (1). He is retiring at 61, will remain full time for up to 12 months after closing, and will introduce each commercial account to the buyer; page 7 sets out who assumes each responsibility.`),
+    para('Fleet, facility and systems.', `The Company runs 18 service vans and 2 install trucks, all owned and financed with vehicle loans. It operates from an 8,000 sq ft leased shop and office on Maple Ave in Columbus; the lease runs through 2029 with a 5-year renewal option, the landlord is unrelated to the owner and rent was $${D.opex.rent[2].toFixed(1)}K in FY2025. ServiceTitan handles dispatch, invoicing and memberships and QuickBooks Online the accounting.`),
     para('Suppliers and reputation.', `Ridgeline has been a Carrier Factory Authorized Dealer since 2015 and buys Carrier equipment through the local distributor, with parts from Ferguson and Johnstone Supply. It holds a 4.8 Google rating from more than 900 reviews. Most leads arrive by referral and search rather than paid advertising, which was $${D.opex.marketing[2].toFixed(1)}K in FY2025 (${pct(100 * D.opex.marketing[2] / T.revenue[2])} of revenue) (1).`, true),
   );
-  text(s, prose, { x: ax, y: BAND.top, w: aw, h: 6.45 - BAND.top, fontSize: 9.5, valign: 'top', lineSpacingMultiple: 1.08, paraSpaceAfter: 7 });
+  const exhibitY = 4.62;
+  text(s, prose, { x: ax, y: BAND.top, w: aw, h: exhibitY - 0.12 - BAND.top, fontSize: 9.5, valign: 'top', lineSpacingMultiple: 1.08, paraSpaceAfter: 7 });
 
-  // Exhibit A: organization (cols 8-12)
+  // Exhibit A: operating cost ratios under the prose (the field-labor evidence page 7 relies on)
+  const r = (line) => margin(line, T.revenue);
+  const fieldLabor = addv(D.opex.techWages, D.cogs.directLabor);
+  const ratioRow = (type, label, m, driver) => ({ type, label, vals: [pct(m[0]), pct(m[1]), pct(m[2]), delta(m[0], m[2]), driver] });
+  let yA = exhibit(s, ax, exhibitY, aw, 'Operating cost ratios', '(% of revenue)');
+  numTable(s, {
+    x: ax, y: yA, name: 'Cost line', rowH: 0.195,
+    cols: [
+      { w: 2.3, kind: 'label', group: '' },
+      { w: 0.66, kind: 'num', head: FY[0], group: '' }, { w: 0.66, kind: 'num', head: FY[1], group: '' }, { w: 0.66, kind: 'num', head: FY[2], group: '' },
+      { w: GAP, kind: 'gap' },
+      { w: 0.75, kind: 'num', head: 'FY23–25', group: '' },
+      { w: GAP, kind: 'gap' },
+      { w: 1.98, kind: 'num', left: true, head: 'Basis', group: '' },
+    ],
+    rows: [
+      ratioRow('line', 'Technician wages and benefits', r(D.opex.techWages), 'Hourly plus agreement spiffs'),
+      ratioRow('line', 'Direct labor and subcontractors', r(D.cogs.directLabor), 'Install crew; cost of revenue'),
+      ratioRow('subtotal', 'Field labor', r(fieldLabor), `${D.fieldStaff} field staff, no union`),
+      ratioRow('line', 'Vehicle, fuel and maintenance', r(D.opex.vehicle), `${D.vehicles} owned vehicles`),
+      ratioRow('line', 'Rent and occupancy', r(D.opex.rent), 'Fixed lease through 2029'),
+      ratioRow('line', 'Marketing and advertising', r(D.opex.marketing), 'Referrals and reviews (1)'),
+    ],
+  });
+
+  // Exhibit B: organization (cols 8-12)
   const bx = colX(8), bw = spanW(8, 12);
   let y2 = exhibit(s, bx, BAND.top, bw, 'Organization and tenure', '(#)');
   y2 = textTable(s, {
-    x: bx, y: y2, colW: [1.62, 0.48, 1.6, +(bw - 3.7).toFixed(3)], head: ['Role', 'Count', 'Tenure and pay basis', 'Post-close'], fontSize: 8, rowH: [0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.2], totalRow: 6,
+    x: bx, y: y2, colW: [1.62, 0.48, 1.6, +(bw - 3.7).toFixed(3)], head: ['Role', 'Count', 'Tenure and pay basis', 'Post-close'], fontSize: 8, rowH: [0.3, 0.3, 0.2, 0.3, 0.3, 0.2, 0.2], totalRow: 6,
     aligns: ['left', 'right', 'left', 'left'],
     rows: [
       ['Owner and founder (Mark Delaney)', '1', 'Since 2009; about 45 hrs/week', 'Retiring; full time for up to 12 months'],
@@ -738,19 +769,19 @@ const NOTE_FIN = 'Figures in USD thousands unless noted. Financials are as provi
       ['Service technicians', '14', 'Hourly plus agreement spiffs', 'Continue (2)'],
       ['Install crew', '4', 'Hourly; replacements and commercial installs', 'Continue (2)'],
       ['Customer service and dispatch', '3', 'Hourly; ServiceTitan call board', 'Continue (2)'],
-      ['Bookkeeper', '1', 'QuickBooks Online; office staff', 'Continue (2)'],
+      ['Bookkeeper', '1', 'QuickBooks Online', 'Continue (2)'],
       ['Total', String(D.employees), '', ''],
     ],
   });
-  // Exhibit B: facilities, fleet and systems
+  // Exhibit C: facilities, fleet and systems
   let y3 = exhibit(s, bx, y2 + 0.16, bw, 'Facilities, fleet and systems', '');
   textTable(s, {
-    x: bx, y: y3, colW: [1.0, 2.35, +(bw - 3.35).toFixed(3)], head: ['Item', 'Detail', 'Term or status'], fontSize: 8, rowH: [0.33, 0.33, 0.33, 0.33, 0.33, 0.33],
+    x: bx, y: y3, colW: [1.0, 2.45, +(bw - 3.45).toFixed(3)], head: ['Item', 'Detail', 'Term or status'], fontSize: 8, rowH: [0.32, 0.32, 0.32, 0.32, 0.32, 0.32],
     rows: [
       ['Shop and office', '8,000 sq ft on Maple Ave, Columbus; landlord unrelated to the owner', 'Lease through 2029; 5-year renewal option'],
       ['Fleet', '18 service vans and 2 install trucks, owned', `Vehicle loans; interest $${D.belowEbitda.interest[2].toFixed(1)}K in FY2025`],
-      ['Software', 'ServiceTitan (dispatch, invoicing, memberships); QuickBooks Online (accounting)', 'In use; job-level records tie to invoices'],
-      ['Equipment and parts', 'Carrier equipment via the local distributor; Ferguson and Johnstone Supply for parts', 'Carrier Factory Authorized Dealer since 2015'],
+      ['Software', 'ServiceTitan (dispatch, invoicing, memberships); QuickBooks Online', 'Job-level records tie to invoices'],
+      ['Equipment and parts', 'Carrier equipment via the local distributor; parts from Ferguson and Johnstone Supply', 'Carrier Factory Authorized Dealer since 2015'],
       ['Service area', 'Franklin, Delaware and Licking counties, about a 35-mile radius', 'Residential and light commercial'],
       ['Reputation', '4.8 Google rating from 900+ reviews', 'Referrals and search are the main lead sources (1)'],
     ],
@@ -787,15 +818,15 @@ const NOTE_FIN = 'Figures in USD thousands unless noted. Financials are as provi
   const bw1 = spanW(1, 7);
   let y2 = exhibit(s, ax, y + 0.16, bw1, 'Owner responsibilities and transition', '(hours per week) (1)');
   const resp = [
-    ['Estimating large replacements', '~14', 'Buyer’s general manager, or a senior technician as comfort advisor', 'Owner joins estimates for up to 12 months', 'A'],
-    ['Commercial relationships', '~10', 'Buyer’s general manager', 'Owner introduces each account', 'A'],
-    ['Vendor terms and purchasing', '~6', 'Operations manager', 'Carrier, Ferguson and Johnstone contacts transferred', 'B'],
-    ['Hiring and staffing', '~5', 'Operations manager with the general manager', 'Owner supports interviews during transition', 'B'],
-    ['Financial review and administration', '~10', 'Bookkeeper with the general manager', 'QuickBooks Online and ServiceTitan access at closing', 'B'],
+    ['Estimating large replacements', '~14', 'General manager (or a senior technician)', 'Owner joins estimates, 12 months', 'A'],
+    ['Commercial relationships', '~10', 'General manager', 'Owner introduces each account', 'A'],
+    ['Vendor terms and purchasing', '~6', 'Operations manager', 'Supplier contacts transferred', 'B'],
+    ['Hiring and staffing', '~5', 'Operations manager and general manager', 'Owner supports interviews', 'B'],
+    ['Finance and administration', '~10', 'Bookkeeper and general manager', 'System access at closing', 'B'],
     ['Total', '~45', '', '', ''],
   ];
   textTable(s, {
-    x: ax, y: y2, colW: [2.0, 0.55, 2.35, 1.85, 0.4], head: ['Responsibility', 'Hrs/wk', 'Who assumes it post-close', 'Transition support', 'Obs.'], fontSize: 8, rowH: [0.3, 0.2, 0.2, 0.2, 0.2, 0.2], obsCol: 4, totalRow: 5,
+    x: ax, y: y2, colW: [1.95, 0.5, 2.35, 1.95, 0.4], head: ['Responsibility', 'Hrs/wk', 'Who assumes it post-close', 'Transition support', 'Obs.'], fontSize: 8, rowH: [0.21, 0.21, 0.21, 0.21, 0.21, 0.21], obsCol: 4, totalRow: 5,
     aligns: ['left', 'right', 'left', 'left', 'center'],
     rows: resp,
   });

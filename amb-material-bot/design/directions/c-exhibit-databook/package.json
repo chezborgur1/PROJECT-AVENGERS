@@ -1,0 +1,6 @@
+{
+  "name": "amb-cim-direction-c",
+  "private": true,
+  "type": "commonjs",
+  "description": "CommonJS override so build-deck.js runs with plain node under the ESM parent package"
+}
