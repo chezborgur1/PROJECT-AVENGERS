@@ -195,8 +195,8 @@ export interface NwcLines {
 }
 
 export interface NwcAnalysis {
-  /** Every month-end or year-end balance sheet, ascending. */
-  periods: { asOf: string; month: MonthKey; lines: NwcLines }[];
+  /** Every month-end or year-end balance sheet, ascending. `detail` echoes the source's carve-outs for the Balance Sheet tab. */
+  periods: { asOf: string; month: MonthKey; lines: NwcLines; detail?: Partial<Record<BsDetailLine, number>> }[];
   /** "T12M average", "T4Q average", or "n.a." with year-ends only. */
   pegBasis: "T12M average" | "T4Q average" | "n.a.";
   peg: number | null;
@@ -423,3 +423,179 @@ export const MODE_LABELS: Record<DealMode, string> = {
   mainStreet: "Main Street",
   lowerMiddleMarket: "Lower middle market",
 };
+
+// --- Additions by the model builder (all optional on ModelOutput, all additive) ------------------
+//
+// The workbook's data tabs, the historical cash flow, the deal structure and
+// the sensitivity grids are computed by the engine so the verifier can
+// compare every formula cell with a number. The CIM needs none of these.
+
+import type { BsCategory, MappedLine, SourceKind } from "../domain/financials.ts";
+import type { Assumptions } from "./assumptions.ts";
+
+/** One Databook row: a mapped P&L account with its dollars by month (monthly mode) or by fiscal year. */
+export interface DatabookRow {
+  account: string;
+  section?: string;
+  category: IsCategory;
+  summaryLine: string;
+  /** Flagged as a likely personal or discretionary account (the "Personal?" column). */
+  personal: boolean;
+  /** Schedule ref the account backs, when one does ("N1"). */
+  adjustmentRef?: string;
+  source: SourceKind;
+  file: string;
+  mappedBy: MappedLine["mappedBy"];
+  byMonth?: Record<MonthKey, number>;
+  byFiscalYear: Record<number, number>;
+}
+
+/** One Databook balance-sheet row: a mapped account with its balance at every statement date. */
+export interface DatabookBsRow {
+  account: string;
+  section?: string;
+  category: BsCategory;
+  source: SourceKind;
+  file: string;
+  mappedBy: MappedLine["mappedBy"];
+  /** Keyed by the statement's "YYYY-MM" month. */
+  byMonth: Record<MonthKey, number>;
+}
+
+export interface HistoricalCashFlowYear {
+  fiscalYear: number;
+  netIncome: number;
+  da: number;
+  dAr: number;
+  dInv: number;
+  dOca: number;
+  dAp: number;
+  dOcl: number;
+  cfo: number;
+  /** Derived: change in net fixed assets plus D&A, shown negative. */
+  capex: number;
+  cfi: number;
+  dDebt: number;
+  /** Derived balancing item: change in equity less net income, shown negative. */
+  distributions: number;
+  cff: number;
+  netChange: number;
+  beginCash: number;
+  endCash: number;
+  bsCash: number;
+  freeCashFlow: number;
+  /** Free cash flow ÷ Reported EBITDA. */
+  cashConversion: number;
+}
+
+export interface FinancingCase {
+  purchasePrice: number;
+  equityInjection: number;
+  loanPrincipal: number;
+  termYears: number;
+  rate: number;
+  annualDebtService: number;
+  /** SDE − market replacement compensation − capital reserve (Main Street), or PF Adj. EBITDA − maintenance capex. */
+  cashFlowAvailable: number;
+  dscr: number;
+}
+
+/** The Main Street valuation block of guide 5.5, one case per column. */
+export interface MainStreetValuationCase {
+  sde: number;
+  multiple: number;
+  businessValuation: number;
+  deferredCapex: number;
+  totalInvestment: number;
+  impliedSdeMultiple: number;
+  impliedAdjEbitdaMultiple: number;
+  financing: FinancingCase;
+}
+
+export interface ValuationDetail {
+  /** Period the earnings come from (LTM CY, or the latest FY in annual mode). */
+  period: PeriodColumn;
+  basis: { revenue: number; reportedEbitda: number; adjEbitda: number; pfAdjEbitda: number; sde: number };
+  cases: { low: MainStreetValuationCase; mid: MainStreetValuationCase; high: MainStreetValuationCase };
+  /** EV ÷ each earnings measure, per case. */
+  impliedMultiples: Record<"low" | "mid" | "high", { reportedEbitda: number; adjEbitda: number; pfAdjEbitda: number; sde: number; revenue: number }>;
+}
+
+export interface SourcesAndUses {
+  uses: { purchasePrice: number; transactionFees: number; workingCapitalFunding: number; reconciliationHoldback: number; total: number };
+  sources: { seniorLoan: number; sellerNote: number; rolloverEquity: number; buyerEquity: number; total: number };
+  check: number;
+}
+
+export interface SellerProceeds {
+  purchasePrice: number;
+  debtPaidAtClose: number;
+  debtLikeItems: number;
+  nwcVsPeg: number;
+  reconciliationHoldback: number;
+  transactionExpenses: number;
+  indemnityEscrow: number;
+  sellerNoteDeferred: number;
+  closingCash: number;
+  holdbackReleased: number;
+  escrowReleased: number;
+  sellerNotePrincipal: number;
+  totalConsideration: number;
+  /** Asset purchase memo: AR + unbilled − AP − accrued retained by the seller. */
+  sellerRetainedNwc: number;
+}
+
+export interface DealStructureColumn {
+  name: string;
+  preset: string;
+  purchasePrice: number;
+  cashAtClosePct: number;
+  cashAtClose: number;
+  sellerNotePct: number;
+  sellerNote: number;
+  sellerNoteTermMonths: number;
+  sellerNoteRate: number;
+  escrowPct: number;
+  escrow: number;
+  escrowMonths: number;
+  retentionHoldback: number;
+  reconciliationHoldback: number;
+  sourcesAndUses: SourcesAndUses;
+  proceeds: SellerProceeds;
+  debtService: { seniorLoan: number; sellerNote: number; total: number; cashFlowAvailable: number; dscr: number };
+  /** The OFF14 term strings, formula-built in the workbook. */
+  terms: Record<string, string>;
+}
+
+export interface SensitivityGrid {
+  key: string;
+  title: string;
+  colAxis: { label: string; values: number[]; fmt: string };
+  rowAxis: { label: string; values: number[]; fmt: string };
+  /** body[rowIndex][colIndex]; the base case sits at the centre. */
+  body: number[][];
+  base: number;
+  bodyFmt: string;
+  note: string;
+  hurdle?: number;
+}
+
+/** Annual-only mode (guide 5.2A): the Pro Forma Low / Mid / High block. */
+export interface ProFormaScenario {
+  name: "Low" | "Mid" | "High";
+  revenueGrowth: number;
+  pnl: PnlLines;
+  ladder: Ladder;
+  methods: Record<string, string>;
+}
+
+export interface ModelOutput {
+  /** The assumptions the workbook echoes on its Assumptions tab and every formula reads. */
+  assumptions?: Assumptions;
+  databook?: { pnl: DatabookRow[]; bs: DatabookBsRow[] };
+  cashFlow?: HistoricalCashFlowYear[];
+  valuationDetail?: ValuationDetail;
+  deal?: DealStructureColumn[];
+  sensitivities?: SensitivityGrid[];
+  scenarios?: ProFormaScenario[];
+}

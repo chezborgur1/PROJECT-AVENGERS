@@ -123,8 +123,8 @@ export const IntakeFileSchema = IntakeWireSchema.extend({
 
 /**
  * Walk a schema and fill what a hand-written file may omit: null for a
- * nullable key, [] for a list, the default provenance for a missing
- * `source`. Anything else missing is left for validation to report.
+ * nullable key, [] for a list, the default provenance for a missing or
+ * partial `source`. Anything else missing is left for validation to report.
  */
 function fillMissing(schema: z.ZodType, value: unknown, prov: Provenance): unknown {
   const def = (schema as { def: { type: string } }).def;
@@ -143,8 +143,9 @@ function fillMissing(schema: z.ZodType, value: unknown, prov: Provenance): unkno
     const out: Record<string, unknown> = { ...(value as Record<string, unknown>) };
     for (const [key, sub] of Object.entries(shape)) {
       const subDef = (sub as { def: { type: string } }).def;
-      if (out[key] === undefined && key === "source" && subDef.type === "object") out[key] = { ...prov };
-      else out[key] = fillMissing(sub, out[key], prov);
+      // A provenance may be left out entirely or given as just a locator; the file default fills the rest.
+      const value = key === "source" && subDef.type === "object" ? { ...prov, ...((out[key] as Record<string, unknown> | undefined) ?? {}) } : out[key];
+      out[key] = fillMissing(sub, value, prov);
     }
     return out;
   }
@@ -184,7 +185,8 @@ export function loadIntakeFile(file: string, businessName: string): LoadedIntake
     evidence: raw.evidence === "documented" ? "documented" : "management_representation",
   };
   const company = (raw.company as Record<string, unknown> | undefined) ?? {};
-  const filled = fillMissing(IntakeFileSchema, { ...raw, company: { legalName: businessName, ...company } }, prov);
+  // Blocks with nothing required inside may be left out; the owner and the reason for sale may not.
+  const filled = fillMissing(IntakeFileSchema, { workforce: {}, transaction: {}, ...raw, company: { legalName: businessName, ...company } }, prov);
   const parsed = IntakeFileSchema.safeParse(filled);
   if (!parsed.success) {
     const issues = parsed.error.issues.slice(0, 5).map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`);

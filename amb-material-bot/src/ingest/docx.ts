@@ -63,10 +63,14 @@ function decodeEntities(s: string): string {
 
 /** Text of word/document.xml: one line per paragraph, table cells separated by tabs. */
 export function docxXmlToText(xml: string): string {
+  // Only a bare <w:tab/> is a tab character; <w:tab w:val=.../> inside <w:tabs> is a tab stop.
   const body = xml
     .replace(/<w:tab\/>/g, "\t")
-    .replace(/<w:br\/>|<w:cr\/>/g, "\n")
+    .replace(/<w:br[^>]*\/>|<w:cr\/>/g, "\n")
+    // A cell's last paragraph ends with the cell, not a line; a table row ends with a line.
+    .replace(/<\/w:p>(\s*<\/w:tc>)/g, "$1")
     .replace(/<\/w:tc>/g, "\t")
+    .replace(/<\/w:tr>/g, "\n")
     .replace(/<\/w:p>/g, "\n")
     .replace(/<[^>]+>/g, "");
   return decodeEntities(body)

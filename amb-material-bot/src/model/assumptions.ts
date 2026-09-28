@@ -37,6 +37,16 @@ export interface DealAssumptions {
   deferredCapex: number;
 }
 
+/** Pro forma methods an annual-mode scenario applies per expense line (guide 5.5 scenario block). */
+export type ScenarioMethod = "3-year average" | "Latest year" | "% of sales, 3-year blended" | "Contracted" | "Input";
+
+/** One column of the Low / Mid / High block (guide 5.2A, 5.5). Mid is the base case. */
+export interface ScenarioDrivers {
+  revenueGrowth: number;
+  methods: { cogs: ScenarioMethod; payroll: ScenarioMethod; rent: ScenarioMethod; marketing: ScenarioMethod; otherOpex: ScenarioMethod };
+  multiple: number;
+}
+
 /** Step sizes for the two-way grids (guide 5.5); midpoints link to the base case. */
 export interface SensitivityAssumptions {
   multipleStep: number;
@@ -90,6 +100,8 @@ export interface Assumptions {
   recast: RecastAssumptions;
   deal: DealAssumptions;
   sensitivity: SensitivityAssumptions;
+  /** Annual-only mode: the Pro Forma Low / Mid / High block. Low and High each differ from Mid on growth and one driver (check C29). */
+  scenarios: Record<"low" | "mid" | "high", ScenarioDrivers>;
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -267,6 +279,12 @@ export function defaultAssumptions(ds: FinancialDataset, row: RequestRow): Assum
       roundingDigits: 0,
       gradientBands: 5,
       dscrHurdle: 1.25,
+    },
+    scenarios: {
+      // SUN's pattern (guide F6 §3.3): utilities-type costs at the blended ratio, repairs and other at the average, insurance-type costs at the latest year.
+      low: { revenueGrowth: round(growth[0]! - 0.03, 4), methods: { cogs: "Latest year", payroll: "% of sales, 3-year blended", rent: "Latest year", marketing: "Latest year", otherOpex: "Latest year" }, multiple: 2.5 },
+      mid: { revenueGrowth: growth[0]!, methods: { cogs: "% of sales, 3-year blended", payroll: "% of sales, 3-year blended", rent: "Latest year", marketing: "Latest year", otherOpex: "3-year average" }, multiple: 3.0 },
+      high: { revenueGrowth: round(growth[0]! + 0.03, 4), methods: { cogs: "% of sales, 3-year blended", payroll: "3-year average", rent: "Latest year", marketing: "3-year average", otherOpex: "3-year average" }, multiple: 3.5 },
     },
   };
 }

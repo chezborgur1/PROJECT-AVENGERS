@@ -1,0 +1,11 @@
+Metric,Label,Unit,Period,Value,Definition,Source,Evidence
+maintenance_members,Active maintenance-agreement members,count,2026-09-21,1450,"Members with an active agreement: two tune-ups a year, priority scheduling, 15% repair discount",intake-notes.md (intake call; request received 2026-09-21),Management representation
+renewal_rate,Maintenance-agreement renewal rate,percent,2026-09-21,82%,,intake-notes.md (intake call; request received 2026-09-21),Management representation
+agreement_offer_rate,Service calls on which an agreement is offered,percent,2026-09-21,35%,,intake-notes.md (intake call; request received 2026-09-21),Management representation
+google_rating,Google rating,rating,2026-09-21,4.8,,intake-notes.md (intake call; request received 2026-09-21),Management representation
+google_reviews,Google reviews,count,2026-09-21,900,Stated as 900+,intake-notes.md (intake call; request received 2026-09-21),Management representation
+fleet_service_vans,Service vans,count,2026-09-21,18,,intake-notes.md (intake call; request received 2026-09-21),Management representation
+fleet_install_trucks,Install trucks,count,2026-09-21,2,,intake-notes.md (intake call; request received 2026-09-21),Management representation
+service_radius,Service radius,miles,2026-09-21,35,,intake-notes.md (intake call; request received 2026-09-21),Management representation
+shop_size,Shop and office,sq_ft,2026-09-21,8000,,intake-notes.md (intake call; request received 2026-09-21),Management representation
+owner_hours,Owner hours per week,hours,2026-09-21,45,,intake-notes.md (intake call; request received 2026-09-21),Management representation

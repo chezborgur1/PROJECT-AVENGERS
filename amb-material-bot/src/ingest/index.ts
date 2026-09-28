@@ -1,49 +1,62 @@
 // Gathers everything known about one business: every file in its source
 // folder, plus QuickBooks Online when the request names a realm.
 //
-// Folder conventions (file names are matched loosely, case-insensitive):
-//   *.csv / *.xlsx         QuickBooks P&L or Balance Sheet export, or a bank
+// Folder conventions (file names are matched loosely, case-insensitive;
+// docs/REQUEST_LIST.md describes each file):
+//   *.csv / *.xlsx         QuickBooks P&L or Balance Sheet export (annual,
+//                          quarterly or monthly columns), or a bank
 //                          transaction export (detected from the contents)
 //   *.pdf / *.png / *.jpg  tax returns, bank statements, financial statements
 //                          (read by Claude)
-//   *.md / *.txt           intake notes: call summaries, questionnaires
-//   addbacks.csv           year, description, amount, type
+//   *.md / *.txt / *.docx  intake notes: call summaries, questionnaires
+//   intake.json            structured intake facts (else Claude transcribes the notes)
+//   adjustments.csv        the adjustments schedule (ref, tier, description, ...)
+//   addbacks.csv           the seller's flat add-back list (legacy; adjustments.csv wins)
+//   customers*.csv         customer revenue by fiscal year or month
+//   payroll*.csv           payroll register
+//   kpis*.csv              operating metrics
 //   mapping-overrides.csv  account, category
 
 import fs from "node:fs";
 import path from "node:path";
-import { parse } from "csv-parse/sync";
-import {
-  isBsCategory,
-  isIsCategory,
-  type Addback,
-  type AddbackType,
-  type Category,
-  type FinancialDataset,
-  type SourceExtract,
-} from "../domain/financials.ts";
+import { isBsCategory, isIsCategory, type Addback, type AddbackType, type Category, type FinancialDataset, type KpiSeries } from "../domain/financials.ts";
 import { normaliseAccount, type MappingOverrides } from "../domain/chartOfAccounts.ts";
-import { fiscalYearEndMonth, type RequestRow } from "../requests/schema.ts";
-import { readTable, parseAmount } from "../util/tables.ts";
+import { fiscalYearEndMonth, isPassThrough, type RequestRow } from "../requests/schema.ts";
+import { parseAmount, readCsvRecords, readTable } from "../util/tables.ts";
 import { claudeAvailable } from "../util/claude.ts";
-import { detectReportKind, parseQuickbooksExport } from "./quickbooksExport.ts";
+import { loadAdjustmentsCsv, type ScheduleRow } from "./adjustments.ts";
+import { extractDocument, extractIntakeFacts, extractionToSource, isAiDocument } from "./aiExtract.ts";
 import { looksLikeBankExport, parseBankCsv } from "./bankCsv.ts";
-import { extractDocument, extractionToSource, isAiDocument } from "./aiExtract.ts";
-import { pullQuickbooks } from "./quickbooksApi.ts";
+import { loadCustomersCsv, type CustomerFile } from "./customers.ts";
+import { readDocxText } from "./docx.ts";
+import type { IngestExtract } from "./extract.ts";
+import { loadIntakeFile, toIntakeFacts, type LoadedIntake } from "./intake.ts";
+import { loadKpisCsv } from "./kpis.ts";
 import { mergeSources } from "./merge.ts";
+import { loadPayrollCsv, type PayrollFile } from "./payroll.ts";
+import { pullQuickbooks } from "./quickbooksApi.ts";
+import { detectReportKind, parseQuickbooksExport } from "./quickbooksExport.ts";
 
 export interface IntakeBundle {
   dataset: FinancialDataset;
   /** Intake notes, concatenated with file headings, for CIM drafting. */
   notes: string;
   files: { file: string; used: string }[];
+  /** Where the structured intake facts came from. */
+  intakeFacts: "intake.json" | "claude" | "none";
 }
 
-const SPECIAL = new Set(["addbacks.csv", "mapping-overrides.csv"]);
+type IntakeFileKind = "adjustments" | "addbacks" | "overrides" | "customers" | "payroll" | "kpis" | "intake";
 
-function readCsvRecords(file: string): Record<string, string>[] {
-  return parse(fs.readFileSync(file, "utf8"), { columns: true, skip_empty_lines: true, trim: true, bom: true });
-}
+const INTAKE_FILES: { test: RegExp; kind: IntakeFileKind }[] = [
+  { test: /^adjustments\.(csv|xlsx)$/, kind: "adjustments" },
+  { test: /^addbacks\.csv$/, kind: "addbacks" },
+  { test: /^mapping-overrides\.csv$/, kind: "overrides" },
+  { test: /^customers?([-_ ].*)?\.(csv|xlsx)$/, kind: "customers" },
+  { test: /^payroll([-_ ].*)?\.(csv|xlsx)$/, kind: "payroll" },
+  { test: /^kpis?([-_ ].*)?\.(csv|xlsx)$/, kind: "kpis" },
+  { test: /^intake\.json$/, kind: "intake" },
+];
 
 export function loadAddbacks(file: string): Addback[] {
   if (!fs.existsSync(file)) return [];
@@ -72,10 +85,19 @@ export function loadOverrides(file: string): MappingOverrides {
 export async function gatherIntake(row: RequestRow, repoRoot: string, log: (msg: string) => void): Promise<IntakeBundle> {
   const fyEnd = fiscalYearEndMonth(row);
   const folder = row.source_folder ? path.resolve(repoRoot, row.source_folder) : "";
-  const extracts: SourceExtract[] = [];
+  const extracts: IngestExtract[] = [];
   const files: IntakeBundle["files"] = [];
   const noteParts: string[] = [];
+  const noteFiles: string[] = [];
   const problems: string[] = [];
+  let adjustmentRows: ScheduleRow[] | undefined;
+  let addbacks: Addback[] = [];
+  let overrides: MappingOverrides = new Map();
+  let customers: CustomerFile | undefined;
+  let payroll: PayrollFile | undefined;
+  const kpis: KpiSeries[] = [];
+  let intake: LoadedIntake | undefined;
+  let intakeFacts: IntakeBundle["intakeFacts"] = "none";
 
   if (row.quickbooks_realm_id) {
     try {
@@ -94,17 +116,49 @@ export async function gatherIntake(row: RequestRow, repoRoot: string, log: (msg:
     const file = path.join(folder, name);
     const lower = name.toLowerCase();
     const ext = path.extname(lower);
-    if (fs.statSync(file).isDirectory() || lower.startsWith(".") || SPECIAL.has(lower)) continue;
+    if (fs.statSync(file).isDirectory() || lower.startsWith(".")) continue;
+    const special = INTAKE_FILES.find((f) => f.test.test(lower))?.kind;
     try {
-      if (ext === ".md" || ext === ".txt") {
-        noteParts.push(`### ${name}\n${fs.readFileSync(file, "utf8").trim()}`);
+      if (special === "adjustments") {
+        const loaded = await loadAdjustmentsCsv(file);
+        adjustmentRows = loaded.rows;
+        problems.push(...loaded.warnings);
+        files.push({ file: name, used: `Adjustments schedule (${loaded.rows.length} rows)` });
+      } else if (special === "addbacks") {
+        addbacks = loadAddbacks(file);
+        files.push({ file: name, used: "Seller add-backs" });
+      } else if (special === "overrides") {
+        overrides = loadOverrides(file);
+        files.push({ file: name, used: "Account mapping overrides" });
+      } else if (special === "customers") {
+        customers = await loadCustomersCsv(file, fyEnd);
+        problems.push(...customers.warnings);
+        files.push({ file: name, used: `Customer list (${customers.rows.filter((r) => !r.residual).length} customers)` });
+      } else if (special === "payroll") {
+        payroll = await loadPayrollCsv(file, fyEnd);
+        problems.push(...payroll.warnings);
+        files.push({ file: name, used: `Payroll register (${payroll.rows.length} people)` });
+      } else if (special === "kpis") {
+        const loaded = await loadKpisCsv(file, fyEnd);
+        kpis.push(...loaded.kpis);
+        problems.push(...loaded.warnings);
+        files.push({ file: name, used: `Operating metrics (${loaded.kpis.length})` });
+      } else if (special === "intake") {
+        intake = loadIntakeFile(file, row.business_name);
+        intakeFacts = "intake.json";
+        files.push({ file: name, used: "Structured intake facts" });
+      } else if (ext === ".md" || ext === ".txt" || ext === ".docx") {
+        const text = ext === ".docx" ? readDocxText(file) : fs.readFileSync(file, "utf8");
+        noteParts.push(`### ${name}\n${text.trim()}`);
+        noteFiles.push(name);
         files.push({ file: name, used: "Intake notes" });
       } else if (ext === ".csv" || ext === ".xlsx" || ext === ".xlsm") {
         const grid = await readTable(file);
         if (detectReportKind(grid, name)) {
           const ex = await parseQuickbooksExport(file, fyEnd);
           extracts.push(ex);
-          files.push({ file: name, used: `QuickBooks ${ex.pnlLines.length ? "P&L" : "balance sheet"} export (FY${ex.fullYears.join(", FY")})` });
+          const span = ex.monthly ? `${ex.monthly.months.length} months` : `FY${ex.fullYears.join(", FY")}`;
+          files.push({ file: name, used: `QuickBooks ${ex.pnlLines.length ? "P&L" : "balance sheet"} export (${span})` });
         } else if (looksLikeBankExport(grid)) {
           extracts.push(await parseBankCsv(file, fyEnd));
           files.push({ file: name, used: "Bank transactions (deposit cross-check)" });
@@ -119,8 +173,7 @@ export async function gatherIntake(row: RequestRow, repoRoot: string, log: (msg:
         }
         log(`  Claude: reading ${name}`);
         const ex = await extractDocument(file, { businessName: row.business_name, fyEndMonth: fyEnd });
-        const source = extractionToSource(ex, file, fyEnd);
-        extracts.push(source);
+        extracts.push(extractionToSource(ex, file, fyEnd));
         files.push({ file: name, used: `${ex.form || ex.document_type} (read by Claude)` });
       } else {
         files.push({ file: name, used: "Skipped: unsupported file type" });
@@ -130,15 +183,40 @@ export async function gatherIntake(row: RequestRow, repoRoot: string, log: (msg:
       problems.push(`${name}: ${(err as Error).message}`);
     }
   }
+  if (adjustmentRows && addbacks.length) {
+    const i = files.findIndex((f) => f.file.toLowerCase() === "addbacks.csv");
+    if (i >= 0) files[i] = { file: files[i]!.file, used: "Seller add-backs (superseded by adjustments.csv)" };
+  }
+
+  const notes = noteParts.join("\n\n");
+  // Structured facts: the hand-written file wins; otherwise Claude transcribes the notes; otherwise every qualitative slot is a placeholder.
+  if (!intake && notes && claudeAvailable()) {
+    try {
+      log("  Claude: transcribing the intake notes into structured facts");
+      const wire = await extractIntakeFacts(notes, { businessName: row.business_name, sourceLabel: noteFiles.join(", ") });
+      intake = { facts: toIntakeFacts(wire), revenueLines: [] };
+      intakeFacts = "claude";
+      files.push({ file: noteFiles.join(", "), used: "Structured intake facts (transcribed by Claude; review against the notes)" });
+    } catch (err) {
+      problems.push(`Intake notes could not be transcribed into structured facts: ${(err as Error).message}`);
+    }
+  } else if (!intake && notes) {
+    problems.push("No structured intake facts: add intake.json to the source folder, or set ANTHROPIC_API_KEY so the notes are transcribed. Every qualitative CIM slot will be a [Confirm: ...] placeholder.");
+  }
 
   const dataset = mergeSources({
     extracts,
-    overrides: loadOverrides(path.join(folder, "mapping-overrides.csv")),
-    addbacks: loadAddbacks(path.join(folder, "addbacks.csv")),
+    overrides,
+    addbacks,
+    fyEndMonth: fyEnd,
+    ...(adjustmentRows ? { adjustmentRows } : {}),
+    ...(customers ? { customers } : {}),
+    ...(payroll ? { payroll } : {}),
+    ...(kpis.length ? { kpis } : {}),
+    ...(intake ? { intake } : {}),
+    request: { replacementSalary: row.owner_replacement_salary, passThrough: isPassThrough(row) },
   });
   dataset.warnings.unshift(...problems);
-  if (fs.existsSync(path.join(folder, "addbacks.csv"))) files.push({ file: "addbacks.csv", used: "Seller add-backs" });
-  if (fs.existsSync(path.join(folder, "mapping-overrides.csv"))) files.push({ file: "mapping-overrides.csv", used: "Account mapping overrides" });
 
-  return { dataset, notes: noteParts.join("\n\n"), files };
+  return { dataset, notes, files, intakeFacts };
 }

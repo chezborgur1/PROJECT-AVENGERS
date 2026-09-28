@@ -1,0 +1,349 @@
+{
+  "$comment": "Structured intake facts for the fictional Ridgeline sample, transcribed from intake-notes.md. Every item's source defaults to the file-level source and evidence below; a locator names the heading the fact sits under.",
+  "source": "intake-notes.md (intake call; request received 2026-09-21)",
+  "evidence": "management_representation",
+  "customerTerm": "Customer",
+  "company": {
+    "legalName": "Ridgeline Comfort Services LLC",
+    "tradingName": "Ridgeline",
+    "description": "Residential and light-commercial HVAC service, replacement and maintenance, plus plumbing service added in 2019",
+    "founded": 2009,
+    "founderBackground": "Founded by Mark Delaney after 12 years as a lead technician at a regional HVAC contractor",
+    "headquarters": {
+      "city": "Columbus",
+      "state": "Ohio"
+    },
+    "serviceArea": "Franklin, Delaware and Licking counties (about a 35-mile radius)",
+    "ownership": "Founder-owned (Mark Delaney)",
+    "certifications": [
+      {
+        "name": "Carrier Factory Authorized Dealer",
+        "since": 2015,
+        "source": {
+          "locator": "## Business"
+        }
+      }
+    ],
+    "licenses": [],
+    "reputation": [
+      {
+        "metric": "Google rating",
+        "value": "4.8 from 900+ reviews",
+        "source": {
+          "locator": "## Business"
+        }
+      }
+    ],
+    "source": {
+      "locator": "## Business"
+    }
+  },
+  "locations": [
+    {
+      "name": "Maple Ave shop and office",
+      "function": "Shop, warehouse and office",
+      "sizeSqFt": 8000,
+      "arrangement": "leased_from_third_party",
+      "leaseExpiry": "2029",
+      "renewalOptions": "One 5-year renewal option",
+      "landlordRelatedParty": false,
+      "source": {
+        "locator": "## Operations"
+      }
+    }
+  ],
+  "systems": [
+    {
+      "function": "Dispatch, invoicing and memberships",
+      "system": "ServiceTitan",
+      "source": {
+        "locator": "## Operations"
+      }
+    },
+    {
+      "function": "Accounting",
+      "system": "QuickBooks Online",
+      "source": {
+        "locator": "## Operations"
+      }
+    }
+  ],
+  "suppliers": [
+    {
+      "name": "Ferguson",
+      "supplies": "HVAC parts and supplies",
+      "source": {
+        "locator": "## Operations"
+      }
+    },
+    {
+      "name": "Johnstone Supply",
+      "supplies": "HVAC parts and supplies",
+      "source": {
+        "locator": "## Operations"
+      }
+    },
+    {
+      "name": "Carrier (local distributor)",
+      "supplies": "HVAC equipment",
+      "source": {
+        "locator": "## Operations"
+      }
+    }
+  ],
+  "fleetAndEquipment": [
+    {
+      "item": "Service vans",
+      "count": 18,
+      "ownership": "Owned, financed with vehicle loans",
+      "source": {
+        "locator": "## Operations"
+      }
+    },
+    {
+      "item": "Install trucks",
+      "count": 2,
+      "ownership": "Owned, financed with vehicle loans",
+      "source": {
+        "locator": "## Operations"
+      }
+    }
+  ],
+  "customerFacts": [
+    {
+      "fact": "1,450 active maintenance-agreement members (two tune-ups a year, priority scheduling, 15% repair discount)",
+      "source": {
+        "locator": "## Business"
+      }
+    },
+    {
+      "fact": "Maintenance-agreement renewal rate about 82%",
+      "source": {
+        "locator": "## Business"
+      }
+    },
+    {
+      "fact": "Commercial customers are property managers, small office buildings and 4 restaurant groups",
+      "source": {
+        "locator": "## Business"
+      }
+    },
+    {
+      "fact": "Largest single customer is about 4% of revenue",
+      "source": {
+        "locator": "## Business"
+      }
+    },
+    {
+      "fact": "Revenue mix FY2025: residential service and replacement about 64%, commercial about 27%, maintenance agreements about 9%",
+      "source": {
+        "locator": "## Business"
+      }
+    }
+  ],
+  "workforce": {
+    "headcount": 24,
+    "composition": [
+      {
+        "role": "Service technician",
+        "count": 14
+      },
+      {
+        "role": "Install crew",
+        "count": 4
+      },
+      {
+        "role": "Operations manager",
+        "count": 1
+      },
+      {
+        "role": "CSR / dispatch",
+        "count": 3
+      },
+      {
+        "role": "Bookkeeper",
+        "count": 1
+      },
+      {
+        "role": "Owner",
+        "count": 1
+      }
+    ],
+    "payBasis": "Technicians are paid hourly plus spiff commissions on maintenance agreements",
+    "union": false,
+    "source": {
+      "locator": "## People"
+    }
+  },
+  "management": [
+    {
+      "name": "Lisa Tran",
+      "role": "Operations manager",
+      "since": "2014",
+      "responsibilities": [
+        "Dispatch",
+        "Day-to-day scheduling"
+      ],
+      "postCloseIntent": "stays",
+      "source": {
+        "locator": "## People"
+      }
+    }
+  ],
+  "owner": {
+    "name": "Mark Delaney",
+    "role": "Owner / general manager",
+    "age": 61,
+    "hoursPerWeek": 45,
+    "responsibilities": [
+      {
+        "responsibility": "Estimating large replacements",
+        "source": {
+          "locator": "## People"
+        }
+      },
+      {
+        "responsibility": "Commercial relationships",
+        "transitionSupport": "Introduces commercial accounts during the transition",
+        "source": {
+          "locator": "## People"
+        }
+      },
+      {
+        "responsibility": "Vendor terms",
+        "source": {
+          "locator": "## People"
+        }
+      },
+      {
+        "responsibility": "Hiring",
+        "source": {
+          "locator": "## People"
+        }
+      }
+    ],
+    "transition": {
+      "months": 12,
+      "basis": "up to 12 months",
+      "description": "Willing to stay up to 12 months for transition and to introduce commercial accounts",
+      "source": {
+        "locator": "## Transaction"
+      }
+    },
+    "source": {
+      "locator": "## People"
+    }
+  },
+  "growthLevers": [
+    {
+      "lever": "Raise maintenance-agreement penetration",
+      "baseline": "Agreements are offered on about 35% of service calls",
+      "mechanism": "Offer the agreement on every service call; each new member adds two tune-ups a year and priority-scheduled repair work",
+      "source": {
+        "locator": "## Growth opportunities (owner's view)"
+      }
+    },
+    {
+      "lever": "Add after-hours emergency plumbing",
+      "baseline": "Calls after 7 pm are turned away today",
+      "mechanism": "Staff an on-call rotation so after-hours calls are served rather than referred away",
+      "source": {
+        "locator": "## Growth opportunities (owner's view)"
+      }
+    },
+    {
+      "lever": "Expand commercial preventive-maintenance contracts",
+      "baseline": "Two property managers have asked for quotes on additional buildings",
+      "mechanism": "Quote and sign the buildings already requested by existing property-manager customers",
+      "proofPoint": "Two property managers have asked for quotes on additional buildings",
+      "source": {
+        "locator": "## Growth opportunities (owner's view)"
+      }
+    },
+    {
+      "lever": "Paid digital marketing",
+      "baseline": "Little paid digital marketing today; most leads are referrals and Google reviews",
+      "mechanism": "Add paid search and local service ads on top of the referral and review base",
+      "source": {
+        "locator": "## Growth opportunities (owner's view)"
+      }
+    },
+    {
+      "lever": "Second location in the Dayton market",
+      "baseline": "Discussed but never pursued",
+      "mechanism": "Open a second dispatch base to serve the Dayton market",
+      "source": {
+        "locator": "## Growth opportunities (owner's view)"
+      }
+    }
+  ],
+  "reasonForSale": {
+    "text": "Owner retirement (age 61); the owner wants a clean exit within 12 months",
+    "source": {
+      "locator": "## Transaction"
+    }
+  },
+  "transaction": {
+    "dealFormPreference": "asset",
+    "timing": "Clean exit within 12 months",
+    "replacementSalary": {
+      "amount": 95000,
+      "source": {
+        "locator": "## Transaction"
+      }
+    },
+    "notes": [
+      {
+        "text": "Prefers an asset sale; open to a buyer keeping the Ridgeline name and all employees",
+        "source": {
+          "locator": "## Transaction"
+        }
+      }
+    ]
+  },
+  "milestones": [
+    {
+      "year": 2009,
+      "event": "Founded by Mark Delaney",
+      "source": {
+        "locator": "## Business"
+      }
+    },
+    {
+      "year": 2015,
+      "event": "Became a Carrier Factory Authorized Dealer",
+      "source": {
+        "locator": "## Business"
+      }
+    },
+    {
+      "year": 2019,
+      "event": "Added plumbing service",
+      "source": {
+        "locator": "## Business"
+      }
+    }
+  ],
+  "competitors": [],
+  "marketInputs": [],
+  "revenueLines": [
+    {
+      "account": "Service Revenue - Residential",
+      "label": "Residential service and replacement",
+      "recurring": false,
+      "whatTheCustomerBuys": "HVAC and plumbing repair, replacement and installation for homeowners"
+    },
+    {
+      "account": "Service Revenue - Commercial",
+      "label": "Commercial service",
+      "recurring": false,
+      "whatTheCustomerBuys": "HVAC service and preventive maintenance for property managers, office buildings and restaurant groups"
+    },
+    {
+      "account": "Maintenance Agreements",
+      "label": "Maintenance agreements",
+      "recurring": true,
+      "whatTheCustomerBuys": "Membership: two tune-ups a year, priority scheduling and a 15% repair discount"
+    }
+  ]
+}

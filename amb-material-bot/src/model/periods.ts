@@ -124,6 +124,20 @@ export function windowMonths(c: PeriodColumn): MonthKey[] {
   return monthRange(c.start, c.end);
 }
 
+/** A line's amount over a window: exact from its months when it has them, else its fiscal-year amounts prorated by months (DATA_CONTRACT §5.3). */
+export function amountInWindow(line: { byMonth?: Record<MonthKey, number>; byFiscalYear: Record<number, number> }, months: MonthKey[], fye: number): number {
+  if (line.byMonth) return months.reduce((s, m) => s + (line.byMonth![m] ?? 0), 0);
+  const perYear = new Map<number, number>();
+  for (const m of months) {
+    const { year, month } = parseMonthKey(m);
+    const fy = fiscalYearOf(year, month, fye);
+    perYear.set(fy, (perYear.get(fy) ?? 0) + 1);
+  }
+  let total = 0;
+  for (const [fy, n] of perYear) total += ((line.byFiscalYear[fy] ?? 0) * n) / 12;
+  return total;
+}
+
 // --- P&L lines -----------------------------------------------------------------
 
 /** The DATA_CONTRACT §5.2 identities on a category map. */

@@ -25,9 +25,11 @@ const taxReturn: Extraction = {
         { label: "Cash", line_reference: "Sch L 1(d)", amount: 238_615, category: "cash" },
         { label: "Retained earnings", line_reference: "Sch L 24(d)", amount: 238_615, category: "equity" },
       ],
+      equipment_placed_in_service: null,
     },
-    { year: 2026, months_covered: 6, pnl_lines: [], balance_sheet_lines: [] },
+    { year: 2026, months_covered: 6, pnl_lines: [], balance_sheet_lines: [], equipment_placed_in_service: null },
   ],
+  books_basis: "accrual",
   bank_months: [],
   notes: ["Schedule L line 18 statement not attached"],
 };

@@ -1,0 +1,30 @@
+Employee,Role,Department,Hire date,Termination date,Termination type,Pay basis,Owner,Management,Wages 2023,Wages 2024,Wages 2025
+Mark Delaney,Owner / general manager,Owner,2009-03-02,,,Salary,yes,yes,180000,190000,200000
+Alex Nguyen,Service technician,Field service,2012-05-14,,,Hourly + commission,,,36439,39522,42727
+Jordan Ramirez,Service technician,Field service,2013-08-05,,,Hourly + commission,,,35648,38663,41800
+Chris Underwood,Service technician,Field service,2014-03-10,,,Hourly + commission,,,34855,37803,40871
+Sam Xu,Service technician,Field service,2015-10-19,,,Hourly + commission,,,34063,36944,39942
+Taylor Abbott,Service technician,Field service,2016-06-06,,,Hourly + commission,,,33271,36085,39013
+Morgan Dunn,Service technician,Field service,2017-02-20,,,Hourly + commission,,,32479,35226,38084
+Casey Garza,Service technician,Field service,2018-09-03,,,Hourly + commission,,,31687,34367,37155
+Drew Jensen,Service technician,Field service,2019-04-15,2024-03-31,Resignation,Hourly + commission,,,30895,8377,0
+Jamie Mendes,Service technician,Field service,2020-01-13,,,Hourly + commission,,,30102,32648,35297
+Riley Price,Service technician,Field service,2020-11-02,2023-09-15,Resignation,Hourly + commission,,,21983,0,0
+Devin Petrov,Service technician,Field service,2021-07-12,,,Hourly + commission,,,28518,30930,33440
+Kai Takahashi,Service technician,Field service,2022-03-07,2025-02-14,Termination,Hourly + commission,,,26934,29212,5264
+Reese Walsh,Install technician,Installation,2016-09-12,,,Hourly,,,31687,34367,37155
+Quinn Zimmerman,Install technician,Installation,2019-08-19,,,Hourly,,,29310,31789,34369
+Avery Cortez,Install technician,Installation,2021-05-03,,,Hourly,,,27726,30071,32511
+Blake Fischer,Customer service / dispatch,Office,2017-11-06,,,Hourly,,,23640,23526,22975
+Cameron Ibrahim,Customer service / dispatch,Office,2020-08-24,2025-05-30,Resignation,Hourly,,,21889,21783,8864
+Dakota Lindqvist,Bookkeeper,Office,2015-02-09,,,Salary,,,27142,27011,26379
+Lisa Tran,Operations manager,Management,2014-09-08,,,Salary,,yes,45529,45309,44250
+Emerson Osei,Service technician,Field service,2023-04-03,,,Hourly + commission,,,20200,29212,31582
+Finley Okafor,Service technician,Field service,2023-08-01,2025-07-18,Resignation,Hourly + commission,,,10892,28353,17881
+Harper Schmidt,Install technician,Installation,2023-06-12,,,Hourly,,,15711,29212,31582
+Jesse Vasquez,Service technician,Field service,2024-03-04,,,Hourly + commission,,,0,24343,31582
+Logan Young,Service technician,Field service,2024-07-08,,,Hourly + commission,,,0,14176,30653
+Micah Barnes,Customer service / dispatch,Office,2024-09-16,,,Hourly,,,0,6971,20423
+Parker Ellis,Service technician,Field service,2025-01-06,,,Hourly + commission,,,0,0,30653
+Rowan Holt,Service technician,Field service,2025-06-02,,,Hourly + commission,,,0,0,17339
+Sawyer Kowalski,Customer service / dispatch,Office,2025-08-11,,,Hourly,,,0,0,8509

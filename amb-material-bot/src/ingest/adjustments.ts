@@ -37,7 +37,7 @@ import {
   type SuggestedAddback,
 } from "../domain/financials.ts";
 import { normaliseAccount } from "../domain/chartOfAccounts.ts";
-import { parseAmount, readCsvRecords } from "../util/tables.ts";
+import { parseAmount, readRecords, sentenceCase } from "../util/tables.ts";
 
 export const DEFAULT_REPLACEMENT_SALARY = 85_000;
 export const DEFAULT_BURDEN_PCT = 0.15;
@@ -119,24 +119,25 @@ function parsePnlLine(raw: string | undefined): IsCategory | undefined {
 function yearColumns(record: Record<string, string>): Map<number, string> {
   const out = new Map<number, string>();
   for (const key of Object.keys(record)) {
-    const m = /^(?:fy_?|amount_?|)((?:19|20)\d{2})$/.exec(key);
+    const m = /^(?:[a-z]+_?)?((?:19|20)\d{2})$/.exec(key);
     if (m) out.set(Number(m[1]), key);
   }
   return out;
 }
 
 /**
- * Read adjustments.csv. Definitional rows are derived from the P&L and
- * never read from the file; an S-tier row is only the owner's pay, the
- * replacement cost or the capital reserve (which override the defaults),
- * and any other owner perk is listed in the N tier so [S1]–[S3] keep their
- * refs. The `ref` column, if present, is ignored: refs are numbered here.
+ * Read adjustments.csv (or .xlsx) as written, every year column included.
+ * Definitional rows are derived from the P&L and never read from the file;
+ * an S-tier row is only the owner's pay, the replacement cost or the
+ * capital reserve (which override the defaults), and any other owner perk
+ * is listed in the N tier so [S1]–[S3] keep their refs. The `ref` column,
+ * if present, is ignored: refs are numbered when the schedule is built.
  */
-export function loadAdjustmentsCsv(file: string, years: number[]): { rows: ScheduleRow[]; warnings: string[] } {
+export async function loadAdjustmentsCsv(file: string): Promise<{ rows: ScheduleRow[]; warnings: string[] }> {
   const name = path.basename(file);
   const rows: ScheduleRow[] = [];
   const warnings: string[] = [];
-  readCsvRecords(file).forEach((r, i) => {
+  (await readRecords(file)).forEach((r, i) => {
     const line = i + 2;
     const description = (r.description ?? r.adjustment ?? "").trim();
     let tier = parseTier(r.tier);
@@ -163,14 +164,7 @@ export function loadAdjustmentsCsv(file: string, years: number[]): { rows: Sched
       if (tier === "normalization") warnings.push(`${name} line ${line} ("${description}"): no category; listed as Other consideration. Confirm the category.`);
     }
     const byFiscalYear: Record<number, number> = {};
-    const cols = yearColumns(r);
-    for (const y of years) {
-      const col = cols.get(y);
-      byFiscalYear[y] = (col && parseAmount(r[col])) || 0;
-    }
-    for (const [y, col] of cols) {
-      if (!years.includes(y) && parseAmount(r[col])) warnings.push(`${name} line ${line} ("${description}"): FY${y} is not in the model; that amount is ignored.`);
-    }
+    for (const [y, col] of yearColumns(r)) byFiscalYear[y] = parseAmount(r[col]) ?? 0;
     const status = parseStatus(r.status);
     if (r.status && !status) warnings.push(`${name} line ${line} ("${description}"): status "${r.status}" not recognised; treated as proposed.`);
     const evidence = parseEvidence(r.evidence);
@@ -196,6 +190,18 @@ export function loadAdjustmentsCsv(file: string, years: number[]): { rows: Sched
     });
   });
   return { rows, warnings };
+}
+
+/** Restrict file rows to the model's fiscal years: missing years are zero, amounts for other years are reported and dropped. */
+export function fitRowsToYears(rows: ScheduleRow[], years: number[]): { rows: ScheduleRow[]; warnings: string[] } {
+  const warnings: string[] = [];
+  const fitted = rows.map((r) => {
+    for (const [y, amount] of Object.entries(r.byFiscalYear)) {
+      if (!years.includes(Number(y)) && amount) warnings.push(`${r.sourceFile} ("${r.description}"): FY${y} is not in the model; that amount is ignored.`);
+    }
+    return { ...r, byFiscalYear: Object.fromEntries(years.map((y) => [y, r.byFiscalYear[y] ?? 0])) };
+  });
+  return { rows: fitted, warnings };
 }
 
 /**
@@ -234,7 +240,6 @@ export function legacyAddbacksToRows(addbacks: Addback[], years: number[]): Sche
 export interface ScheduleContext {
   years: number[];
   pnl: Record<number, Record<IsCategory, number>>;
-  fyEndMonth: number;
   monthly?: MonthlyPnl;
   lines: MappedLine[];
   suggested: SuggestedAddback[];
@@ -350,7 +355,7 @@ function accountFullyBacked(rows: ScheduleRow[], account: string, amounts: Recor
 }
 
 export function buildSchedule(ctx: ScheduleContext): ScheduleResult {
-  const { years, pnl, fyEndMonth, monthly } = ctx;
+  const { years, pnl, monthly } = ctx;
   const warnings: string[] = [];
   const latest = years[years.length - 1]!;
   const pnlFile = path.basename(ctx.pnlFile);
@@ -449,7 +454,7 @@ export function buildSchedule(ctx: ScheduleContext): ScheduleResult {
       const leaf = account.split(" : ").pop()!;
       rows.push({
         tier: "normalization",
-        description: `${leaf} (non-operating)`,
+        description: `${sentenceCase(leaf)} (non-operating)`,
         category: "non_operating",
         basis: `${sign < 0 ? "Removes" : "Adds back"} ${leaf.toLowerCase()}, ${money(byFiscalYear[latest] ?? 0)} in FY${latest}, which is non-operating ${label}, per the P&L ${account} account.`,
         sourceDocument: `P&L, account ${account}`,
@@ -557,7 +562,7 @@ export function buildSchedule(ctx: ScheduleContext): ScheduleResult {
       ? { amount: equipmentYears.reduce((s, y) => s + ctx.equipmentPlacedInService![y]!, 0) / equipmentYears.length, basis: "form_4562", source: `Form 4562, FY${equipmentYears[0]}–FY${equipmentYears[equipmentYears.length - 1]}` }
       : { amount: daYears.length ? daYears.reduce((s, y) => s + pnl[y]!.depreciation_amortization, 0) / daYears.length : 0, basis: "da_proxy", source: `${daYears.length ? `${daYears.length}-year` : "No"} average of depreciation expense${daYears.length ? ` FY${daYears[0]}–FY${daYears[daYears.length - 1]}` : ""}; proxy because no Form 4562 is in the sources` };
   if (mode.mode === "mainStreet") {
-    if (capitalReserve.basis === "da_proxy") warnings.push(`[S3] capital reserve uses the ${capitalReserve.source.toLowerCase()}. Request Form 4562 to replace the proxy.`);
+    if (capitalReserve.basis === "da_proxy") warnings.push(`[S3] capital reserve is a proxy: ${capitalReserve.source}. Request Form 4562 to replace it.`);
     const s3Amounts = s3Override?.byFiscalYear ?? Object.fromEntries(years.map((y) => [y, -capitalReserve.amount]));
     rows.push({
       tier: "owner_compensation",

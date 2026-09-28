@@ -3,6 +3,64 @@ import path from "node:path";
 import ExcelJS from "exceljs";
 import { parse } from "csv-parse/sync";
 
+/**
+ * The intake files (customers, payroll, KPIs, adjustments) as header-keyed
+ * records from either a .csv or the first sheet of a workbook, so an advisor
+ * can hand over whichever the client's system exported.
+ */
+export async function readRecords(file: string): Promise<Record<string, string>[]> {
+  if (path.extname(file).toLowerCase() === ".csv") return readCsvRecords(file);
+  const grid = await readTable(file);
+  const headerIdx = grid.findIndex((r) => r.some((c) => c.trim() !== ""));
+  if (headerIdx < 0) return [];
+  const keys = grid[headerIdx]!.map(headerKey);
+  return grid
+    .slice(headerIdx + 1)
+    .filter((r) => r.some((c) => c.trim() !== ""))
+    .map((r) => Object.fromEntries(keys.flatMap((k, i) => (k ? [[k, (r[i] ?? "").trim()]] : []))));
+}
+
+/**
+ * Which record keys of an intake file hold amounts by month ("2025-07",
+ * "Jul 2025") or by fiscal year ("2025", "FY2025", "Revenue 2025"), after
+ * `headerKey`. Keys named in `exclude` (employer-cost columns on a payroll
+ * file) are left alone. Values are "YYYY-MM" month keys and fiscal years.
+ */
+export function periodColumns(keys: string[], fyEndMonth: number, exclude: RegExp = /$^/): { months: Map<string, string>; years: Map<string, number> } {
+  const months = new Map<string, string>();
+  const years = new Map<string, number>();
+  for (const key of keys) {
+    if (exclude.test(key)) continue;
+    const m = /^(?:[a-z]+_)?((?:19|20)\d{2})[-_](0[1-9]|1[0-2])$/.exec(key);
+    if (m) {
+      months.set(key, `${m[1]}-${m[2]}`);
+      continue;
+    }
+    // A month name decides before a bare year does, so "jan_2025" is a month and "wages_2025" a year.
+    const p = parsePeriodLabel(key.replace(/_/g, " "), fyEndMonth);
+    if (p?.months === 1) months.set(key, `${p.endYear}-${String(p.endMonth).padStart(2, "0")}`);
+    else if (/^(?:[a-z]+_?)?(?:19|20)\d{2}$/.test(key) || p?.months === 12) years.set(key, p!.fiscalYear);
+  }
+  return { months, years };
+}
+
+/** "Vehicle Loans" → "Vehicle loans"; acronyms and bracketed codes keep their case. */
+export function sentenceCase(s: string): string {
+  return s
+    .split(" ")
+    .map((w, i) => (i > 0 && /^[A-Z][a-z]+$/.test(w) ? w.toLowerCase() : w))
+    .join(" ");
+}
+
+/** First non-blank value among the column aliases, trimmed. */
+export function pickColumn(record: Record<string, string>, ...keys: string[]): string | undefined {
+  for (const k of keys) {
+    const v = record[k];
+    if (v !== undefined && v.trim() !== "") return v.trim();
+  }
+  return undefined;
+}
+
 /** Read the first sheet of a .csv / .xlsx file as a grid of strings. */
 export async function readTable(file: string): Promise<string[][]> {
   const ext = path.extname(file).toLowerCase();
