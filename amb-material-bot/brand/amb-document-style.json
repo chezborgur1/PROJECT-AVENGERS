@@ -1,0 +1,98 @@
+{
+  "_source": "Extracted from AMB's written deliverables and PDF exhibit packs: AMB + Topkey Pre-LOI Deal Memo.docx, Topkey - Keystone Acquisition Opportunity Report v3.docx, AMB + Sunshine Commercial - Deal Memo.docx, AMB Advisory + Sunshine Commercial - Initial CRE Valuation.docx, Keystone Pre-LOI Diligence / Initial P&L Overview / Customer Retention / Offer Scenario PDFs, Sunshine Commercial diligence report PDFs. See docs/research/amb-deliverables.md. 'observed' = what AMB does today; 'recommended' = proposed standard for the bot's CIM and memos.",
+  "colors": {
+    "crimsonBand": { "hex": "990033", "use": "Word header band (full-bleed image, ~0.75in tall), cover bars on PDF exhibit packs (renders as #9A0033), table header fill in the Opportunity Report, left rule on callouts" },
+    "maroonHeading": { "hex": "7B0000", "use": "All Word headings (H1/H2/Quick Stats), callout lead-ins ('Takeaway:'), numbered-list numerals" },
+    "maroonTableHeader": { "hex": "7A0000", "use": "Exhibit table header rows and single-series bar fills in the Excel-exported PDFs (7A0000 and 7B0000 both occur)" },
+    "logoMaroon": { "hex": "9E0A20", "use": "AMB logo artwork only" },
+    "sectionBandPink": { "hex": "FFE1E1", "use": "Section label rows inside exhibit tables ('Revenue', 'Expenses', 'P&L Adjustments')" },
+    "totalRowYellow": { "hex": "FFFFCC", "use": "Key total rows, boxed with a thin black border per column group" },
+    "calloutFill": { "hex": "F7EBEF", "use": "Takeaway / Opportunity / Long-term view callouts (with 3pt 990033 left border)" },
+    "subtotalRowTint": { "hex": "EADDE1", "use": "Bold subtotal rows in Word bridge tables" },
+    "zebraGrey": { "hex": "F2F2F2", "use": "Alternate rows in Word tables" },
+    "wordTableBorder": { "hex": "BFBFBF", "use": "0.5pt cell borders in Word tables" },
+    "considerationsHeader": { "hex": "FFF2CC", "use": "Header of the 'Priority P&L Considerations' table in the Topkey memo (observed only; off-palette)" },
+    "creSensitivityBlue": { "hex": "DDEBF7", "use": "Axis headers of Sunshine sensitivity grids (observed only; off-palette)" },
+    "creSectionGrey": { "hex": "D9D9D9", "use": "Section title bars on Sunshine exhibits (observed only)" },
+    "passGreen": { "hex": "E2EFDA", "use": "Cells that clear a threshold in sensitivity grids" },
+    "flagRed": { "hex": "FF0000", "use": "Thin outline boxes around the base-case or key cells in sensitivity grids and pro forma columns" },
+    "chartSeries": {
+      "primary": "7B0000",
+      "wins": "70AD47",
+      "lossesRegrettable": "7B0000",
+      "lossesNonRegrettable": "FFC1C1",
+      "lossesUnclassified": "FF0000",
+      "stackedMix": ["548235", "7B0000", "D6DCE5", "FFE699", "BF9000", "FFC1C1"],
+      "pie": ["7B0000", "FFC1C1", "FFE1E1", "D6DCE5", "BDD7EE"],
+      "ratioLineSecondaryAxis": "00B0F0",
+      "gridline": "D9D9D9",
+      "barOutline": "000000 hairline (observed; recommend none)"
+    },
+    "recommendedChartPalette": {
+      "note": "Keep the maroon anchor, drop Excel defaults (70AD47 green, 00B0F0 cyan, FF0000 red). One accent, greys for context.",
+      "primary": "7B0000",
+      "secondary": "B5727A",
+      "tertiary": "D9B8BD",
+      "neutralDark": "595959",
+      "neutralMid": "A6A6A6",
+      "neutralLight": "D9D9D9",
+      "positive": "7B0000",
+      "negative": "A6A6A6",
+      "highlight": "990033"
+    }
+  },
+  "typography": {
+    "wordMemos": {
+      "observed": {
+        "body": "Times New Roman 11.5pt (Opportunity Report docDefaults sz=23) or 12pt (Topkey memo); line 1.1 (264/240), 6pt after",
+        "h1": "Times New Roman 17pt bold 7B0000, 15pt before / 6pt after, keepNext (Opportunity Report); 16pt bold 7B0000 (Topkey memo)",
+        "h2": "Times New Roman 12.5pt bold 7B0000, 10pt before / 4pt after",
+        "exhibitTitle": "Times New Roman 12pt bold 7B0000 (e.g. 'Monthly STR Subscription Revenue (Jan'24 - July'26)')",
+        "documentTitle": "Times New Roman 20pt bold 7B0000 + subtitle 14pt italic black",
+        "tableText": "Times New Roman 10pt; header bold white on 990033",
+        "footnote": "Times New Roman 10pt, '(1) ...' numbering, or italic 10pt 'Note: ...'",
+        "headerBandText": "Times New Roman 15-16pt bold white, centred, on the 990033 band with the white AMB logo at right",
+        "footer": "Grey (A0A0A0) hairline + centred page number (Arial 10pt)"
+      }
+    },
+    "exhibitPacks": {
+      "observed": {
+        "font": "Arial throughout",
+        "pageTitle": "Arial 13pt bold black (target company name)",
+        "pageSubtitle": "Arial 9pt italic, '<Exhibit name> ($000s)', followed by a thin black rule across the print width",
+        "tableHeader": "Arial 9pt bold white on 7A0000; two-tier (period group centred over period labels)",
+        "tableBody": "Arial 8.5-9pt (P&L), down to 5.9pt on 18-column retention tables (too small)",
+        "chartTitle": "Arial 8.5-9pt bold, sometimes underlined, left-aligned above the plot",
+        "chartDataLabels": "Arial ~7pt bold, above bars",
+        "coverTitle": "Arial 21pt bold / subtitle 16pt bold italic / 'As of MM/DD/YY' 14.7pt italic"
+      }
+    },
+    "recommended": {
+      "cimBodyFont": "Keep Times New Roman for prose if the owner wants continuity with AMB memos, or move prose to a serif such as Georgia/Cambria; keep Arial for all numbers, tables and charts (AMB's exhibit convention).",
+      "minTableSize": "8pt; never below 7pt",
+      "actionTitle": "Sentence-case headline stating the conclusion, 16-18pt bold 7B0000, one line, above every CIM page"
+    }
+  },
+  "numberConventions": {
+    "units": "State units once in the exhibit subtitle: '($000s)' or '($)'",
+    "currency": "$ on the first row and on total rows only; body rows plain with thousands separators",
+    "negatives": "Parentheses in tables: (116), ($166); minus sign in prose: '–$166K'",
+    "zero": "En dash '–'",
+    "notMeaningful": "'--' in the first growth column (observed); recommend 'n.m.'",
+    "percent": "0 dp for mix/growth/deltas (23%, (88%)); 1 dp for margins (12.8%)",
+    "multiples": "One decimal with x: 3.0x, 5.4x",
+    "proseMoney": "$2.55M, $998K, ~$54K; '~' or 'roughly/about/approximately' for rounded figures",
+    "periods": "FY2024/FY2025, YTD July'25 / July'26, LTM July'26, PF July'26; months as Jan-25 in tables, Jan'24 in titles",
+    "ranges": "En dash: 8–10 clients, $500K–$700K"
+  },
+  "rowLabelGrammar": {
+    "operators": ["(+) Client Wins", "(-) Regrettable Losses", "(–) Onboarding manager hire", "(x) Valuation Multiple", "(/) Prior Transaction Value", "(-) Asking Price"],
+    "totals": ["Total Run-Rate Revenue", "Total Adj. Revenue", "Total Payroll Expenses", "Net Income", "% Margin", "Near-Term Adj. EBITDA", "Steady-State Adj. EBITDA", "SDE", "Delta"]
+  },
+  "layouts": {
+    "wordPage": "US Letter portrait, 1in margins (Topkey memo) or T1.11/B0.90/L1.0/R1.0in (Opportunity Report)",
+    "exhibitPage": "US Letter landscape 11x8.5in for Keystone packs; portrait for Sunshine packs",
+    "cover": "Two 990033 bars (~11pt) near top and bottom, each paired with a 1.4pt black rule; target logo centred; thin rules above and below the title block; AMB logo bottom-right (or AMB logo centred when no target logo)",
+    "callout": "Paragraph with 3pt 990033 left border, F7EBEF fill, bold 7B0000 lead-in ('Takeaway:', 'Opportunity:', 'Long-term view:') then black text"
+  }
+}

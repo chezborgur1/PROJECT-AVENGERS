@@ -1,0 +1,63 @@
+{
+  "_source": "Extracted from AMB's own workbooks (AMB + Topkey - Diligence Workbook v51.xlsx, AMB + Topkey - Valuation & Offer Structure.xlsx, AMB + Sunshine Commercial - Diligence Workbook v7.xlsx). See docs/research/amb-models.md for context. 'observed' = what AMB does today; 'recommended' = proposed fix for the new templates.",
+  "font": {
+    "observed": { "family": "Arial", "bodySize": 9, "sheetTitleSize": 13, "coverTitleSize": 26, "coverSubtitleSize": 20, "coverDateSize": 18, "chartSize": 8 },
+    "recommended": { "family": "Arial", "bodySize": 9, "sheetTitleSize": 13, "note": "Write the font name as exactly 'Arial'. v51 contains 18,503 cells set to 'arial' (lower case) and 5,590 set to 'Arail' (typo, so it falls back to the default font)." }
+  },
+  "colors": {
+    "headerBandFill": "7B0000",
+    "headerBandText": "FFFFFF",
+    "coverBarFill": "990033",
+    "logoMaroon": "9E0A20",
+    "sectionRowFill": "FFE1E1",
+    "totalRowFill": "FFFFCC",
+    "chartPrimarySeries": "7B0000",
+    "chartSecondarySeries": "70AD47 (Office theme accent 6, used for client wins vs. 7B0000 losses)",
+    "chartLineSeries": "00B0F0 (thin line for '% of recurring revenue' over the bars)",
+    "chartChurnBreakdown": ["7B0000", "FF0000", "FFC1C1"],
+    "heatmapRamp10": ["63BE7B", "72C487", "80CA94", "8FD0A0", "9DD6AC", "ACDCB9", "BAE2C5", "C9E8D1", "D7EEDE", "E6F4EA"],
+    "baseCaseHighlightFill": "FFFF00",
+    "dividerTabColor": "FFE1E1",
+    "rawDataTabColor": "C00000",
+    "offBrandSeenInSourceTabs": { "navyHeader": "1F4E78", "navySubHeader": "D9E1F2", "navyGroupBar": "1F3864", "greyCREBar": "D9D9D9", "goldRowHighlight": "FFF2CC" }
+  },
+  "fontColorCoding": {
+    "hardcodedInput": "0000FF",
+    "linkFromAnotherSheet": "008000",
+    "linkWithinSheetToInput": "800080",
+    "calculation": "000000",
+    "placeholderOrPendingConfirmation": "FF0000",
+    "checkOrTieOut": "FF0000 italic",
+    "helperOrScaffolding": "808080",
+    "printToggle": "Each sheet has a 'Print' label with a 0/1 input cell (blue, boxed) near row 3. A conditional format tied to it turns every coloured font black for client-ready PDFs."
+  },
+  "numberFormats": {
+    "currencyFirstAndTotalRows": "[$$]#,##0;\\([$$]#,##0\\);\"–\";@",
+    "numberBodyRows": "#,##0;\\(#,##0\\);\"–\";@",
+    "numberOneDecimal": "#,##0.0;\\(#,##0.0\\);\"–\";@",
+    "currencyOneDecimal": "[$$]#,##0.0;\\([$$]#,##0.0\\);\"–\";@",
+    "percent": "#,##0%;\\(#,##0%\\);\"–\";@",
+    "percentOneDecimal": "#,##0.0%;\\(#,##0.0%\\);\"–\";@",
+    "multiple": "0.0\\x;\\(0.0\\x\\);\"–\"",
+    "multipleTwoDecimals": "0.00\\x;\\(0.00\\x\\);\"–\"",
+    "monthHeader": "mmm-yy",
+    "periodLabels": ["FY2024", "FY2025", "July'25 YTD", "July'26 YTD", "Jul'25 LTM", "Jul'26 LTM", "Jul'26 PF", "Delta ($)", "Delta (%)"],
+    "units": "$000s everywhere except client/fee-level tabs, which use ($) or (#, $); the unit is stated in the sheet subtitle"
+  },
+  "layout": {
+    "gutterColumnA": 1.7,
+    "labelColumnB": [26.7, 28.7, 33.9, 40.0, 47.6, 51.4],
+    "numberColumn": [6.4, 6.7, 9.1, 11.0, 12.3],
+    "spacerColumn": 0.9,
+    "spacerRowHeight": 3.95,
+    "titleRow": "B2 = company name (formula =Cover!B24), Arial 13 bold",
+    "subtitleRow": "B3 = '<Sheet purpose> ($000s)', Arial 9 italic, thin bottom border across the print width",
+    "headerRows": "rows 5-6: two-tier header. Tier 1 = period group ('Full Year', 'YTD', 'LTM', 'PF', 'PF Delta') centred across the group; tier 2 = the period label. Both 7B0000 fill, white bold 9pt",
+    "sectionRow": "bold label ('Revenue', 'Expenses', 'P&L Adjustments'), FFE1E1 fill across each column group, not across spacer columns",
+    "lineItems": "indent 1, regular weight",
+    "subtotal": "bold, thin top border, no fill",
+    "keyTotal": "bold, FFFFCC fill, thin box border around each column group; '% Margin' row below in bold italic",
+    "gridlines": false,
+    "printSetup": "print area B2:<last col><last row>, fit to page; portrait for statements, landscape for monthly grids and the cover"
+  }
+}
