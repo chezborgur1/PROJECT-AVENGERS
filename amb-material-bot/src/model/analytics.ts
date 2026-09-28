@@ -3,7 +3,7 @@
 // department and tenure buckets. The workbook computes the same figures with
 // COUNTIFS / SUMIFS over helper blocks; the verifier compares the two.
 
-import { monthEndDate, monthRange, type CustomerList, type CustomerRecord, type MonthKey, type PayrollRecord, type PayrollRegister } from "../domain/financials.ts";
+import { fiscalYearOf, monthEndDate, monthRange, type CustomerList, type CustomerRecord, type MonthKey, type PayrollRecord, type PayrollRegister } from "../domain/financials.ts";
 import type { ConcentrationRow, CustomerAnalytics, HeadcountAnalytics, PeriodColumn, RetentionCounts, RetentionDollars } from "./types.ts";
 import { amountInWindow, fiscalYearMonths } from "./periods.ts";
 
@@ -36,11 +36,25 @@ export function tenureBucket(months: number): (typeof TENURE_BUCKETS)[number] {
 
 // --- Customers ------------------------------------------------------------------------
 
-/** Active at `date`: started on or before it and not ended before it (DATA_CONTRACT §5.7). */
-export function customerActiveAt(c: CustomerRecord, date: string): boolean {
-  if (!c.startDate) return true;
+/**
+ * Active at `date`: started on or before it and not ended before it
+ * (DATA_CONTRACT §5.7). A customer the list does not date is active only when
+ * it billed in the fiscal year `date` falls in, so an undated account never
+ * inflates a count by default.
+ */
+export function customerActiveAt(c: CustomerRecord, date: string, fye: number): boolean {
+  if (!c.startDate) {
+    const [y, m] = date.split("-").map(Number) as [number, number];
+    return (c.revenueByFiscalYear[fiscalYearOf(y, m, fye)] ?? 0) > 0;
+  }
   if (!onOrBefore(c.startDate, date)) return false;
   return !c.endDate || c.endDate >= date;
+}
+
+/** Fiscal years among `years` with at least one month inside the column's window, in order. */
+export function touchedYears(years: number[], period: Pick<PeriodColumn, "start" | "end">, fye: number): number[] {
+  const inWindow = new Set(monthRange(period.start, period.end));
+  return [...new Set(years)].sort((a, b) => a - b).filter((y) => fiscalYearMonths(y, fye).some((m) => inWindow.has(m)));
 }
 
 /** A customer's (or the residual bucket's) revenue over a window of months: exact from months, else prorated from fiscal years. */
@@ -48,10 +62,16 @@ export function customerRevenueInWindow(rev: { revenueByMonth?: Record<MonthKey,
   return amountInWindow({ byMonth: rev.revenueByMonth, byFiscalYear: rev.revenueByFiscalYear }, months, fye);
 }
 
+/**
+ * Count roll-forward over [start, end]. The starting count is everyone who
+ * started before the window and had not ended before it, so a customer whose
+ * last day is the day before the window was lost in the prior window and is
+ * not carried in: ending = starting + new − lost holds, and a month's
+ * starting count equals the prior month's ending count.
+ */
 export function countRollForward(customers: CustomerRecord[], start: string, end: string): RetentionCounts {
-  const before = dayBefore(start);
   const dated = customers.filter((c) => c.startDate);
-  const startingCount = dated.filter((c) => customerActiveAt(c, before)).length;
+  const startingCount = dated.filter((c) => c.startDate! < start && (!c.endDate || c.endDate >= start)).length;
   const started = dated.filter((c) => c.startDate! >= start && c.startDate! <= end);
   const lost = dated.filter((c) => c.endDate && c.endDate >= start && c.endDate <= end);
   const lostByReason = { regrettable: 0, nonRegrettable: 0, unclassified: 0 };
@@ -89,9 +109,11 @@ export function dollarRollForward(customers: CustomerRecord[], fy: number, fye: 
   let upsell = 0;
   let newRevenue = 0;
   for (const c of customers) {
-    const activeAtStart = !c.startDate || c.startDate < start ? customerActiveAt(c, start) : false;
-    const startedInYear = !!c.startDate && c.startDate >= start && c.startDate <= end;
-    const lostInYear = !!c.endDate && c.endDate >= start && c.endDate <= end;
+    // A customer without dates is classified from its revenue: new when the prior year is nil, lost when this year is.
+    const dated = !!c.startDate;
+    const activeAtStart = dated ? c.startDate! < start && customerActiveAt(c, start, fye) : prev(c) > 0;
+    const startedInYear = dated ? c.startDate! >= start && c.startDate! <= end : prev(c) <= 0 && cur(c) > 0;
+    const lostInYear = dated ? !!c.endDate && c.endDate >= start && c.endDate <= end : prev(c) > 0 && cur(c) <= 0;
     if (activeAtStart) startingRevenue += prev(c);
     if (activeAtStart && lostInYear) churn += prev(c);
     if (activeAtStart && !lostInYear) {
@@ -158,11 +180,12 @@ export function customerAnalytics(ctx: CustomerContext): CustomerAnalytics {
   const share = (n: number) => (total ? ranked.slice(0, n).reduce((s, c) => s + revenue.get(c.id)!, 0) / total : 0);
   const topSum = top.reduce((s, r) => s + r.revenue, 0);
 
-  // Mix by type over the same window.
+  // Mix by type over the same window: a customer counts when it had revenue in a fiscal year the window touches, or is active at the as-of date.
+  const touched = touchedYears(years.concat(Object.keys(list.totalsByFiscalYear).map(Number)), period, fye);
   const types = new Map<string, { count: number; revenue: number }>();
   for (const c of list.customers) {
     const rev = revenue.get(c.id)!;
-    if (rev === 0 && !customerActiveAt(c, asOfDate)) continue;
+    if (!touched.some((y) => (c.revenueByFiscalYear[y] ?? 0) > 0) && !customerActiveAt(c, asOfDate, fye)) continue;
     const t = c.type ?? "Unclassified";
     const cur = types.get(t) ?? { count: 0, revenue: 0 };
     cur.count++;
@@ -171,7 +194,7 @@ export function customerAnalytics(ctx: CustomerContext): CustomerAnalytics {
   }
   const mixRows = [...types.entries()].sort((a, b) => b[1].revenue - a[1].revenue);
   const codedCount = mixRows.reduce((s, [, v]) => s + v.count, 0);
-  const mixByType = mixRows.map(([type, v]) => ({
+  const mixByType: CustomerAnalytics["mixByType"] = mixRows.map(([type, v]) => ({
     type,
     count: v.count,
     countPct: codedCount ? v.count / codedCount : 0,
@@ -182,10 +205,10 @@ export function customerAnalytics(ctx: CustomerContext): CustomerAnalytics {
   if (list.residual) {
     const latestFy = period.fiscalYear ?? years[years.length - 1]!;
     const count = list.residual.countByFiscalYear?.[latestFy] ?? 0;
-    mixByType.push({ type: list.residual.label, count, countPct: 0, revenue: residualRevenue, revenuePct: total ? residualRevenue / total : 0, avgRevenue: count ? residualRevenue / count : 0 });
+    mixByType.push({ type: list.residual.label, count, countPct: 0, revenue: residualRevenue, revenuePct: total ? residualRevenue / total : 0, avgRevenue: count ? residualRevenue / count : 0, residual: true });
   }
 
-  const latestCount = list.customers.filter((c) => customerActiveAt(c, asOfDate)).length;
+  const latestCount = list.customers.filter((c) => customerActiveAt(c, asOfDate, fye)).length;
   const latestFy = years[years.length - 1]!;
   const customerTotal = list.totalsByFiscalYear[latestFy] ?? 0;
   const pnlRevenue = ctx.pnlRevenueByFy[latestFy] ?? 0;
@@ -220,27 +243,40 @@ export function customerAnalytics(ctx: CustomerContext): CustomerAnalytics {
     const ltmCounts = countRollForward(dated, `${period.start}-01`, monthEndDate(period.end));
     const stripMonths = ctx.gridMonths ?? months;
     const monthly = stripMonths.map((m) => ({ month: m, counts: countRollForward(dated, `${m}-01`, monthEndDate(m)) }));
-    const active = dated.filter((c) => customerActiveAt(c, asOfDate)).map((c) => tenureYears(c.startDate, asOfDate)).sort((a, b) => a - b);
+    const active = dated.filter((c) => customerActiveAt(c, asOfDate, fye)).map((c) => tenureYears(c.startDate, asOfDate)).sort((a, b) => a - b);
     const medianTenureYears = active.length ? (active.length % 2 ? active[(active.length - 1) / 2]! : (active[active.length / 2 - 1]! + active[active.length / 2]!) / 2) : 0;
-    out.retention = { byFiscalYear, ltm: { counts: ltmCounts, dollars: emptyDollars() }, monthly, medianTenureYears };
+    // Customer revenue exists by fiscal year only, so the LTM dollar bridge is the latest fiscal year's when the windows coincide.
+    const latestMonths = fiscalYearMonths(latestFy, fye);
+    const ltmIsLatestFy = period.start === latestMonths[0] && period.end === latestMonths[11];
+    out.retention = { byFiscalYear, ltm: { counts: ltmCounts, dollars: ltmIsLatestFy ? byFiscalYear[latestFy]!.dollars : emptyDollars() }, monthly, medianTenureYears, ...(list.customers.some((c) => !c.startDate) ? { revenueInferred: true } : {}) };
 
-    // Cohorts by start year, when three or more exist inside the history.
-    const cohortYears = [...new Set(dated.map((c) => Number(c.startDate!.slice(0, 4))))].sort((a, b) => a - b);
-    const inWindow = cohortYears.filter((y) => y >= years[0]! - 2 && y <= latestFy);
+    // Cohorts by the fiscal year of the start date, when three or more fall inside the window (FY-4 onward);
+    // earlier starts share one "Pre-" row so the triangle still accounts for every dated customer.
+    const cohortOf = (c: CustomerRecord) => {
+      const [y, m] = c.startDate!.split("-").map(Number) as [number, number];
+      return fiscalYearOf(y, m, fye);
+    };
+    const firstCohort = years[0]! - 2;
+    const inWindow = [...new Set(dated.map(cohortOf))].filter((y) => y >= firstCohort && y <= latestFy).sort((a, b) => a - b);
     if (inWindow.length >= 3) {
       const yearEnd = (fy: number) => monthEndDate(fiscalYearMonths(fy, fye)[11]!);
+      const pre = dated.filter((c) => cohortOf(c) < firstCohort);
+      const groups = [
+        ...(pre.length ? [{ cohort: firstCohort - 1, label: `Pre-FY${firstCohort}`, pre: true as const, members: pre }] : []),
+        ...inWindow.map((cohort) => ({ cohort, label: `FY${cohort}`, pre: undefined, members: dated.filter((c) => cohortOf(c) === cohort) })),
+      ];
+      const tagged = <T extends object>(g: (typeof groups)[number], rest: T) => ({ cohort: g.cohort, label: g.label, ...(g.pre ? { pre: g.pre } : {}), ...rest });
       out.cohorts = {
-        countTriangle: inWindow.map((cohort) => {
-          const members = dated.filter((c) => Number(c.startDate!.slice(0, 4)) === cohort);
-          const retainedByYear = years.filter((y) => y >= cohort).map((y) => members.filter((c) => customerActiveAt(c, yearEnd(y))).length);
-          return { cohort, size: members.length, retainedByYear };
+        countTriangle: groups.map((g) => tagged(g, { size: g.members.length, retainedByYear: years.filter((y) => y >= g.cohort).map((y) => g.members.filter((c) => customerActiveAt(c, yearEnd(y), fye)).length) })),
+        revenueTriangle: groups.map((g) => {
+          const first = years.find((y) => y >= g.cohort) ?? g.cohort;
+          return tagged(g, { revenue: g.members.reduce((s, c) => s + (c.revenueByFiscalYear[first] ?? 0), 0), retainedByYear: years.filter((y) => y >= g.cohort).map((y) => g.members.reduce((s, c) => s + (c.revenueByFiscalYear[y] ?? 0), 0)) });
         }),
-        revenueTriangle: inWindow.map((cohort) => {
-          const members = dated.filter((c) => Number(c.startDate!.slice(0, 4)) === cohort);
-          const first = years.find((y) => y >= cohort) ?? cohort;
-          const revenueByYear = years.filter((y) => y >= cohort).map((y) => members.reduce((s, c) => s + (c.revenueByFiscalYear[y] ?? 0), 0));
-          return { cohort, revenue: members.reduce((s, c) => s + (c.revenueByFiscalYear[first] ?? 0), 0), retainedByYear: revenueByYear };
-        }),
+        tie: {
+          activeByYear: years.map((y) => dated.filter((c) => customerActiveAt(c, yearEnd(y), fye)).length),
+          // Revenue of customers started by that year-end: the rows cover exactly them.
+          revenueByYear: years.map((y) => dated.filter((c) => c.startDate! <= yearEnd(y)).reduce((s, c) => s + (c.revenueByFiscalYear[y] ?? 0), 0)),
+        },
       };
     }
   }
@@ -269,8 +305,13 @@ export interface HeadcountContext {
   asOfDate: string;
   years: number[];
   fye: number;
-  /** Revenue and payroll of the window the load ratios and department % of revenue use (the latest full window). */
-  window: { revenue: number; payroll: number; fiscalYear: number };
+  /** Revenue and payroll of the latest full window (LTM, or the latest FY in annual mode), for the load ratios. */
+  window: { revenue: number; payroll: number };
+  /**
+   * The register's grain is the fiscal year, so department compensation, its
+   * % of revenue and the C13 tie use the latest full fiscal year's figures.
+   */
+  fiscalYear: { year: number; revenue: number; payroll: number };
   customersLatest?: number;
   gridMonths?: MonthKey[];
 }
@@ -281,7 +322,7 @@ export function headcountAnalytics(ctx: HeadcountContext): HeadcountAnalytics {
   const current = staff.filter((e) => onPayrollAt(e, asOfDate));
   const latestHeadcount = current.reduce((s, e) => s + e.fte, 0);
   const latestFieldHeadcount = current.filter((e) => isFieldDepartment(e.department)).reduce((s, e) => s + e.fte, 0);
-  const fy = ctx.window.fiscalYear;
+  const fy = ctx.fiscalYear.year;
   const comp = (e: PayrollRecord) => (e.wagesByFiscalYear[fy] ?? 0) + (e.employerCostsByFiscalYear[fy] ?? 0);
 
   const departments = [...new Set(staff.map((e) => e.department))];
@@ -292,7 +333,7 @@ export function headcountAnalytics(ctx: HeadcountContext): HeadcountAnalytics {
       const count = onboard.reduce((s, e) => s + e.fte, 0);
       const totalComp = members.reduce((s, e) => s + comp(e), 0);
       const avgTenureYears = onboard.length ? onboard.reduce((s, e) => s + tenureYears(e.hireDate, asOfDate), 0) / onboard.length : 0;
-      return { department, count, totalComp, avgComp: count ? totalComp / count : 0, pctRevenue: ctx.window.revenue ? totalComp / ctx.window.revenue : 0, avgTenureYears };
+      return { department, count, totalComp, avgComp: count ? totalComp / count : 0, pctRevenue: ctx.fiscalYear.revenue ? totalComp / ctx.fiscalYear.revenue : 0, avgTenureYears };
     })
     .sort((a, b) => b.totalComp - a.totalComp);
 
@@ -342,7 +383,7 @@ export function headcountAnalytics(ctx: HeadcountContext): HeadcountAnalytics {
       customersPerEmployee: ctx.customersLatest !== undefined && latestHeadcount ? ctx.customersLatest / latestHeadcount : undefined,
       laborCostPctRevenue: ctx.window.revenue ? ctx.window.payroll / ctx.window.revenue : 0,
     },
-    tieToPnl: { registerTotal, pnlPayroll: ctx.window.payroll, variancePct: ctx.window.payroll ? (registerTotal - ctx.window.payroll) / ctx.window.payroll : 0 },
+    tieToPnl: { registerTotal, pnlPayroll: ctx.fiscalYear.payroll, variancePct: ctx.fiscalYear.payroll ? (registerTotal - ctx.fiscalYear.payroll) / ctx.fiscalYear.payroll : 0 },
   };
 }
 

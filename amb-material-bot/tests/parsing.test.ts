@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseAmount, parsePeriodLabel } from "../src/util/tables.ts";
+import { clientLabel, parseAmount, parsePeriodLabel } from "../src/util/tables.ts";
 
 describe("parseAmount", () => {
   it.each([
@@ -12,6 +12,17 @@ describe("parseAmount", () => {
     ["-", undefined],
     ["n/a", undefined],
   ])("%s -> %s", (raw, expected) => expect(parseAmount(raw)).toBe(expected));
+});
+
+describe("clientLabel", () => {
+  it.each([
+    ["Vehicle Loans", "Vehicle loans"],
+    ["Service Revenue - Residential", "Service revenue (residential)"],
+    ["Notes Payable – Vehicles", "Notes payable (vehicles)"],
+    ["Revenue - Service - Commercial", "Revenue (service, commercial)"],
+    ["PPP Loan Forgiveness", "PPP loan forgiveness"],
+    ["Owner's Draw (HVAC)", "Owner's draw (HVAC)"],
+  ])("%s -> %s", (raw, expected) => expect(clientLabel(raw)).toBe(expected));
 });
 
 describe("parsePeriodLabel", () => {

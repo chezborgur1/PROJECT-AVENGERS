@@ -6,8 +6,10 @@
 import type { FinancialDataset } from "../../domain/financials.ts";
 import { addr, colLetter, rowOf, SheetBuilder } from "../sheet.ts";
 import { COLOR, FMT, ROW_HEIGHT, WIDTH } from "../styles.ts";
-import type { ModelOutput, SensitivityGrid } from "../types.ts";
+import type { SensitivityGrid } from "../types.ts";
+import { roundTo } from "../deal.ts";
 import { A, A_AT, type TabContext } from "./assumptionsTab.ts";
+import { bsDates, nwcLayout } from "./balance.ts";
 import { periodLayout, S, SHEET } from "./layout.ts";
 
 const K = 1000;
@@ -19,15 +21,23 @@ export function planOpportunities(ctx: TabContext, ds: FinancialDataset | undefi
   const levers = ds?.intake?.growthLevers ?? [];
   if (!levers.length && !model.modules.built.includes("S9.1 Opportunity sizing")) return undefined;
   const b = new SheetBuilder("opportunities", SHEET.opportunities);
-  const headers = ["Lever", "Baseline (per notes)", "Target or benchmark", "Mechanism", "Proof point", "Revenue uplift ($000s)", "Contribution margin", "EBITDA effect ($000s)", "Source"];
-  const widths = [30, 34, 24, 40, 30, 12, 11, 12, 30];
+  const headers = ["Lever", "Baseline (per notes)", "Target or benchmark", "Mechanism", "Proof point", "Revenue uplift", "Margin (%)", "EBITDA effect"];
+  const widths = [24, 26, 18, 30, 24, 11, 10, 11];
   b.width(1, WIDTH.gutter);
   widths.forEach((w, i) => b.width(2 + i, w));
-  const lastCol = 10;
+  b.spacerCol(10);
+  const sourceCol = 11;
+  b.width(sourceCol, 24);
+  const lastCol = sourceCol;
   b.anatomy({ subtitle: "Growth opportunities: one sizing grid per lever ($000s)", lastCol, toggleCol: 9, masterToggle: ctx.masterToggle });
   b.text(3, 8, "Print", { align: { horizontal: "right" } });
-  b.tier1(5, [{ from: 2, to: lastCol, label: "Opportunity sizing (seller-achievable levers only)" }]);
-  headers.forEach((h, i) => b.cell(6, 2 + i, { style: "header", v: h, role: "text", align: { horizontal: i <= 5 || i === 9 ? "left" : "center" } }));
+  b.tier1(5, [
+    { from: 2, to: 6, label: "Opportunity (seller-achievable levers only)" },
+    { from: 7, to: 9, label: "Sizing ($000s)" },
+    { from: sourceCol, to: sourceCol, label: "Source" },
+  ]);
+  headers.forEach((h, i) => b.cell(6, 2 + i, { style: "header", v: h, role: "text", align: { horizontal: i <= 4 ? "left" : "center" } }));
+  b.cell(6, sourceCol, { style: "header", v: null, role: "text" });
   const latest = model.columns.filter((c) => !c.projected && c.ref.kind !== "pf").at(-1)!;
   const gm = model.periods[latest.key]!.pnl.revenue ? model.periods[latest.key]!.pnl.grossProfit / model.periods[latest.key]!.pnl.revenue : 0;
   const pnlL = periodLayout(model, 3);
@@ -43,7 +53,7 @@ export function planOpportunities(ctx: TabContext, ds: FinancialDataset | undefi
     b.num(r, 7, 0, { fmt: FMT.body });
     b.formula(r, 8, gmRef, { fmt: FMT.pct1, expect: gm, label: `cm ${lever.lever}` });
     b.formula(r, 9, `${addr(r, 7)}*${addr(r, 8)}`, { fmt: FMT.body, expect: 0, label: `ebitda ${lever.lever}` });
-    b.text(r, 10, lever.source.source, { align: { wrap: true, vertical: "top" } });
+    b.text(r, sourceCol, lever.source.source, { align: { wrap: true, vertical: "top" } });
     r++;
   }
   const last = r - 1;
@@ -73,7 +83,7 @@ export function planValuation(ctx: TabContext): SheetBuilder | undefined {
   b.spacerCol(6);
   b.width(7, WIDTH.notes);
   const notesCol = 7;
-  b.anatomy({ subtitle: `Valuation: ${basisLabel} × multiple, financing and DSCR ($000s; internal, never in the CIM)`, lastCol: notesCol, toggleCol: 5, masterToggle: ctx.masterToggle });
+  b.anatomy({ subtitle: `Valuation and Financing ($000s; internal)`, lastCol: notesCol, toggleCol: 5, masterToggle: ctx.masterToggle });
   b.text(3, 4, "Print", { align: { horizontal: "right" } });
   b.tier1(5, [{ from: 3, to: 5, label: "Case" }, { from: notesCol, to: notesCol, label: "Basis / source" }]);
   b.tier2(6, { from: 3, to: 5 }, [{ col: 3, v: "Low" }, { col: 4, v: "Mid" }, { col: 5, v: "High" }], "Valuation");
@@ -100,7 +110,7 @@ export function planValuation(ctx: TabContext): SheetBuilder | undefined {
         else if (c.v !== undefined) b.num(r, 3 + i, c.v, { fmt });
       });
     }
-    if (note) b.note(r, notesCol, note, { align: { wrap: false } });
+    if (note) b.note(r, notesCol, note);
     r++;
   };
   const basis = vd.basis;
@@ -113,7 +123,7 @@ export function planValuation(ctx: TabContext): SheetBuilder | undefined {
   b.spacerRow(r++);
   b.section(r++, "Business valuation", spans);
   const earningsKey = mainStreet ? "basisSde" : "basisAdj";
-  row("earnings", basisLabel, "lineFirst", () => ({ f: addr(rowOf("valuation", earningsKey) as unknown as number, 3, { col: true, row: true }).replace(/^\$C\$/, "$C$"), expect: vd.cases.low.sde / K }), FMT.currency, `${basisLabel} from the ladder`);
+  row("earnings", basisLabel, "lineFirst", () => ({ f: `$C$${b.r(earningsKey)}`, expect: vd.cases.low.sde / K }), FMT.currency, `${basisLabel} from the ladder`);
   row("multiple", "(x) Valuation Multiple", "line", (i) => ({ f: A_AT(mainStreet ? "sdeMultiples" : "ebitdaMultiples", i), expect: vd.cases[cases[i]!].multiple }), FMT.multiple, model.assumptions!.multiplesSource);
   row("businessValuation", "Business Valuation", "subtotal", (i) => ({ f: `${addr(b.r("earnings"), 3 + i)}*${addr(b.r("multiple"), 3 + i)}`, expect: vd.cases[cases[i]!].businessValuation / K }), FMT.currency);
   row("deferredCapex", "(+) Deferred Capex / Renovation", "line", () => ({ f: `${A("deferredCapex")}/${K}`, expect: vd.cases.low.deferredCapex / K }), FMT.body, "Assumptions");
@@ -145,10 +155,13 @@ export function planValuation(ctx: TabContext): SheetBuilder | undefined {
   const v = model.valuation;
   const bridge = v.bridge;
   row("ev", "Enterprise Value", "lineFirst", (i) => ({ f: addr(b.r("totalInvestment"), 3 + i), expect: v.enterpriseValue[cases[i]!] / K }), FMT.currency);
-  row("fundedDebt", "(-) Funded Debt", "line", () => ({ f: model.debtLike ? `-${S("debtLike")}$C$${rowOf("debtLike", "fundedDebt")}` : "0", expect: -bridge.fundedDebt / K }), FMT.body, "Debt-Like Items");
-  row("debtLikeItems", "(-) Debt-Like Items", "line", () => ({ f: model.debtLike && model.dealForm !== "asset_purchase" ? `-${S("debtLike")}$C$${rowOf("debtLike", "debtLike")}` : "0", expect: -bridge.debtLike / K }), FMT.body, model.dealForm === "asset_purchase" ? "Asset purchase: retained by the Seller" : "Debt-Like Items");
-  row("cashDelivered", "(+) Cash (if delivered)", "line", () => ({ f: "0", expect: bridge.cash / K }), FMT.body, model.dealForm === "asset_purchase" ? "Asset purchase: the Seller keeps cash" : "Cash-free, debt-free: swept before close");
-  row("nwcVsPeg", "(+) / (-) NWC Delivered vs. Peg", "line", () => ({ f: model.nwc && model.nwc.peg !== null ? `${S("nwc")}$${colLetter(3 + model.nwc.periods.length + 3)}$${rowOf("nwc", "adjustedNwc")}` : "0", expect: bridge.nwcVsPeg / K }), FMT.body, model.nwc?.peg === null ? "No peg (year-end balance sheets only)" : "NWC tab");
+  const asset = model.dealForm === "asset_purchase";
+  const latestCash = model.periods[period.key]!.bs ? `${S("bs")}${colLetter(3 + bsDates(model).indexOf(period.end))}${rowOf("bs", "cash")}` : undefined;
+  row("fundedDebt", "(-) Funded Debt", "line", () => (model.debtLike ? { f: `-${S("debtLike")}$C$${rowOf("debtLike", "fundedDebt")}`, expect: -bridge.fundedDebt / K } : { v: -bridge.fundedDebt / K }), FMT.body, "Debt-Like Items");
+  row("debtLikeItems", "(-) Debt-Like Items", "line", () => (asset ? undefined : model.debtLike ? { f: `-${S("debtLike")}$C$${rowOf("debtLike", "debtLike")}`, expect: -bridge.debtLike / K } : { v: -bridge.debtLike / K }), FMT.body, asset ? "Asset purchase: retained by the Seller" : "Debt-Like Items");
+  row("cashDelivered", "(+) Cash (if delivered)", "line", () => (asset || !latestCash ? undefined : { f: latestCash, expect: bridge.cash / K }), FMT.body, asset ? "Asset purchase: the Seller keeps its cash outside the price" : "Balance-sheet cash, swept to the Seller before close");
+  row("nwcVsPeg", "(+) / (-) NWC Delivered vs. Peg", "line", () => (asset || !model.nwc || model.nwc.peg === null ? undefined : { f: `${S("nwc")}$${colLetter(nwcLayout(model).vsCol)}$${rowOf("nwc", "adjustedNwc")}`, expect: bridge.nwcVsPeg / K }), FMT.body, asset ? "Asset purchase: no peg; the Seller keeps receivables and payables" : model.nwc?.peg === null ? "No peg (year-end balance sheets only)" : "NWC tab");
+  for (const key of ["debtLikeItems", "cashDelivered", "nwcVsPeg"]) cases.forEach((_, i) => b.get(b.r(key), 3 + i) ?? b.na(b.r(key), 3 + i, "n.a.", { style: "line" }));
   row("equityValue", "Equity Value to Seller", "keyTotal", (i) => ({ f: `SUM(${addr(b.r("ev"), 3 + i)}:${addr(b.r("nwcVsPeg"), 3 + i)})`, expect: v.equityValue[cases[i]!] / K }), FMT.currency);
   r++;
   b.note(r, 2, `Note: ${mainStreet ? "Main Street mode: SDE × multiple (IBBA basis SBA lenders underwrite)." : "Lower-middle-market mode: Adj. EBITDA × multiple."} Multiples are placeholders until the licensed comps source is applied (Assumptions). DSCR below 1.25x is flagged in the basis column, never coloured. Nothing on this tab enters the CIM.`);
@@ -167,7 +180,9 @@ export function planDealStructure(ctx: TabContext): SheetBuilder | undefined {
   const asset = model.dealForm === "asset_purchase";
   b.width(1, WIDTH.gutter);
   b.width(2, WIDTH.labelWide);
-  b.widths(3, 7, 12.3);
+  // S&U multiples need room for "x PF Adj. EBITDA" in bold.
+  b.widths(3, 4, 12.3);
+  b.widths(5, 7, 15);
   b.spacerCol(8);
   b.width(9, WIDTH.notes);
   const notesCol = 9;
@@ -182,20 +197,20 @@ export function planDealStructure(ctx: TabContext): SheetBuilder | undefined {
 
   // Structure summary block (OFF14 term table), every value a formula-built string.
   b.section(r++, "Structure summary", [[3, 7]]);
+  const inputRow = (key: string) => `C${rowOf("deal", key)}`;
   const terms: [string, string | undefined][] = [
-    ["Total Valuation", `${usd(addr(r + 12, 3))}&" ("&TEXT(${A_AT(model.mode.mode === "mainStreet" ? "sdeMultiples" : "ebitdaMultiples", 1)},"0.0")&"x ${model.mode.mode === "mainStreet" ? "SDE" : "Adj. EBITDA"})"`],
-    ["Cash at Close", `${usd(addr(r + 13, 3))}&" ("&TEXT(${A("cashAtClosePct")},"0%")&" of valuation)"`],
-    ["Seller Note", `${usd(addr(r + 14, 3))}&", "&${A("sellerNoteTermMonths")}&"-month term, quarterly payments, "&TEXT(${A("sellerNoteRate")},"0.0%")&" interest ("&TEXT(${A("sellerNotePct")},"0%")&" of valuation)"`],
+    ["Total Valuation", `${usd(inputRow("price"))}&" ("&TEXT(${A_AT(model.mode.mode === "mainStreet" ? "sdeMultiples" : "ebitdaMultiples", 1)},"0.0")&"x ${model.mode.mode === "mainStreet" ? "SDE" : "Adj. EBITDA"})"`],
+    ["Cash at Close", `${usd(inputRow("cashAtClose"))}&" ("&TEXT(${A("cashAtClosePct")},"0%")&" of valuation)"`],
+    ["Seller Note", `${usd(inputRow("sellerNote"))}&", "&${A("sellerNoteTermMonths")}&"-month term, quarterly payments, "&TEXT(${A("sellerNoteRate")},"0.0%")&" interest ("&TEXT(${A("sellerNotePct")},"0%")&" of valuation)"`],
     ["Seller Note Contingencies", undefined],
     ["Earnout (if applicable)", undefined],
-    ["Escrow", `"An escrow of "&TEXT(${A("escrowPct")},"0%")&" of the cash consideration ("&${usd(addr(r + 15, 3))}&") will be funded at closing and held for "&${A("escrowMonths")}&" months."`],
+    ["Escrow", `"An escrow of "&TEXT(${A("escrowPct")},"0%")&" of the cash consideration ("&${usd(inputRow("escrow"))}&") will be funded at closing and held for "&${A("escrowMonths")}&" months."`],
     ["Retention Holdback", undefined],
     ["Balance Sheet", undefined],
     ["Working Capital", asset ? `IF(${A("reconciliationHoldbackMonths")}=1,"One month of payroll as reconciliation holdback",TEXT(${A("reconciliationHoldbackMonths")},"0.0")&" months of payroll as reconciliation holdback")` : undefined],
     ["Asset vs. Stock Sale", `IF(${A("dealForm")}="Asset purchase","Asset sale","Stock sale")`],
     ["Target Timing", `IF(${A("loiDate")}="","[Confirm: LOI date, signing and effective closing date]","Sign closing documents "&TEXT(${A("signingDate")},"mm/dd/yy")&"; effective closing date "&TEXT(${A("effectiveDate")},"mm/dd/yy"))`],
   ];
-  const summaryFirst = r;
   for (const [label, f] of terms) {
     tint(r);
     b.text(r, 2, label, { font: { bold: true } });
@@ -203,7 +218,6 @@ export function planDealStructure(ctx: TabContext): SheetBuilder | undefined {
     else b.text(r, 3, d.terms[label] ?? "");
     r++;
   }
-  void summaryFirst;
   b.spacerRow(r++);
   // Inputs, linked to Assumptions.
   b.section(r++, "Inputs (from Assumptions)", [[3, 7]]);
@@ -211,14 +225,14 @@ export function planDealStructure(ctx: TabContext): SheetBuilder | undefined {
     b.row(key, r);
     b.text(r, 2, label, { style: "line" });
     b.formula(r, 3, f, { fmt, expect, label });
-    if (note) b.note(r, notesCol, note, { align: { wrap: false } });
+    if (note) b.note(r, notesCol, note);
     r++;
   };
   input("price", "Purchase Price (Valuation Mid)", `${S("valuation")}$D$${rowOf("valuation", "totalInvestment")}`, d.purchasePrice / K, FMT.currency, "Valuation tab, Mid case");
   input("cashAtClose", "Cash at Close", `${addr(b.r("price"), 3)}*${A("cashAtClosePct")}`, d.cashAtClose / K, FMT.currency);
   input("sellerNote", "Seller Note", `${addr(b.r("price"), 3)}*${A("sellerNotePct")}`, d.sellerNote / K, FMT.currency);
   input("escrow", "Indemnity Escrow", `${addr(b.r("cashAtClose"), 3)}*${A("escrowPct")}`, d.escrow / K, FMT.currency, "10% of cash at close, held 15 months (LOI12 §7(h))");
-  input("holdback", "Reconciliation Holdback", asset ? `${S("pnl")}${colLetter(periodLayout(model, 3).byKey[model.valuationDetail!.period.key]!)}${rowOf("pnl", "payroll")}/12*${A("reconciliationHoldbackMonths")}` : "0", d.reconciliationHoldback / K, FMT.currency, asset ? "One month of LTM payroll (ICP5)" : "Equity purchase: none");
+  input("holdback", "Reconciliation Holdback", `${S("pnl")}${colLetter(periodLayout(model, 3).byKey[model.valuationDetail!.period.key]!)}${rowOf("pnl", "payroll")}/12*${A("reconciliationHoldbackMonths")}`, d.reconciliationHoldback / K, FMT.currency, asset ? "One month of LTM payroll (ICP5)" : "Equity purchase: months set to zero on Assumptions");
   input("fees", "Buyer Transaction Fees", `${A("transactionFees")}/${K}`, model.assumptions!.deal.transactionFees / K, FMT.currency);
   input("equityPct", "Buyer Equity Injection (% of uses)", A("equityInjectionPct"), model.assumptions!.deal.equityInjectionPct, FMT.pct);
   b.spacerRow(r++);
@@ -230,10 +244,11 @@ export function planDealStructure(ctx: TabContext): SheetBuilder | undefined {
   b.cell(r, 2, { style: "header", v: "Uses", role: "text", align: { horizontal: "left" } });
   r++;
   const totalsRowRefs: Record<string, number> = {};
-  const line = (key: string, label: string, f: string, expect: number, kind: "lineFirst" | "line" | "keyTotal", totalKey?: string) => {
+  const line = (key: string, label: string, f: string | number, expect: number, kind: "lineFirst" | "line" | "keyTotal", totalKey?: string) => {
     b.row(key, r);
     b.text(r, 2, label, { style: kind });
-    b.formula(r, 3, f, { style: kind, fmt: kind === "line" ? FMT.body : FMT.currency, expect: expect / K, label: key });
+    if (typeof f === "number") b.num(r, 3, f, { style: kind, fmt: kind === "line" ? FMT.body : FMT.currency });
+    else b.formula(r, 3, f, { style: kind, fmt: kind === "line" ? FMT.body : FMT.currency, expect: expect / K, label: key });
     const tot = totalKey ? addr(totalsRowRefs[totalKey]!, 3, { row: true }) : addr(r, 3);
     b.formula(r, 4, `IFERROR(${addr(r, 3)}/${tot},"n.a.")`, { style: "ratio", fmt: FMT.pct, label: `${key} pct` });
     const ladderCol = colLetter(periodLayout(model, 3).byKey[model.columns.find((c) => c.ref.kind === "pf")?.key ?? model.valuationDetail!.period.key]!);
@@ -249,8 +264,8 @@ export function planDealStructure(ctx: TabContext): SheetBuilder | undefined {
   totalsRowRefs.uses = r + 4;
   line("usePrice", "Purchase Price (EV)", addr(b.r("price"), 3), su.uses.purchasePrice, "lineFirst", "uses");
   line("useFees", "Transaction Fees", addr(b.r("fees"), 3), su.uses.transactionFees, "line", "uses");
-  line("useWc", "Working Capital Funding", "0", su.uses.workingCapitalFunding, "line", "uses");
-  line("useHoldback", "Reconciliation Holdback (funded to escrow)", asset ? addr(b.r("holdback"), 3) : "0", su.uses.reconciliationHoldback, "line", "uses");
+  line("useWc", "Working Capital Funding", su.uses.workingCapitalFunding / K, su.uses.workingCapitalFunding, "line", "uses");
+  line("useHoldback", "Reconciliation Holdback (funded to escrow)", addr(b.r("holdback"), 3), su.uses.reconciliationHoldback, "line", "uses");
   line("totalUses", "Total Uses", `SUM(${addr(b.r("usePrice"), 3)}:${addr(b.r("useHoldback"), 3)})`, su.uses.total, "keyTotal");
   r++;
   b.cell(r, 2, { style: "header", v: "Sources", role: "text", align: { horizontal: "left" } });
@@ -259,7 +274,7 @@ export function planDealStructure(ctx: TabContext): SheetBuilder | undefined {
   totalsRowRefs.sources = r + 4;
   line("seniorLoan", "Senior / SBA Loan", `${addr(b.r("totalUses"), 3)}-${addr(r + 1, 3)}-${addr(r + 2, 3)}-${addr(r + 3, 3)}`, su.sources.seniorLoan, "lineFirst", "sources");
   line("srcNote", "Seller Note", addr(b.r("sellerNote"), 3), su.sources.sellerNote, "line", "sources");
-  line("srcRollover", "Rollover Equity", "0", su.sources.rolloverEquity, "line", "sources");
+  line("srcRollover", "Rollover Equity", su.sources.rolloverEquity / K, su.sources.rolloverEquity, "line", "sources");
   line("srcEquity", "Buyer Equity", `${addr(b.r("totalUses"), 3)}*${addr(b.r("equityPct"), 3)}`, su.sources.buyerEquity, "line", "sources");
   line("totalSources", "Total Sources", `SUM(${addr(b.r("seniorLoan"), 3)}:${addr(b.r("srcEquity"), 3)})`, su.sources.total, "keyTotal");
   b.row("su_check", r);
@@ -270,12 +285,13 @@ export function planDealStructure(ctx: TabContext): SheetBuilder | undefined {
   // Seller proceeds.
   const p = d.proceeds;
   b.section(r++, asset ? "Seller proceeds (asset purchase)" : "Seller proceeds (equity purchase)", [[3, 7]]);
-  const proceeds: [string, string, string, number, "lineFirst" | "line" | "keyTotal", string?][] = asset
+  const debtLink = (key: "fundedDebt" | "debtLike") => `-${S("debtLike")}$C$${rowOf("debtLike", key)}`;
+  const proceeds: [string, string, string | number, number, "lineFirst" | "line" | "keyTotal", string?][] = asset
     ? [
         ["pPrice", "Purchase Price", addr(b.r("price"), 3), p.purchasePrice, "lineFirst"],
-        ["pDebt", "(-) Liens and Secured Debt Paid at Close", model.debtLike ? `-${S("debtLike")}$C$${rowOf("debtLike", "fundedDebt")}` : "0", -p.debtPaidAtClose, "line", "Written payoff letters at close (SUNPA)"],
+        ["pDebt", "(-) Liens and Secured Debt Paid at Close", model.debtLike ? debtLink("fundedDebt") : -p.debtPaidAtClose / K, -p.debtPaidAtClose, "line", "Written payoff letters at close (SUNPA)"],
         ["pHoldback", "(-) Reconciliation Holdback", `-${addr(b.r("holdback"), 3)}`, -p.reconciliationHoldback, "line", "One month of payroll"],
-        ["pFees", "(-) Transaction Expenses", "0", -p.transactionExpenses, "line", "Seller's advisors; enter when known"],
+        ["pFees", "(-) Transaction Expenses", -p.transactionExpenses / K, -p.transactionExpenses, "line", "Seller's advisors; enter when known"],
         ["pEscrow", "(-) Indemnity Escrow (funded at close)", `-${addr(b.r("escrow"), 3)}`, -p.indemnityEscrow, "line"],
         ["pNote", "(-) Seller Note (deferred)", `-${addr(b.r("sellerNote"), 3)}`, -p.sellerNoteDeferred, "line"],
         ["closingCash", "Closing Cash to Seller", "SUMRANGE", p.closingCash, "keyTotal"],
@@ -286,10 +302,10 @@ export function planDealStructure(ctx: TabContext): SheetBuilder | undefined {
       ]
     : [
         ["pPrice", "Purchase Price (EV)", addr(b.r("price"), 3), p.purchasePrice, "lineFirst"],
-        ["pDebt", "(-) Funded Debt Repaid at Close", model.debtLike ? `-${S("debtLike")}$C$${rowOf("debtLike", "fundedDebt")}` : "0", -p.debtPaidAtClose, "line"],
-        ["pDebtLike", "(-) Debt-Like Items", model.debtLike ? `-${S("debtLike")}$C$${rowOf("debtLike", "debtLike")}` : "0", -p.debtLikeItems, "line"],
-        ["pNwc", "(+) / (-) NWC Delivered vs. Peg", model.nwc && model.nwc.peg !== null ? `${S("nwc")}$${colLetter(3 + model.nwc.periods.length + 3)}$${rowOf("nwc", "adjustedNwc")}` : "0", p.nwcVsPeg, "line"],
-        ["pFees", "(-) Transaction Expenses", "0", -p.transactionExpenses, "line"],
+        ["pDebt", "(-) Funded Debt Repaid at Close", model.debtLike ? debtLink("fundedDebt") : -p.debtPaidAtClose / K, -p.debtPaidAtClose, "line"],
+        ["pDebtLike", "(-) Debt-Like Items", model.debtLike ? debtLink("debtLike") : -p.debtLikeItems / K, -p.debtLikeItems, "line"],
+        ["pNwc", "(+) / (-) NWC Delivered vs. Peg", model.nwc && model.nwc.peg !== null ? `${S("nwc")}$${colLetter(nwcLayout(model).vsCol)}$${rowOf("nwc", "adjustedNwc")}` : p.nwcVsPeg / K, p.nwcVsPeg, "line", model.nwc?.peg === null ? "No peg (year-end balance sheets only)" : undefined],
+        ["pFees", "(-) Transaction Expenses", -p.transactionExpenses / K, -p.transactionExpenses, "line", "Seller's advisors; enter when known"],
         ["pEscrow", "(-) Indemnity Escrow", `-${addr(b.r("escrow"), 3)}`, -p.indemnityEscrow, "line"],
         ["pNote", "(-) Seller Note (deferred)", `-${addr(b.r("sellerNote"), 3)}`, -p.sellerNoteDeferred, "line"],
         ["closingCash", "Closing Cash to Seller", "SUMRANGE", p.closingCash, "keyTotal"],
@@ -301,21 +317,24 @@ export function planDealStructure(ctx: TabContext): SheetBuilder | undefined {
   for (const [key, label, f, expect, kind, note] of proceeds) {
     b.row(key, r);
     b.text(r, 2, label, { style: kind });
-    let formula = f;
-    if (f === "SUMRANGE") formula = `SUM(${addr(blockStart, 3)}:${addr(r - 1, 3)})`;
-    if (f === "SUMRANGE2") formula = `SUM(${addr(b.r("closingCash"), 3)}:${addr(r - 1, 3)})`;
     if (kind === "keyTotal") {
       b.keyTotalBox([r, r], [[3, 3]]);
       b.cell(r, 3, { border: { top: "thin", bottom: "double" } });
       b.cell(r, 2, { border: { top: "thin", bottom: "double" } });
     }
-    b.formula(r, 3, formula, { style: kind, fmt: kind === "line" ? FMT.body : FMT.currency, expect: expect / K, label: key });
-    if (note) b.note(r, notesCol, note, { align: { wrap: false } });
+    const fmt = kind === "line" ? FMT.body : FMT.currency;
+    if (typeof f === "number") b.num(r, 3, f, { style: kind, fmt });
+    else {
+      const formula = f === "SUMRANGE" ? `SUM(${addr(blockStart, 3)}:${addr(r - 1, 3)})` : f === "SUMRANGE2" ? `SUM(${addr(b.r("closingCash"), 3)}:${addr(r - 1, 3)})` : f;
+      b.formula(r, 3, formula, { style: kind, fmt, expect: expect / K, label: key });
+    }
+    if (note) b.note(r, notesCol, note);
     r++;
   }
   if (asset) {
     b.text(r, 2, "Memo: seller-retained cash and NWC (AR + unbilled - AP - accrued)", { style: "line" });
-    b.formula(r, 3, model.nwc ? `${S("nwc")}$${colLetter(3 + model.nwc.periods.length + 2)}$${rowOf("nwc", "sellerRetained")}` : "0", { style: "line", fmt: FMT.body, expect: p.sellerRetainedNwc / K, label: "seller retained memo" });
+    if (model.nwc) b.formula(r, 3, `${S("nwc")}$${colLetter(nwcLayout(model).latestCol)}$${rowOf("nwc", "sellerRetained")}`, { style: "line", fmt: FMT.body, expect: p.sellerRetainedNwc / K, label: "seller retained memo" });
+    else b.na(r, 3, "n.a.", { style: "line" });
     r++;
   }
   b.spacerRow(r++);
@@ -331,12 +350,11 @@ export function planDealStructure(ctx: TabContext): SheetBuilder | undefined {
   b.text(r, 2, "DSCR", { style: "keyRate", align: { horizontal: "left" } });
   b.keyTotalBox([r, r], [[3, 3]]);
   b.formula(r, 3, `IFERROR(${addr(b.r("svcCfa"), 3)}/${addr(b.r("svcTotal"), 3)},"n.a.")`, { style: "keyRate", fmt: FMT.multiple2, expect: ds.dscr, label: "deal dscr" });
-  b.note(r, notesCol, ds.dscr < model.assumptions!.sensitivity.dscrHurdle ? `Below the ${model.assumptions!.sensitivity.dscrHurdle.toFixed(2)}x hurdle with the seller note amortising inside ${model.assumptions!.deal.sellerNoteTermMonths} months; lengthen the note or lower the price` : "Clears the hurdle", { align: { wrap: false } });
+  b.note(r, notesCol, ds.dscr < model.assumptions!.sensitivity.dscrHurdle ? `Below the ${model.assumptions!.sensitivity.dscrHurdle.toFixed(2)}x hurdle with the seller note amortising inside ${model.assumptions!.deal.sellerNoteTermMonths} months; lengthen the note or lower the price` : "Clears the hurdle");
   r += 2;
   b.note(r, 2, "Note: one structure column by default (Traditional: cash plus a seller note); add columns for competing LOIs and the Offer Comparison tab builds when two or more exist. Escrow and holdback are formulas on the price, never typed. The indemnity escrow is kept separate from any retention holdback.");
   b.print({ area: `B2:${addr(r, notesCol)}`, landscape: false, fitToWidth: 1, fitToHeight: 0, titlesRow: "5:6" });
   b.furniture(ctx.codeName, ctx.asOfLabel);
-  b.defineName("Offer_Count", `$C$${b.r("price")}`);
   return b;
 }
 
@@ -367,9 +385,11 @@ export function planSensitivities(ctx: TabContext): SheetBuilder | undefined {
   const firstGrid = 5;
   const settingsTop = firstGrid + gridRows * grids.length + 1;
   const settings: Record<string, number> = {};
-  const settingKeys = ["earningsMid", "earningsStep", "multipleMid", "multipleStep", "priceMid", "priceStep", "rateMid", "rateStep", "cashMid", "cashStep", "rounding", "bands", "hurdle", "bandWidth", "dscrHurdle", "tie_valuation", "tie_dscr", "tie_closingCash"];
+  // Settings labels spill across B:E; values sit in F and rationales run from G on one line.
+  const valueCol = 6;
+  const settingKeys = ["earningsMid", "earningsStep", "multipleMid", "multipleStep", "priceMid", "priceStep", "rateMid", "rateStep", "cashMid", "cashStep", "closingDeductions", "rounding", "bands", "hurdle", "bandWidth", "dscrHurdle", "tie_valuation", "tie_dscr", "tie_closingCash"];
   settingKeys.forEach((k, i) => (settings[k] = settingsTop + 2 + i));
-  const set = (k: string) => addr(settings[k]!, 3, { row: true, col: true });
+  const set = (k: string) => addr(settings[k]!, valueCol, { row: true, col: true });
   const gridSpecs: { g: SensitivityGrid; colMid: string; colStep: string; rowMid: string; rowStep: string; helper: (rowVal: string, colVal: string) => string; rounded: boolean; tieKey: string; hurdleRef?: string; heat: boolean }[] = grids.map((g) => {
     switch (g.key) {
       case "valuation":
@@ -377,7 +397,7 @@ export function planSensitivities(ctx: TabContext): SheetBuilder | undefined {
       case "dscr":
         return { g, colMid: set("rateMid"), colStep: set("rateStep"), rowMid: set("priceMid"), rowStep: set("priceStep"), helper: (rv, cv) => `IFERROR(${S("valuation")}$D$${rowOf("valuation", "cfads")}/(-PMT(${cv}/12,${A("loanTermYears")}*12,MAX(0,${rv}*(1-${A("equityInjectionPct")})))*12),0)`, rounded: false, tieKey: "tie_dscr", hurdleRef: set("dscrHurdle"), heat: false };
       default:
-        return { g, colMid: set("cashMid"), colStep: set("cashStep"), rowMid: set("priceMid"), rowStep: set("priceStep"), helper: (rv, cv) => `${rv}*${cv}*(1-${A("escrowPct")})-${S("deal")}$C$${rowOf("deal", "pDebt")}*-1-${S("deal")}$C$${rowOf("deal", "pHoldback")}*-1`, rounded: true, tieKey: "tie_closingCash", heat: false };
+        return { g, colMid: set("cashMid"), colStep: set("cashStep"), rowMid: set("priceMid"), rowStep: set("priceStep"), helper: (rv, cv) => `${rv}*${cv}*(1-${A("escrowPct")})-${set("closingDeductions")}`, rounded: true, tieKey: "tie_closingCash", heat: false };
     }
   });
 
@@ -391,9 +411,9 @@ export function planSensitivities(ctx: TabContext): SheetBuilder | undefined {
     for (let c = 2; c <= 12; c++) b.cell(top + 2, c, { style: "headerGroup", v: c === 4 ? g.colAxis.label : null, role: "text" });
     b.cell(top + 2, 2, { align: { horizontal: "left" } });
     b.cell(top + 2, 3, { align: { horizontal: "left" } });
-    b.height(top + 2, 12.75);
+    b.height(top + 2, ROW_HEIGHT.body);
     const axisRow = top + 3;
-    b.height(axisRow, 12.75);
+    b.height(axisRow, ROW_HEIGHT.body);
     b.cell(axisRow, 2, { style: "header", v: null, role: "text" });
     b.cell(axisRow, 3, { style: "header", v: null, role: "text" });
     for (let j = 0; j < 9; j++) {
@@ -402,10 +422,12 @@ export function planSensitivities(ctx: TabContext): SheetBuilder | undefined {
       b.formula(axisRow, c, f, { style: "header", fmt: g.colAxis.fmt, role: "text", font: { color: COLOR.white, bold: true }, expect: g.colAxis.values[j], label: `${g.key} col axis ${j}` });
     }
     const body0 = axisRow + 1;
+    // The row-axis label is merged down the seven body rows (guide 5.5), centred and wrapped, never rotated.
+    b.plan.merges.push(`${addr(body0, 2)}:${addr(body0 + 6, 2)}`);
     for (let i = 0; i < 7; i++) {
       const rr = body0 + i;
-      b.height(rr, 12.75);
-      b.cell(rr, 2, { style: "header", v: i === 3 ? g.rowAxis.label : null, role: "text", align: { horizontal: "center", vertical: "middle", wrap: true } });
+      b.height(rr, ROW_HEIGHT.body);
+      b.cell(rr, 2, { style: "header", v: i === 0 ? g.rowAxis.label : null, role: "text", align: { horizontal: "center", vertical: "middle", wrap: true } });
       const rf = i === 3 ? spec.rowMid : i < 3 ? `${addr(rr + 1, 3)}-${spec.rowStep}` : `${addr(rr - 1, 3)}+${spec.rowStep}`;
       b.formula(rr, 3, rf, { style: "header", fmt: g.rowAxis.fmt, role: "text", font: { color: COLOR.white, bold: true }, expect: g.rowAxis.values[i]! / (g.key === "valuation" || g.rowAxis.label.includes("$") ? K : 1), label: `${g.key} row axis ${i}` });
       for (let j = 0; j < 9; j++) {
@@ -418,17 +440,26 @@ export function planSensitivities(ctx: TabContext): SheetBuilder | undefined {
         const inUnits = g.key === "dscr" ? engine : engine / K;
         b.formula(rr, hc, spec.helper(rowVal, colVal), { style: "helper", role: "helper", fmt: g.bodyFmt, expect: inUnits, label: `${g.key} helper ${i},${j}` });
         const shown = spec.rounded ? `ROUND(${helperCell},${set("rounding")})` : helperCell;
-        const expect = spec.rounded ? Math.round(inUnits * 10 ** s.roundingDigits) / 10 ** s.roundingDigits : inUnits;
+        const expect = spec.rounded ? roundTo(inUnits, s.roundingDigits) : inUnits;
         const isBase = i === 3 && j === 4;
-        b.formula(rr, c, shown, { fmt: g.bodyFmt, expect, label: `${g.key} body ${i},${j}`, font: isBase ? { bold: true } : undefined, border: isBase ? { top: "thin", bottom: "thin", left: "thin", right: "thin" } : i === 6 ? { bottom: "thin" } : undefined, align: { horizontal: "right" } });
+        b.formula(rr, c, shown, {
+          role: "calc",
+          fmt: g.bodyFmt,
+          expect,
+          label: `${g.key} body ${i},${j}`,
+          font: isBase ? { bold: true } : undefined,
+          border: isBase ? { top: "thin", bottom: "thin", left: "thin", right: "thin" } : i === 6 ? { bottom: "thin" } : undefined,
+          borderColor: isBase ? COLOR.maroon : undefined,
+          align: { horizontal: "right" },
+        });
       }
     }
     for (let c = 2; c <= 3; c++) b.cell(body0 + 6, c, { border: { bottom: "thin" } });
-    b.note(body0 + 7, 2, `Note: ${g.note} Base case at the centre (bold, boxed).${spec.hurdleRef ? ` Cells inside the box clear the ${s.dscrHurdle.toFixed(2)}x DSCR hurdle.` : ""}${spec.heat ? " Shading deepens by band above the Low case (settings below)." : ""}`, { align: { wrap: false } });
+    b.note(body0 + 7, 2, `Note: ${g.note} Base case at the centre (bold, boxed).${spec.hurdleRef ? ` Cells inside the box clear the ${s.dscrHurdle.toFixed(2)}x DSCR hurdle.` : ""}${spec.heat ? " Shading deepens by band above the Low case (settings below)." : ""}`);
     b.height(body0 + 7, 15);
     b.height(body0 + 8, ROW_HEIGHT.spacer);
     const bodyRef = `${addr(body0, 4)}:${addr(body0 + 6, 12)}`;
-    if (spec.hurdleRef) b.cf({ ref: bodyRef, formula: `${addr(body0, 4)}>=${spec.hurdleRef}`, border: { top: "thin", bottom: "thin", left: "thin", right: "thin" }, font: { color: COLOR.maroon } });
+    if (spec.hurdleRef) b.cf({ ref: bodyRef, formula: `${addr(body0, 4)}>=${spec.hurdleRef}`, border: { top: "thin", bottom: "thin", left: "thin", right: "thin" } });
     if (spec.heat) {
       const bands = s.gradientBands;
       for (let k = 1; k <= bands; k++) {
@@ -444,8 +475,8 @@ export function planSensitivities(ctx: TabContext): SheetBuilder | undefined {
   // Settings block.
   let r = settingsTop;
   b.section(r, "Sensitivity Assumptions", [[3, 12]]);
-  b.text(r, 3, "Value", { font: { bold: true }, align: { horizontal: "right" } });
-  b.text(r, 4, "Rationale", { font: { bold: true } });
+  b.cell(r, valueCol, { v: "Value", align: { horizontal: "right" } });
+  b.cell(r, valueCol + 1, { v: "Rationale", align: { indent: 1 } });
   r += 2;
   const mid = model.valuationDetail!.cases.mid;
   const deal = model.deal![0]!;
@@ -460,25 +491,25 @@ export function planSensitivities(ctx: TabContext): SheetBuilder | undefined {
     ["rateStep", "Interest Rate — Step", A("rateStep"), s.rateStep, FMT.rate, "Per AMB", "link"],
     ["cashMid", "Cash at Close % — Midpoint", A("cashAtClosePct"), model.assumptions!.deal.cashAtClosePct, FMT.pct, "Assumptions", "link"],
     ["cashStep", "Cash at Close % — Step", A("cashPctStep"), s.cashPctStep, FMT.pct, "Per AMB", "link"],
+    ["closingDeductions", "Deductions from Cash at Close", `${S("deal")}$C$${rowOf("deal", "cashAtClose")}-${S("deal")}$C$${rowOf("deal", "escrow")}-${S("deal")}$C$${rowOf("deal", "closingCash")}`, (deal.cashAtClose - deal.escrow - deal.proceeds.closingCash) / K, FMT.currency, "Liens, holdback and expenses paid at close (Deal Structure)", "link"],
     ["rounding", "Rounding — $ Tables (Digits)", A("roundingDigits"), s.roundingDigits, FMT.term, "0 = nearest $1K at $000s", "link"],
     ["bands", "Gradient Bands (#)", A("gradientBands"), s.gradientBands, FMT.term, "Shading bands above the hurdle", "link"],
     ["hurdle", "Hurdle ($ table)", `${S("valuation")}$C$${rowOf("valuation", "businessValuation")}`, model.valuationDetail!.cases.low.businessValuation / K, FMT.currency, "Low case business valuation", "link"],
-    ["bandWidth", "Band Width", `IFERROR((MAX(${addr(firstGrid + 4, 4)}:${addr(firstGrid + 10, 12)})-${set("hurdle")})/${set("bands")},0)`, (Math.max(...grids[0]!.body.flat()) / K - model.valuationDetail!.cases.low.businessValuation / K) / s.gradientBands, FMT.currency, "(MAX of the $ grid less the hurdle) ÷ bands", "calc"],
+    ["bandWidth", "Band Width", `IFERROR((MAX(${addr(firstGrid + 4, helperCol)}:${addr(firstGrid + 10, helperCol + 8)})-${set("hurdle")})/${set("bands")},0)`, (Math.max(...grids[0]!.body.flat()) / K - model.valuationDetail!.cases.low.businessValuation / K) / s.gradientBands, FMT.currency, "(MAX of the unrounded $ grid less the hurdle) ÷ bands", "calc"],
     ["dscrHurdle", "DSCR Hurdle (x)", A("dscrHurdle"), s.dscrHurdle, FMT.multiple2, "SBA lenders underwrite to 1.25x", "link"],
-    ["tie_valuation", `Tie Out — ${grids[0]!.title.split(" Based on")[0]}`, `ROUND(${addr(firstGrid + 7, helperCol + 4)}-${S("valuation")}$D$${rowOf("valuation", "businessValuation")},6)`, 0, FMT.check, "Must equal zero (C30)", "calc"],
-    ["tie_dscr", "Tie Out — DSCR", `ROUND(${addr(firstGrid + gridRows + 7, helperCol + 11 + 4)}-${S("valuation")}$D$${rowOf("valuation", "dscr")},6)`, 0, FMT.check, "Must equal zero (C30)", "calc"],
-    ["tie_closingCash", "Tie Out — Closing Cash to Seller", `ROUND(${addr(firstGrid + 2 * gridRows + 7, helperCol + 22 + 4)}-${S("deal")}$C$${rowOf("deal", "closingCash")},6)`, 0, FMT.check, "Must equal zero (C30)", "calc"],
+    ["tie_valuation", `Tie Out — ${grids[0]!.title.split(" Based on")[0]}`, `${addr(firstGrid + 7, helperCol + 4)}-${S("valuation")}$D$${rowOf("valuation", "businessValuation")}`, 0, FMT.check, "Must equal zero (C30)", "calc"],
+    ["tie_dscr", "Tie Out — DSCR", `${addr(firstGrid + gridRows + 7, helperCol + 11 + 4)}-${S("valuation")}$D$${rowOf("valuation", "dscr")}`, 0, FMT.check, "Must equal zero (C30)", "calc"],
+    ["tie_closingCash", "Tie Out — Closing Cash to Seller", `${addr(firstGrid + 2 * gridRows + 7, helperCol + 22 + 4)}-${S("deal")}$C$${rowOf("deal", "closingCash")}`, 0, FMT.check, "Must equal zero (C30)", "calc"],
   ];
   for (const [key, label, f, expect, fmt, rationale, role] of settingRows) {
     const rr = settings[key]!;
     b.row(key, rr);
     b.text(rr, 2, label, { style: key.startsWith("tie") ? "check" : "line" });
-    b.formula(rr, 3, f, { fmt, expect, role: key.startsWith("tie") ? "check" : role, tol: key.startsWith("tie") ? 1e-6 : undefined, label: key, style: key.startsWith("tie") ? "check" : undefined });
-    b.note(rr, 4, rationale, { align: { wrap: false } });
-    if (key.startsWith("tie")) b.checkCf(rr, 3, 3);
+    b.formula(rr, valueCol, f, { fmt, expect, role: key.startsWith("tie") ? "check" : role, tol: key.startsWith("tie") ? 1e-6 : undefined, label: key, style: key.startsWith("tie") ? "check" : undefined });
+    b.note(rr, valueCol + 1, rationale, { align: { wrap: false, indent: 1 } });
+    if (key.startsWith("tie")) b.checkCf(rr, valueCol, valueCol);
   }
   const lastPrinted = settings.tie_closingCash! + 1;
-  b.text(helperCol, 1, "", {});
   b.text(4, helperCol, "Helper: unrounded grid values (grey; outside the print area)", { style: "helper" });
   b.print({ area: `B2:${addr(lastPrinted, 12)}`, landscape: false, fitToWidth: 1, fitToHeight: 0, titlesRow: "2:4", rowBreaks: grids.length > 2 ? [firstGrid + 2 * gridRows - 1] : [] });
   b.furniture(ctx.codeName, ctx.asOfLabel);

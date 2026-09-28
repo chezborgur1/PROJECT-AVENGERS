@@ -6,11 +6,10 @@
 import { addMonths, monthRange } from "../../domain/financials.ts";
 import { addr, colLetter, rowOf, SheetBuilder } from "../sheet.ts";
 import { FMT, WIDTH } from "../styles.ts";
-import type { ModelOutput } from "../types.ts";
+import type { ModelOutput, MonthlySeries } from "../types.ts";
 import type { TabContext } from "./assumptionsTab.ts";
-import { A } from "./assumptionsTab.ts";
 import { MONTH_START, priorColumn, valueStyle } from "./data.ts";
-import { applyPeriodWidths, ASOF, gridMonths, periodLayout, S, SHEET, serialOfMonthStart, sumifsFormula, valueSpans, writePeriodHelpers, type PeriodLayout } from "./layout.ts";
+import { applyPeriodWidths, ASOF, gridMonths, periodLayout, S, SHEET, serialOfMonthStart, sumifsFormula, valueSpans, writePeriodHelpers } from "./layout.ts";
 
 const K = 1000;
 
@@ -21,10 +20,14 @@ interface DetailLine {
   monthlyKey: string;
   kind: "lineFirst" | "line" | "keyTotal";
   value: (p: ModelOutput["periods"][string]) => number;
-  series: string;
-  /** Row the % block divides by (total revenue), and whether the growth block closes on it. */
+  /** The engine's value in month `i` of the monthly series, for the strip expectations. */
+  month: (series: MonthlySeries["series"], i: number) => number;
+  /** The total the growth block closes on. */
   isTotal?: boolean;
 }
+
+const seriesAt = (key: string) => (series: MonthlySeries["series"], i: number) => series[key]?.[i] ?? 0;
+const sumAt = (keys: string[]) => (series: MonthlySeries["series"], i: number) => keys.reduce((s, k) => s + (series[k]?.[i] ?? 0), 0);
 
 function revenueLines(model: ModelOutput): DetailLine[] {
   const first = model.periods[model.columns[0]!.key]!;
@@ -36,27 +39,27 @@ function revenueLines(model: ModelOutput): DetailLine[] {
     monthlyKey: `rev:${l.account}`,
     kind: i === 0 ? "lineFirst" : "line",
     value: (p) => p.revenueLines.find((x) => x.account === l.account)?.amount ?? 0,
-    series: `rev:${l.account}`,
+    month: seriesAt(`rev:${l.account}`),
   }));
   if (contra.length && service.length) {
-    lines.push({ key: "rev_contra", label: "Less: discounts and refunds", monthlyKey: "rev_contra", kind: "line", value: (p) => contra.reduce((s, a) => s + (p.revenueLines.find((x) => x.account === a)?.amount ?? 0), 0), series: "rev_contra" });
+    lines.push({ key: "rev_contra", label: "Less: discounts and refunds", monthlyKey: "rev_contra", kind: "line", value: (p) => contra.reduce((s, a) => s + (p.revenueLines.find((x) => x.account === a)?.amount ?? 0), 0), month: sumAt(contra.map((a) => `rev:${a}`)) });
   }
-  lines.push({ key: "revenue", label: "Total Revenue", monthlyKey: "revenue", kind: "keyTotal", value: (p) => p.pnl.revenue, series: "revenue", isTotal: true });
+  lines.push({ key: "revenue", label: "Total Revenue", monthlyKey: "revenue", kind: "keyTotal", value: (p) => p.pnl.revenue, month: seriesAt("revenue"), isTotal: true });
   const recurring = service.filter((l) => l.recurring);
-  if (recurring.length) lines.push({ key: "recurring", label: "Total Recurring Revenue", monthlyKey: "", kind: "keyTotal", value: (p) => recurring.reduce((s, l) => s + (p.revenueLines.find((x) => x.account === l.account)?.amount ?? 0), 0), series: "" });
+  if (recurring.length) lines.push({ key: "recurring", label: "Total Recurring Revenue", monthlyKey: "", kind: "keyTotal", value: (p) => recurring.reduce((s, l) => s + (p.revenueLines.find((x) => x.account === l.account)?.amount ?? 0), 0), month: sumAt(recurring.map((l) => `rev:${l.account}`)) });
   return lines;
 }
 
 function expenseLines(): DetailLine[] {
   return [
-    { key: "cogs", label: "Cost of Revenue", monthlyKey: "cogs", kind: "lineFirst", value: (p) => p.pnl.cogs, series: "cogs" },
-    { key: "gross_profit", label: "Gross Profit", monthlyKey: "gross_profit", kind: "keyTotal", value: (p) => p.pnl.grossProfit, series: "gross_profit" },
-    { key: "payroll", label: "Salaries, Wages and Benefits", monthlyKey: "payroll", kind: "lineFirst", value: (p) => p.pnl.payroll, series: "payroll" },
-    { key: "owner_comp", label: "Owner / Officer Compensation", monthlyKey: "owner_comp", kind: "line", value: (p) => p.pnl.ownerComp, series: "owner_comp" },
-    { key: "rent", label: "Rent and Occupancy", monthlyKey: "rent", kind: "line", value: (p) => p.pnl.rent, series: "rent" },
-    { key: "marketing", label: "Advertising and Marketing", monthlyKey: "marketing", kind: "line", value: (p) => p.pnl.marketing, series: "marketing" },
-    { key: "other_opex", label: "Other Operating Expenses", monthlyKey: "other_opex", kind: "line", value: (p) => p.pnl.otherOpex, series: "other_opex" },
-    { key: "total_opex", label: "Total Operating Expenses", monthlyKey: "total_opex", kind: "keyTotal", value: (p) => p.pnl.totalOpex, series: "total_opex", isTotal: true },
+    { key: "cogs", label: "Cost of Revenue", monthlyKey: "cogs", kind: "lineFirst", value: (p) => p.pnl.cogs, month: seriesAt("cogs") },
+    { key: "gross_profit", label: "Gross Profit", monthlyKey: "gross_profit", kind: "keyTotal", value: (p) => p.pnl.grossProfit, month: seriesAt("gross_profit") },
+    { key: "payroll", label: "Salaries, Wages and Benefits", monthlyKey: "payroll", kind: "lineFirst", value: (p) => p.pnl.payroll, month: seriesAt("payroll") },
+    { key: "owner_comp", label: "Owner / Officer Compensation", monthlyKey: "owner_comp", kind: "line", value: (p) => p.pnl.ownerComp, month: seriesAt("owner_comp") },
+    { key: "rent", label: "Rent and Occupancy", monthlyKey: "rent", kind: "line", value: (p) => p.pnl.rent, month: seriesAt("rent") },
+    { key: "marketing", label: "Advertising and Marketing", monthlyKey: "marketing", kind: "line", value: (p) => p.pnl.marketing, month: seriesAt("marketing") },
+    { key: "other_opex", label: "Other Operating Expenses", monthlyKey: "other_opex", kind: "line", value: (p) => p.pnl.otherOpex, month: seriesAt("other_opex") },
+    { key: "total_opex", label: "Total Operating Expenses", monthlyKey: "total_opex", kind: "keyTotal", value: (p) => p.pnl.totalOpex, month: seriesAt("total_opex"), isTotal: true },
   ];
 }
 
@@ -93,7 +96,7 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
   b.tier1(5, [...l.groups, { from: stripFirst, to: stripLast, label: stripTitle }, { from: notesCol, to: notesCol, label: "Notes" }]);
   b.tier2(6, { from: l.firstCol, to: l.lastValueCol }, [], group);
   // Strip headers: the hidden prior month, then a chain of first-of-month serials from AsOfDate (guide 5.5).
-  b.formula(6, hiddenCol, `EOMONTH(${ASOF},-12)+1`, { style: "monthHeader", fmt: FMT.monthHeader, role: "text", expect: serialOfMonthStart(priorMonth), label: "strip hidden month" });
+  b.formula(6, hiddenCol, `EOMONTH(${ASOF},-13)+1`, { style: "monthHeader", fmt: FMT.monthHeader, role: "text", expect: serialOfMonthStart(priorMonth), label: "strip hidden month" });
   stripMonths.forEach((m, i) => b.formula(6, stripFirst + i, `EOMONTH(${addr(6, stripFirst + i - 1)},0)+1`, { style: "monthHeader", fmt: FMT.monthHeader, role: "text", expect: serialOfMonthStart(m), label: `strip month ${m}` }));
   b.cell(6, notesCol, { style: "header", v: null, role: "text" });
 
@@ -104,17 +107,12 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
     { title: `${group} % Growth`, suffix: "_growth", kind: "growth" },
   ];
   let r = 8;
-  const rowsByBlock = blocks.map((bl) => {
-    b.row(`sec${bl.suffix}`, r);
-    r++;
-    const keys = lines.map((ln) => {
-      b.row(`${ln.key}${bl.suffix}`, r);
-      return r++;
-    });
+  for (const bl of blocks) {
+    b.row(`sec${bl.suffix}`, r++);
+    for (const ln of lines) b.row(`${ln.key}${bl.suffix}`, r++);
     if (bl.kind === "growth") b.row("growth_total", r++);
     r++;
-    return keys;
-  });
+  }
   b.row("stripCheck", r);
   b.row("stripHeaderCheck", r + 1);
   const lastPrinted = r + 3;
@@ -126,8 +124,9 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
   const revenueMonthly = (m: string) => `${S("monthly")}${colLetter(MONTH_START + stripIdx(m))}${rowOf("monthly", "revenue")}`;
   const stripAllMonths = [priorMonth, ...stripMonths];
   const stripColOf = (m: string) => (m === priorMonth ? hiddenCol : stripFirst + stripMonths.indexOf(m));
+  const recurringKeys = model.periods[model.columns[0]!.key]!.revenueLines.filter((x) => x.recurring).map((x) => `rev:${x.account}`);
 
-  blocks.forEach((bl, bi) => {
+  for (const bl of blocks) {
     b.section(b.r(`sec${bl.suffix}`), bl.title, spans);
     lines.forEach((ln) => {
       const rr = b.r(`${ln.key}${bl.suffix}`);
@@ -142,8 +141,7 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
         const at = (k: string) => `${colL}${b.r(k)}`;
         if (bl.kind === "dollars") {
           if (ln.key === "recurring") {
-            const rec = model.periods[column.key]!.revenueLines.filter((x) => x.recurring).map((x) => at(`rev:${x.account}`));
-            b.formula(rr, col, rec.length ? rec.join("+") : "0", { style: vs.style, fmt: vs.fmt, expect: ln.value(pv) / K, label: `${ln.key} ${column.label}` });
+            b.formula(rr, col, recurringKeys.map((k) => at(k)).join("+"), { style: vs.style, fmt: vs.fmt, expect: ln.value(pv) / K, label: `${ln.key} ${column.label}` });
             continue;
           }
           const monthlyRow = `${S("monthly")}$${colLetter(MONTH_START)}$${rowOf("monthly", ln.monthlyKey)}:$${colLetter(MONTH_START + months.length - 1)}$${rowOf("monthly", ln.monthlyKey)}`;
@@ -153,7 +151,7 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
           const rev = pv.pnl.revenue;
           b.formula(rr, col, `IFERROR(${at(ln.key)}/${S("pnl")}${colL}${rowOf("pnl", "revenue")},"n.a.")`, { style: vs.style, fmt: vs.fmt, expect: rev ? ln.value(pv) / rev : "n.a.", label: `${ln.key} pct ${column.label}` });
         } else {
-          const prior = priorColumn(model, column, l);
+          const prior = priorColumn(column, l);
           if (!prior) {
             b.na(rr, col, "n.a.", { style: "ratio" });
             continue;
@@ -169,33 +167,19 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
         const i = stripIdx(m);
         const at = (k: string) => `${colL}${b.r(k)}`;
         if (bl.kind === "dollars") {
-          if (ln.key === "recurring") {
-            const rec = model.periods[model.columns[0]!.key]!.revenueLines.filter((x) => x.recurring).map((x) => at(`rev:${x.account}`));
-            const expect = model.periods[model.columns[0]!.key]!.revenueLines.filter((x) => x.recurring).reduce((s, x) => s + (series[`rev:${x.account}`]?.[i] ?? 0), 0) / K;
-            b.formula(rr, col, rec.length ? rec.join("+") : "0", { style: vs.style, fmt: vs.fmt, expect, label: `${ln.key} ${m}` });
-            continue;
-          }
-          b.formula(rr, col, monthlyCell(ln.monthlyKey, m), { style: vs.style, fmt: vs.fmt, expect: (series[ln.series]?.[i] ?? 0) / K, label: `${ln.key} ${m}` });
+          const f = ln.key === "recurring" ? recurringKeys.map((k) => at(k)).join("+") : monthlyCell(ln.monthlyKey, m);
+          b.formula(rr, col, f, { style: vs.style, fmt: vs.fmt, expect: ln.month(series, i) / K, label: `${ln.key} ${m}` });
         } else if (bl.kind === "pct") {
           const rev = series.revenue![i]!;
-          const num = ln.key === "recurring" ? model.periods[model.columns[0]!.key]!.revenueLines.filter((x) => x.recurring).reduce((s, x) => s + (series[`rev:${x.account}`]?.[i] ?? 0), 0) : (series[ln.series]?.[i] ?? 0);
-          b.formula(rr, col, `IFERROR(${at(ln.key)}/${revenueMonthly(m)},"n.a.")`, { style: vs.style, fmt: vs.fmt, expect: rev ? num / rev : "n.a.", label: `${ln.key} pct ${m}` });
+          b.formula(rr, col, `IFERROR(${at(ln.key)}/${revenueMonthly(m)},"n.a.")`, { style: vs.style, fmt: vs.fmt, expect: rev ? ln.month(series, i) / rev : "n.a.", label: `${ln.key} pct ${m}` });
         } else {
           if (m === priorMonth) {
             b.na(rr, col, "n.a.", { style: "ratio" });
             continue;
           }
           const prevM = addMonths(m, -1);
-          const cur = ln.key === "recurring" ? 0 : (series[ln.series]?.[i] ?? 0);
-          const prev = ln.key === "recurring" ? 0 : (series[ln.series]?.[stripIdx(prevM)] ?? 0);
-          if (ln.key === "recurring") {
-            const rec = (idx: number) => model.periods[model.columns[0]!.key]!.revenueLines.filter((x) => x.recurring).reduce((s, x) => s + (series[`rev:${x.account}`]?.[idx] ?? 0), 0);
-            const c = rec(i);
-            const p = rec(stripIdx(prevM));
-            b.formula(rr, col, `IFERROR(${at(ln.key)}/${colLetter(stripColOf(prevM))}${b.r(ln.key)}-1,"n.a.")`, { style: vs.style, fmt: vs.fmt, expect: p ? c / p - 1 : "n.a.", label: `${ln.key} growth ${m}` });
-            continue;
-          }
-          b.formula(rr, col, `IFERROR(${at(ln.key)}/${colLetter(stripColOf(prevM))}${b.r(ln.key)}-1,"n.a.")`, { style: vs.style, fmt: vs.fmt, expect: prev ? cur / prev - 1 : "n.a.", label: `${ln.key} growth ${m}` });
+          const prev = ln.month(series, stripIdx(prevM));
+          b.formula(rr, col, `IFERROR(${at(ln.key)}/${colLetter(stripColOf(prevM))}${b.r(ln.key)}-1,"n.a.")`, { style: vs.style, fmt: vs.fmt, expect: prev ? ln.month(series, i) / prev - 1 : "n.a.", label: `${ln.key} growth ${m}` });
         }
       }
     });
@@ -205,7 +189,7 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
       b.text(rr, 2, `${group === "Revenue" ? "Revenue" : "Total Expense"} Growth`, { style: "keyTotal", align: { horizontal: "left" } });
       b.keyTotalBox([rr, rr], spans);
       for (const { column, col } of l.cols) {
-        const prior = priorColumn(model, column, l);
+        const prior = priorColumn(column, l);
         const pv = model.periods[column.key]!;
         const tot = lines.find((x) => x.isTotal)!;
         if (!prior) {
@@ -223,25 +207,23 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
         }
         const prevM = addMonths(m, -1);
         const tot = lines.find((x) => x.isTotal)!;
-        const cur = series[tot.series]![stripIdx(m)]!;
-        const prev = series[tot.series]![stripIdx(prevM)]!;
+        const cur = tot.month(series, stripIdx(m));
+        const prev = tot.month(series, stripIdx(prevM));
         b.formula(rr, col, `IFERROR(${colLetter(col)}${b.r(totalKey)}/${colLetter(stripColOf(prevM))}${b.r(totalKey)}-1,"n.a.")`, { style: "keyTotal", fmt: FMT.pct, expect: prev ? cur / prev - 1 : "n.a.", label: `growth total ${m}` });
       }
     }
-    void bi;
-    void rowsByBlock;
-  });
+  }
 
   // Checks C34 and C35: the strip against the grid for the same months, and the header chain against AsOfDate.
   const cr = b.r("stripCheck");
-  b.text(cr, 2, "Check: strip total less Monthly P&L for the same months", { style: "check" });
+  b.text(cr, 2, "Check: strip less Monthly P&L (C34)", { style: "check" });
   const monthlyRow = `${S("monthly")}$${colLetter(MONTH_START)}$${rowOf("monthly", lines.find((x) => x.isTotal)!.monthlyKey)}:$${colLetter(MONTH_START + months.length - 1)}$${rowOf("monthly", lines.find((x) => x.isTotal)!.monthlyKey)}`;
   const monthlyHeader = `${S("monthly")}$${colLetter(MONTH_START)}$6:$${colLetter(MONTH_START + months.length - 1)}$6`;
   b.formula(cr, 3, `SUM(${addr(b.r(totalKey), stripFirst)}:${addr(b.r(totalKey), stripLast)})-SUMIFS(${monthlyRow},${monthlyHeader},">="&${addr(6, stripFirst)},${monthlyHeader},"<="&${addr(6, stripLast)})`, { style: "check", fmt: FMT.check, expect: 0, tol: 1e-6, label: "C34" });
   b.checkCf(cr, 3, 3);
   const hr = b.r("stripHeaderCheck");
-  b.text(hr, 2, "Check: strip first month less EOMONTH(AsOfDate,-12)+1, last less EOMONTH(AsOfDate,-1)+1", { style: "check" });
-  b.formula(hr, 3, `(${addr(6, stripFirst)}-(EOMONTH(${ASOF},-12)+1))+(${addr(6, stripLast)}-(EOMONTH(${ASOF},-1)+1))`, { style: "check", fmt: FMT.check, expect: 0, label: "C35" });
+  b.text(hr, 2, "Check: strip months end at the as-of date (C35)", { style: "check" });
+  b.formula(hr, 3, `ABS(${addr(6, stripFirst)}-(EOMONTH(${ASOF},-12)+1))+ABS(${addr(6, stripLast)}-(EOMONTH(${ASOF},-1)+1))`, { style: "check", fmt: FMT.check, expect: 0, label: "C35" });
   b.checkCf(hr, 3, 3);
   b.note(lastPrinted, 2, "Note: strip cells link to Monthly P&L; growth is year over year in the summary block and month over month in the strip (n.a. where there is no denominator). The hidden column left of the strip holds the month before the LTM start so the first month's growth has a denominator.");
   b.print({ area: `B2:${addr(lastPrinted, notesCol)}`, landscape: true, fitToWidth: 1, fitToHeight: 0, titlesRow: "2:6" });
@@ -250,4 +232,3 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
   return b;
 }
 
-export { A };

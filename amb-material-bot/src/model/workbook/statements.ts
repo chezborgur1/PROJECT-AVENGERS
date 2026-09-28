@@ -2,26 +2,26 @@
 // 5.1 rows 5-7, 5.3, 5.4). Every period cell is a SUMIFS over the monthly
 // grid or the schedule's own month cells; nothing on the ladder is typed.
 
-import { ADJUSTMENT_CATEGORY_LABELS, ADJUSTMENT_TIER_LABELS, IS_LABELS, type Adjustment, type IsCategory } from "../../domain/financials.ts";
+import { ADJUSTMENT_CATEGORY_LABELS, ADJUSTMENT_TIER_LABELS, IS_LABELS, monthPeriod, type Adjustment, type IsCategory } from "../../domain/financials.ts";
+import { activeCount } from "./customersTabs.ts";
 import { addr, colLetter, rowOf, SheetBuilder } from "../sheet.ts";
-import { COLOR, FMT, WIDTH } from "../styles.ts";
+import { FMT, WIDTH } from "../styles.ts";
 import type { ModelOutput } from "../types.ts";
 import { A, type TabContext } from "./assumptionsTab.ts";
-import { ADJ_MONTH_START, DATABOOK_FIRST_ROW, MONTHLY_FIRST_ROW, MONTH_START, pnlRows, priorColumn, stylePnlRow, valueStyle, writeDeltas, type PnlValues } from "./data.ts";
+import { contraAccounts, DATABOOK_COL, DATABOOK_FIRST_ROW, MONTH_START, RAW_CUSTOMER_COLS, RAW_PAYROLL_COLS, deltaValues, pnlRows, priorColumn, stylePnlRow, valueStyle, writeDeltas, type PnlValues } from "./data.ts";
 import {
   ADJ_BASIS_COL,
   ADJ_CATEGORY_COL,
-  ADJ_PERIOD_START,
   ADJ_REF_COL,
   ADJ_STATUS_COL,
   ADJ_TIER_COL,
+  adjMonthStart,
   adjustmentsLayout,
   applyPeriodWidths,
   gridMonths,
   periodLayout,
   prorationFormula,
   S,
-  scheduleColumn,
   scheduleRef,
   SHEET,
   sumifsFormula,
@@ -42,7 +42,7 @@ export function planPnlSummary(ctx: TabContext): SheetBuilder {
   applyPeriodWidths(b, l);
   b.anatomy({ subtitle: "Historical P&L Summary ($000s)", lastCol: l.notesCol, toggleCol: l.lastValueCol, masterToggle: ctx.masterToggle });
   b.text(3, l.lastValueCol - 1, "Print", { align: { horizontal: "right" } });
-  b.tier1(5, [...l.groups, { from: l.notesCol, to: l.notesCol, label: "Notes" }]);
+  b.tier1(5, [...l.groups, { from: l.notesCol, to: l.notesCol, label: "Basis" }]);
   b.tier2(6, { from: l.firstCol, to: l.lastValueCol }, [], "Income Statement");
   if (l.deltas) {
     b.cell(6, l.deltas.dollar, { style: "header", v: "($)", role: "text" });
@@ -57,16 +57,21 @@ export function planPnlSummary(ctx: TabContext): SheetBuilder {
   r++;
   const kpiSection = r;
   b.row("sec_kpi", r++);
-  const kpiKeys = kpiRows(model);
+  const kpiKeys = kpiRows(model, ctx.customerYears);
   for (const k of kpiKeys) b.row(k.key, r++);
   r++;
-  b.row("check", r);
+  // The two ties to the grid (C03, C04) exist only when there is a grid; annual-only models read the Databook directly.
+  const monthly = !!model.monthly;
   const checkRow = r;
-  r++;
+  const linesCheckRow = r + 1;
+  if (monthly) {
+    b.row("check", checkRow);
+    b.row("check_lines", linesCheckRow);
+    r += 2;
+  }
   const lastPrinted = r;
   const helpers = writePeriodHelpers(b, l, model, lastPrinted + 2);
   const spans = valueSpans(l);
-  const monthly = !!model.monthly;
   const n = gridMonths(model).length;
   const monthlyRow = (key: string) => `${S("monthly")}$${colLetter(MONTH_START)}$${rowOf("monthly", key)}:$${colLetter(MONTH_START + n - 1)}$${rowOf("monthly", key)}`;
   const monthlyHeader = `${S("monthly")}$${colLetter(MONTH_START)}$6:$${colLetter(MONTH_START + n - 1)}$6`;
@@ -90,7 +95,7 @@ export function planPnlSummary(ctx: TabContext): SheetBuilder {
         continue;
       }
       if (spec.kind === "ratio") {
-        const prior = priorColumn(model, column, l);
+        const prior = priorColumn(column, l);
         if (!prior) {
           b.na(rr, col, "n.a.", { style: vs.style });
           continue;
@@ -106,22 +111,22 @@ export function planPnlSummary(ctx: TabContext): SheetBuilder {
         f = sumifsFormula({ valuesRow: monthlyRow(key), monthsRow: monthlyHeader, startCell: addr(helpers.start, col, { row: true }), endCell: addr(helpers.end, col, { row: true }) });
       } else {
         // Annual-only mode: the Databook's fiscal-year column for this category or account.
-        const dbCol = colLetter(9 + l.cols.findIndex((x) => x.column.key === column.key));
-        const crit = spec.account
-          ? `${S("databook")}$B$${dbFirst}:$B$${dbLast},"${spec.account.replace(/"/g, '""')}"`
-          : `${S("databook")}$E$${dbFirst}:$E$${dbLast},"${spec.category}"`;
-        f = `SUMIFS(${S("databook")}${dbCol}$${dbFirst}:${dbCol}$${dbLast},${crit})/${K}`;
+        const dbCol = colLetter(DATABOOK_COL.periodStart + l.cols.findIndex((x) => x.column.key === column.key));
+        const dbRange = (c: number) => `${S("databook")}$${colLetter(c)}$${dbFirst}:$${colLetter(c)}$${dbLast}`;
+        const sumIf = (critCol: number, value: string) => `SUMIFS(${S("databook")}${dbCol}$${dbFirst}:${dbCol}$${dbLast},${dbRange(critCol)},"${value.replace(/"/g, '""')}")`;
+        if (spec.contra) f = `(${contraAccounts(model).map((acc) => sumIf(DATABOOK_COL.account, acc)).join("+")})/${K}`;
+        else f = `${spec.account ? sumIf(DATABOOK_COL.account, spec.account) : sumIf(DATABOOK_COL.category, spec.category!)}/${K}`;
       }
       b.formula(rr, col, f, { style: vs.style, fmt: vs.fmt, expect: spec.value!(values) / K, label: `${spec.key} ${column.label}` });
     }
-    if (l.deltas) writeDeltas(b, rr, l, spec.kind === "margin" || spec.kind === "ratio");
+    if (l.deltas && spec.value) writeDeltas(b, rr, l, spec.kind, deltaValues(model, l, (p) => spec.value!({ pnl: p.pnl, ladder: p.ladder, revenueLines: p.revenueLines }) / K));
     if (l.scenarios) writeScenarioCells(b, rr, spec, l, model);
   }
   // Basis notes for the PF column's restated lines.
   for (const adj of model.adjustments) {
     if (adj.row.tier !== "pro_forma" || adj.row.status !== "accepted" || !adj.row.pnlLine) continue;
     const key = rows.find((x) => x.category === adj.row.pnlLine)?.key;
-    if (key) b.note(b.r(key), l.notesCol, `PF: ${adj.row.pfMethod ?? "Pro forma"} [${adj.row.ref}]`, { align: { wrap: false } });
+    if (key) b.note(b.r(key), l.notesCol, `PF: ${adj.row.pfMethod ?? "Pro forma"} [${adj.row.ref}]`);
   }
 
   // KPI block (guide 5.1 row 5; DATA_CONTRACT §5.9).
@@ -137,19 +142,25 @@ export function planPnlSummary(ctx: TabContext): SheetBuilder {
         b.na(rr, col, "n.a.", { style: "line" });
         continue;
       }
-      if (spec.f) b.formula(rr, col, spec.f, { style: "line", fmt: k.fmt, expect: spec.expect, label: `${k.key} ${column.label}` });
-      else b.num(rr, col, spec.v!, { style: "line", fmt: k.fmt });
+      b.formula(rr, col, spec.f, { style: k.fmt === FMT.pct1 ? "ratio" : "line", fmt: k.fmt, expect: spec.expect, label: `${k.key} ${column.label}` });
     }
-    if (k.note) b.note(rr, l.notesCol, k.note, { align: { wrap: false } });
   }
-  // Check C04: net income against the grid, every column.
-  b.text(checkRow, 2, "Check: Net Income less Monthly P&L", { style: "check" });
   if (monthly) {
+    // Check C04: net income against the grid, every column.
+    b.text(checkRow, 2, "Check: Net Income less Monthly P&L", { style: "check" });
     for (const { col } of l.cols) {
-      b.formula(checkRow, col, `${addr(b.r("net_income"), col)}-${S("monthly")}${addr(rowOf("monthly", "net_income") as unknown as number, col)}`, { style: "check", fmt: FMT.check, expect: 0, tol: 1e-6, label: "C04" });
+      b.formula(checkRow, col, `${addr(b.r("net_income"), col)}-${S("monthly")}${colLetter(col)}${rowOf("monthly", "net_income")}`, { style: "check", fmt: FMT.check, expect: 0, tol: 1e-6, label: "C04" });
     }
     b.checkCf(checkRow, l.firstCol, l.lastValueCol);
-  } else b.na(checkRow, l.firstCol, "n.a.", { style: "check" });
+    // C03: every dollar line against the grid's own period block, which is the SUMIFS of the months for the same window.
+    b.text(linesCheckRow, 2, "Check: every line less Monthly P&L", { style: "check" });
+    const dollarRows = rows.filter((x) => !["section", "spacer", "margin", "ratio"].includes(x.kind));
+    for (const { col } of l.cols) {
+      const terms = dollarRows.map((x) => `ABS(${addr(b.r(x.key), col)}-${S("monthly")}${colLetter(col)}${rowOf("monthly", x.key)})`);
+      b.formula(linesCheckRow, col, terms.join("+"), { style: "check", fmt: FMT.check, expect: 0, tol: 1e-6, label: "C03" });
+    }
+    b.checkCf(linesCheckRow, l.firstCol, l.lastValueCol);
+  }
   b.note(lastPrinted, 2, monthly ? "Note: every period column is a SUMIFS over the Monthly P&L grid for the window in the helper rows below. Margins divide by total revenue." : `Note: full fiscal years only; source: ${model.databook?.pnl[0]?.file ?? "annual P&L"}. Pro forma columns apply the scenario methods on Assumptions.`);
   b.print({ area: `B2:${addr(lastPrinted, l.notesCol)}`, landscape: true, fitToWidth: 1, fitToHeight: 0, titlesRow: "5:6" });
   b.furniture(ctx.codeName, ctx.asOfLabel);
@@ -177,57 +188,61 @@ interface KpiRow {
   key: string;
   label: string;
   fmt: string;
-  note?: string;
-  cell: (column: ModelOutput["columns"][number], col: number, at: (key: string) => string, helpers: { start: number; end: number }, pv: ModelOutput["periods"][string]) => { f?: string; v?: number; expect?: number } | undefined;
+  cell: (column: ModelOutput["columns"][number], col: number, at: (key: string) => string, helpers: { start: number; end: number }, pv: ModelOutput["periods"][string]) => { f: string; expect: number | string } | undefined;
 }
 
-/** KPI rows: counts from the raw lists at the period end, ratios from the statement above, management figures typed with the footnote. */
-function kpiRows(model: ModelOutput): KpiRow[] {
+/**
+ * KPI rows the engine computes for every period (DATA_CONTRACT §5.9):
+ * counts from the raw lists at the period end, ratios on the statement
+ * above. Management-stated operating facts carry their own date and sit on
+ * the Summary, not in a period column.
+ */
+function kpiRows(model: ModelOutput, customerYears: number[]): KpiRow[] {
   const rows: KpiRow[] = [];
-  const hasCustomers = !!model.customers;
-  const hasPayroll = !!model.headcount;
-  const rc = S("rawCustomers");
-  const rp = S("rawPayroll");
-  if (hasCustomers) {
+  const raw = (sheet: "rawCustomers" | "rawPayroll", c: number) => `${S(sheet)}$${colLetter(c)}:$${colLetter(c)}`;
+  const ratio = (v: number | undefined) => v ?? "n.a.";
+  if (model.customers) {
     rows.push({
       key: "kpi_customers",
-      label: "Customers, active at period end (#)",
+      label: `${model.customers.term}s, active at period end (#)`,
       fmt: FMT.body,
-      cell: (column, col, _at, h, pv) => {
-        const end = addr(h.end, col, { row: true });
-        return { f: `COUNTIFS(${rc}$E:$E,"<="&${end},${rc}$F:$F,"")+COUNTIFS(${rc}$E:$E,"<="&${end},${rc}$F:$F,">="&${end})`, expect: pv.kpis.customers };
-      },
+      cell: (c, col, _at, h, pv) => ({ f: activeCount(addr(h.end, col, { row: true }), monthPeriod(c.end, model.fiscalYearEndMonth).fiscalYear, customerYears), expect: pv.kpis.customers ?? 0 }),
     });
     rows.push({
       key: "kpi_revenue_per_customer",
-      label: "Revenue per customer ($)",
+      label: `Revenue per ${model.customers.term.toLowerCase()} ($)`,
       fmt: FMT.currency,
-      cell: (column, col, at, _h, pv) => ({ f: `IFERROR(${at("revenue")}*${K}/${at("kpi_customers")},0)`, expect: pv.kpis.revenue_per_customer ?? 0 }),
+      cell: (_c, _col, at, _h, pv) => ({ f: `IFERROR(${at("revenue")}*${K}/${at("kpi_customers")},"n.a.")`, expect: ratio(pv.kpis.revenue_per_customer) }),
     });
   }
-  if (hasPayroll) {
+  if (model.headcount) {
+    const fte = raw("rawPayroll", RAW_PAYROLL_COLS.fte);
+    const hire = raw("rawPayroll", RAW_PAYROLL_COLS.hire);
+    const term = raw("rawPayroll", RAW_PAYROLL_COLS.termination);
+    const owner = raw("rawPayroll", RAW_PAYROLL_COLS.owner);
     rows.push({
       key: "kpi_employees",
       label: "Employees, non-owner FTE at period end (#)",
       fmt: FMT.oneDp,
-      cell: (column, col, _at, h, pv) => {
-        const end = addr(h.end, col, { row: true });
-        const base = `${rp}$K:$K,${rp}$G:$G,"<="&${end},${rp}$E:$E,"No"`;
-        return { f: `SUMIFS(${base},${rp}$H:$H,"")+SUMIFS(${base},${rp}$H:$H,">"&${end})`, expect: pv.kpis.revenue_per_employee ? pv.pnl.revenue / pv.kpis.revenue_per_employee : fteAt(model, column.end) };
+      cell: (_c, col, _at, h, pv) => {
+        const d = addr(h.end, col, { row: true });
+        const onPayroll = `${fte},${hire},"<="&${d},${owner},"No"`;
+        return { f: `SUMIFS(${onPayroll},${term},"")+SUMIFS(${onPayroll},${term},">"&${d})`, expect: pv.kpis.employees ?? 0 };
       },
     });
     rows.push({
       key: "kpi_revenue_per_employee",
       label: "Revenue per employee ($)",
       fmt: FMT.currency,
-      cell: (column, col, at, _h, pv) => (column.months === 12 ? { f: `IFERROR(${at("revenue")}*${K}/${at("kpi_employees")},0)`, expect: pv.kpis.revenue_per_employee ?? 0 } : undefined),
+      // A part-year window's revenue over a year-end headcount is not a like-for-like ratio.
+      cell: (column, _col, at, _h, pv) => (column.months === 12 ? { f: `IFERROR(${at("revenue")}*${K}/${at("kpi_employees")},"n.a.")`, expect: ratio(pv.kpis.revenue_per_employee) } : undefined),
     });
   }
   rows.push({
     key: "kpi_labor_cost",
     label: "Labor cost, % of revenue (excludes owner)",
     fmt: FMT.pct1,
-    cell: (_c, _col, at, _h, pv) => ({ f: `IFERROR(${at("payroll")}/${at("revenue")},0)`, expect: pv.kpis.labor_cost_pct_revenue ?? 0 }),
+    cell: (_c, _col, at, _h, pv) => ({ f: `IFERROR(${at("payroll")}/${at("revenue")},"n.a.")`, expect: ratio(pv.kpis.labor_cost_pct_revenue) }),
   });
   const recurring = model.periods[model.columns[0]!.key]!.revenueLines.filter((x) => x.recurring);
   if (recurring.length) {
@@ -235,38 +250,10 @@ function kpiRows(model: ModelOutput): KpiRow[] {
       key: "kpi_recurring",
       label: "Recurring revenue, % of total",
       fmt: FMT.pct1,
-      cell: (_c, _col, at, _h, pv) => ({ f: `IFERROR((${recurring.map((x) => at(`rev:${x.account}`)).join("+")})/${at("revenue")},0)`, expect: pv.kpis.recurring_revenue_pct ?? 0 }),
-    });
-  }
-  // Management-stated metrics land on the latest column only, typed, with the footnote.
-  const latest = model.columns.filter((c) => !c.projected && c.ref.kind !== "pf").at(-1)!;
-  const mgmt = Object.keys(model.periods[latest.key]!.kpis).filter((k) => !["labor_cost_pct_revenue", "recurring_revenue_pct", "customers", "revenue_per_customer", "revenue_per_employee", "revenue_per_field_employee"].includes(k));
-  for (const k of mgmt) {
-    const series = model.assumptions ? undefined : undefined;
-    void series;
-    rows.push({
-      key: `kpi_${k}`,
-      label: `${kpiLabel(model, k)} (1)`,
-      fmt: kpiFormat(model, k),
-      note: "(1) Per management; not independently verified.",
-      cell: (column, _col, _at, _h, pv) => (column.key === latest.key ? { v: pv.kpis[k] } : undefined),
+      cell: (_c, _col, at, _h, pv) => ({ f: `IFERROR((${recurring.map((x) => at(`rev:${x.account}`)).join("+")})/${at("revenue")},"n.a.")`, expect: ratio(pv.kpis.recurring_revenue_pct) }),
     });
   }
   return rows;
-}
-
-function fteAt(model: ModelOutput, end: string): number {
-  return model.periods[model.columns.find((c) => c.end === end)?.key ?? ""]?.kpis.customers ?? 0;
-}
-
-function kpiLabel(model: ModelOutput, key: string): string {
-  return model.assumptions ? key.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase()) : key;
-}
-
-function kpiFormat(_model: ModelOutput, key: string): string {
-  if (/rate|pct|share/.test(key)) return FMT.pct;
-  if (/rating/.test(key)) return FMT.oneDp;
-  return FMT.body;
 }
 
 /** Annual-only mode: the Pro Forma Low / Mid / High cells of a P&L row, by the scenario's method (guide 5.2A). */
@@ -297,7 +284,10 @@ function writeScenarioCells(b: SheetBuilder, r: number, spec: ReturnType<typeof 
     }
     if (spec.key === "revenue" || spec.account || spec.contra) {
       // Revenue lines scale with the scenario's growth.
-      b.formula(r, col, `${latest}*(1+${addr(rowOf("assumptions", "scenarioGrowth") as unknown as number, 3 + i, { col: true, row: true }).replace(/^\$?([A-Z]+)\$?/, `${S("assumptions")}$$$1$$`)})`, { style: vs.style, fmt: vs.fmt, expect: (spec.value!(values) / K) || (spec.key === "revenue" ? sc.pnl.revenue / K : 0), label: `${spec.key} ${sc.name}` });
+      const growth = `${S("assumptions")}$${colLetter(3 + i)}$${rowOf("assumptions", "scenarioGrowth")}`;
+      const latestLines = model.periods[fy[fy.length - 1]!.column.key]!.revenueLines;
+      const scaled: PnlValues = { ...values, revenueLines: latestLines.map((x) => ({ ...x, amount: x.amount * (1 + sc.revenueGrowth) })) };
+      b.formula(r, col, `${latest}*(1+${growth})`, { style: vs.style, fmt: vs.fmt, expect: spec.value!(scaled) / K, label: `${spec.key} ${sc.name}` });
       return;
     }
     const mk = spec.category ? methodKey[spec.category] : undefined;
@@ -305,7 +295,9 @@ function writeScenarioCells(b: SheetBuilder, r: number, spec: ReturnType<typeof 
       const method = `${S("assumptions")}$${colLetter(3 + i)}$${rowOf("assumptions", mk)}`;
       const f = `IF(${method}="Latest year",${latest},IF(${method}="3-year average",AVERAGE(${fyRange(spec.key)}),IF(${method}="% of sales, 3-year blended",SUM(${fyRange(spec.key)})/SUM(${fyRange("revenue")})*${at("revenue")},${latest})))`;
       b.formula(r, col, f, { style: vs.style, fmt: vs.fmt, expect: spec.value!(values) / K, label: `${spec.key} ${sc.name}` });
-      b.note(r, l.notesCol, `PF: ${sc.name === "Mid" ? sc.methods[spec.category as string] ?? "" : ""}`.trim() === "PF:" ? "" : `PF: ${model.scenarios![1]!.methods[spec.category as string]}`, { align: { wrap: false } });
+      // The notes column carries the Mid case's method (guide 5.2A column K).
+      const midMethod = sc.name === "Mid" ? sc.methods[spec.category as string] : undefined;
+      if (midMethod) b.note(r, l.notesCol, `PF: ${midMethod}`);
       return;
     }
     b.formula(r, col, latest, { style: vs.style, fmt: vs.fmt, expect: spec.value!(values) / K, label: `${spec.key} ${sc.name}` });
@@ -339,7 +331,7 @@ function ladderRows(model: ModelOutput): LadderRow[] {
     { key: "reported_ebitda", label: "Reported EBITDA", kind: "keyTotal", value: (v) => v.ladder.reportedEbitda },
     { key: "reported_margin", label: "% Margin", kind: "margin", value: (v) => v.ladder.reportedMargin },
     { key: "sec_normalization", label: "Normalization Adjustments", kind: "section" },
-    ...accepted("normalization").map<LadderRow>((x) => ({ key: `n_${x.row.ref}`, label: signLabel(x), kind: "line", ref: x.row.ref, value: (v) => v.ladder.normalization.find((i) => i.ref === x.row.ref)?.amount ?? 0 })),
+    ...accepted("normalization").map<LadderRow>((x) => ({ key: `adj_${x.row.ref}`, label: signLabel(x), kind: "line", ref: x.row.ref, value: (v) => v.ladder.normalization.find((i) => i.ref === x.row.ref)?.amount ?? 0 })),
     { key: "total_normalization", label: "Total Normalization Adjustments", kind: "subtotal", value: (v) => v.ladder.totalNormalization },
     { key: "sec_owner", label: "Owner Compensation", kind: "section" },
     { key: "s1", label: "(+) Owner Compensation [S1]", kind: "line", ref: "S1", value: (v) => v.ladder.ownerCompAsPaid },
@@ -350,12 +342,12 @@ function ladderRows(model: ModelOutput): LadderRow[] {
     { key: "adj_ebitda", label: "Adj. EBITDA", kind: "keyTotal", value: (v) => v.ladder.adjEbitda },
     { key: "adj_margin", label: "% Margin", kind: "margin", value: (v) => v.ladder.adjMargin },
     { key: "sec_pf", label: "Pro Forma Adjustments", kind: "section" },
-    ...accepted("pro_forma").map<LadderRow>((x) => ({ key: `pf_${x.row.ref}`, label: signLabel(x), kind: "line", ref: x.row.ref, value: (v) => v.ladder.proForma.find((i) => i.ref === x.row.ref)?.amount ?? 0 })),
+    ...accepted("pro_forma").map<LadderRow>((x) => ({ key: `adj_${x.row.ref}`, label: signLabel(x), kind: "line", ref: x.row.ref, value: (v) => v.ladder.proForma.find((i) => i.ref === x.row.ref)?.amount ?? 0 })),
     { key: "total_pro_forma", label: "Total Pro Forma Adjustments", kind: "subtotal", value: (v) => v.ladder.totalProForma },
     { key: "pf_adj_ebitda", label: "PF Adj. EBITDA", kind: "keyTotal", value: (v) => v.ladder.pfAdjEbitda },
     { key: "pf_margin", label: "% Margin", kind: "margin", value: (v) => v.ladder.pfMargin },
     { key: "sec_memo", label: "Memo: Other Considerations (not included above)", kind: "section" },
-    ...adj.filter((x) => x.row.tier === "memo").map<LadderRow>((x) => ({ key: `m_${x.row.ref}`, label: `${x.row.description} [${x.row.ref}]`, kind: "line", ref: x.row.ref, value: (v) => v.ladder.memo.find((i) => i.ref === x.row.ref)?.amount ?? 0 })),
+    ...adj.filter((x) => x.row.tier === "memo").map<LadderRow>((x) => ({ key: `adj_${x.row.ref}`, label: `${x.row.description} [${x.row.ref}]`, kind: "line", ref: x.row.ref, value: (v) => v.ladder.memo.find((i) => i.ref === x.row.ref)?.amount ?? 0 })),
     { key: "sp_check", label: "", kind: "spacer" },
     { key: "check_reported", label: "Check: Reported EBITDA less (Net Income + D1:D3)", kind: "check" },
     { key: "check_schedule", label: "Check: Adjustments schedule less ladder, by tier", kind: "check" },
@@ -383,8 +375,7 @@ export function planLadder(ctx: TabContext): SheetBuilder {
   let r = 8;
   for (const spec of rows) b.row(spec.key, r++);
   const lastPrinted = r;
-  const helpers = writePeriodHelpers(b, l, model, lastPrinted + 3);
-  void helpers;
+  writePeriodHelpers(b, l, model, lastPrinted + 3);
   const spans = valueSpans(l);
   const adjL = adjustmentsLayout(model);
   const pnlCol = (col: number) => colLetter(col);
@@ -437,7 +428,7 @@ export function planLadder(ctx: TabContext): SheetBuilder {
           f = `${at("net_income")}+${at("d_interest")}+${at("d_taxes")}+${at("d_da")}`;
           break;
         case "total_normalization":
-          f = sumRows(b, rows, "n_", pnlCol(col));
+          f = sumRows(b, rows, "adj_N", pnlCol(col)) ?? tierTotal("tier_normalization", schedCol);
           break;
         case "sde":
           f = `${at("reported_ebitda")}+${at("total_normalization")}+${at("s1")}`;
@@ -446,7 +437,7 @@ export function planLadder(ctx: TabContext): SheetBuilder {
           f = `${at("sde")}+${at("s2")}+${at("s3")}`;
           break;
         case "total_pro_forma":
-          f = sumRows(b, rows, "pf_", pnlCol(col));
+          f = sumRows(b, rows, "adj_PF", pnlCol(col)) ?? tierTotal("tier_pro_forma", schedCol);
           break;
         case "pf_adj_ebitda":
           f = `${at("adj_ebitda")}+${at("total_pro_forma")}`;
@@ -472,7 +463,7 @@ export function planLadder(ctx: TabContext): SheetBuilder {
         }
         default:
           if (spec.ref) {
-            if (spec.key.startsWith("pf_") && !isPf) {
+            if (spec.key.startsWith("adj_PF") && !isPf) {
               b.na(rr, col, "n.a.", { style: "line" });
               continue;
             }
@@ -483,13 +474,13 @@ export function planLadder(ctx: TabContext): SheetBuilder {
       b.formula(rr, col, f, { style, fmt, expect, tol: spec.kind === "check" ? 1e-6 : undefined, label: `${spec.key} ${column.label}` });
     }
     if (spec.kind === "check") b.checkCf(rr, l.firstCol, l.lastValueCol);
-    if (l.deltas) writeDeltas(b, rr, l, spec.kind === "margin" || spec.kind === "check");
+    if (l.deltas && spec.value && !spec.key.startsWith("adj_PF")) writeDeltas(b, rr, l, spec.kind === "keyTotal" || spec.kind === "subtotal" || spec.kind === "margin" || spec.kind === "check" ? spec.kind : "line", deltaValues(model, l, (p) => spec.value!(p) / K));
     if (l.scenarios && spec.value) writeLadderScenarios(b, rr, spec, l, model, rows);
     if (spec.ref) {
+      // The basis wraps like a definitions panel; finalizeNotes grows the row to fit.
       b.formula(rr, l.notesCol, `INDEX(${S("adjustments")}$${colLetter(ADJ_BASIS_COL)}:$${colLetter(ADJ_BASIS_COL)},MATCH("[${spec.ref}]",${S("adjustments")}$${colLetter(ADJ_REF_COL)}:$${colLetter(ADJ_REF_COL)},0))`, {
         style: "note",
-        align: { wrap: false },
-        expect: model.adjustments.find((x) => x.row.ref === spec.ref)?.row.basis,
+        expect: model.adjustments.find((x) => x.row.ref === spec.ref)?.row.basis ?? "",
         label: `basis ${spec.ref}`,
       });
     }
@@ -512,9 +503,15 @@ export function planLadder(ctx: TabContext): SheetBuilder {
   return b;
 }
 
-function sumRows(b: SheetBuilder, rows: LadderRow[], prefix: string, col: string): string {
+/** SUM over a tier's ladder rows, or undefined when the tier has no accepted rows. */
+function sumRows(b: SheetBuilder, rows: LadderRow[], prefix: string, col: string): string | undefined {
   const keys = rows.filter((x) => x.key.startsWith(prefix)).map((x) => `${col}${b.r(x.key)}`);
-  return keys.length ? `SUM(${keys[0]}:${keys[keys.length - 1]})` : "0";
+  return keys.length ? `SUM(${keys[0]}:${keys[keys.length - 1]})` : undefined;
+}
+
+/** A tier's accepted total for one schedule column, for a ladder subtotal whose tier has no rows to list. */
+function tierTotal(key: string, schedCol: number): string {
+  return `${S("adjustments")}${colLetter(schedCol)}${rowOf("adjustments", key)}`;
 }
 
 /** Annual-only mode: the ladder's Low / Mid / High columns read the scenario P&L and the latest year's schedule. */
@@ -539,7 +536,7 @@ function writeLadderScenarios(b: SheetBuilder, r: number, spec: LadderRow, l: Pe
         f = `${at("net_income")}+${at("d_interest")}+${at("d_taxes")}+${at("d_da")}`;
         break;
       case "total_normalization":
-        f = sumRows(b, rows, "n_", colLetter(col));
+        f = sumRows(b, rows, "adj_N", colLetter(col)) ?? tierTotal("tier_normalization", latestSched);
         break;
       case "sde":
         f = `${at("reported_ebitda")}+${at("total_normalization")}+${at("s1")}`;
@@ -548,10 +545,11 @@ function writeLadderScenarios(b: SheetBuilder, r: number, spec: LadderRow, l: Pe
         f = `${at("sde")}+${at("s2")}+${at("s3")}`;
         break;
       case "total_pro_forma":
-        f = "0";
-        break;
+        // Pro forma rows are run-rate changes to the latest period; the annual scenarios restate the lines instead.
+        b.na(r, col, "n.a.", { style });
+        return;
       case "pf_adj_ebitda":
-        f = `${at("adj_ebitda")}+${at("total_pro_forma")}`;
+        f = `${at("adj_ebitda")}+N(${at("total_pro_forma")})`;
         break;
       case "reported_margin":
       case "sde_margin":
@@ -563,7 +561,7 @@ function writeLadderScenarios(b: SheetBuilder, r: number, spec: LadderRow, l: Pe
         break;
       }
       default:
-        if (spec.ref && !spec.key.startsWith("pf_")) f = scheduleRef(spec.ref, latestSched);
+        if (spec.ref && !spec.key.startsWith("adj_PF")) f = scheduleRef(spec.ref, latestSched);
     }
     if (f !== undefined) b.formula(r, col, f, { style, fmt, expect, label: `${spec.key} ${sc.name}` });
   });
@@ -572,7 +570,12 @@ function writeLadderScenarios(b: SheetBuilder, r: number, spec: LadderRow, l: Pe
 // --- Adjustments schedule -------------------------------------------------------------------------
 
 const TEXT_HEADERS = ["Ref", "Adjustment", "Tier", "Category", "Basis", "Source document", "Evidence", "Status", "In CIM", "P&L line", "PF method"];
-const TEXT_WIDTHS = [WIDTH.labelAdjustments - 28, 30, 16, 24, 60, 28, 16, 11, 8, 14, 26];
+/**
+ * Text-block widths sum to 158 so the block prints as one landscape page at
+ * 80% and the periods as a second, with Ref and Adjustment repeated (the
+ * guide's single-page fit put Arial 9 near 4 pt).
+ */
+const TEXT_WIDTHS = [7, 22, 13, 14, 36, 18, 13, 9, 6, 9, 11];
 
 const STATUS_LABEL: Record<Adjustment["status"], string> = { proposed: "Proposed", supported: "Supported", accepted: "Accepted", excluded: "Excluded" };
 const EVIDENCE_LABEL = { documented: "Documented", management_representation: "Management representation" } as const;
@@ -583,7 +586,7 @@ export function planAdjustments(ctx: TabContext): SheetBuilder {
   const l = adjustmentsLayout(model);
   const months = gridMonths(model);
   const n = months.length;
-  const monthStart = ADJ_MONTH_START(model);
+  const monthStart = adjMonthStart(model);
   const lastMonthCol = n ? monthStart + n - 1 : monthStart - 1;
   const lastCol = n ? lastMonthCol : l.lastValueCol;
   b.width(1, WIDTH.gutter);
@@ -595,7 +598,7 @@ export function planAdjustments(ctx: TabContext): SheetBuilder {
     b.widths(monthStart, lastMonthCol, WIDTH.value);
     b.outlineCols(monthStart, lastMonthCol, 1);
   }
-  b.anatomy({ subtitle: "Recast and adjustments schedule ($000s; positive increases EBITDA)", lastCol, toggleCol: l.lastValueCol, masterToggle: ctx.masterToggle });
+  b.anatomy({ subtitle: "Recast and adjustments schedule ($000s; positive increases EBITDA)", lastCol: l.lastValueCol, toggleCol: l.lastValueCol, masterToggle: ctx.masterToggle });
   b.text(3, l.lastValueCol - 1, "Print", { align: { horizontal: "right" } });
   b.tier1(5, [{ from: 2, to: 12, label: "Schedule" }, ...l.groups, ...(n ? [{ from: monthStart, to: lastMonthCol, label: "Monthly ($000s)" }] : [])]);
   TEXT_HEADERS.forEach((h, i) => b.cell(6, 2 + i, { style: "header", v: h, role: "text", align: { horizontal: i < 8 ? "left" : "center" } }));
@@ -617,7 +620,6 @@ export function planAdjustments(ctx: TabContext): SheetBuilder {
   const monthHeaderRow = n ? `$${colLetter(monthStart)}$6:$${colLetter(lastMonthCol)}$6` : "";
   const monthRowRange = (r: number) => `$${colLetter(monthStart)}${r}:$${colLetter(lastMonthCol)}${r}`;
   const fyCols = l.cols.filter((c) => c.column.ref.kind === "fiscal_year");
-  const pfCol = l.cols.find((c) => c.column.ref.kind === "pf");
   const series = model.monthly?.series;
   const latestFy = fyCols[fyCols.length - 1]?.column.fiscalYear;
 
@@ -629,26 +631,40 @@ export function planAdjustments(ctx: TabContext): SheetBuilder {
       label: `ref ${row.ref}`,
       align: { horizontal: "left" },
     });
-    b.text(r, 3, row.description);
-    b.cell(r, ADJ_TIER_COL, { v: ADJUSTMENT_TIER_LABELS[row.tier], role: "input" });
-    b.cell(r, ADJ_CATEGORY_COL, { v: ADJUSTMENT_CATEGORY_LABELS[row.category], role: "input" });
-    b.text(r, ADJ_BASIS_COL, row.basis, { align: { wrap: true, vertical: "top" } });
-    b.text(r, 7, row.sourceDocument, { align: { wrap: true, vertical: "top" } });
-    b.cell(r, 8, { v: EVIDENCE_LABEL[row.evidence], role: "input" });
+    const wrap = { wrap: true, vertical: "top" } as const;
+    b.text(r, 3, row.description, { align: wrap });
+    b.cell(r, ADJ_TIER_COL, { v: ADJUSTMENT_TIER_LABELS[row.tier], role: "input", align: wrap });
+    b.cell(r, ADJ_CATEGORY_COL, { v: ADJUSTMENT_CATEGORY_LABELS[row.category], role: "input", align: wrap });
+    b.text(r, ADJ_BASIS_COL, row.basis, { align: wrap });
+    b.text(r, 7, row.sourceDocument, { align: wrap });
+    b.cell(r, 8, { v: EVIDENCE_LABEL[row.evidence], role: "input", align: wrap });
     b.cell(r, ADJ_STATUS_COL, { v: STATUS_LABEL[row.status], role: "input", align: { horizontal: "center" } });
     b.formula(r, 10, `IF(${addr(r, ADJ_STATUS_COL)}="Accepted","Yes","No")`, { expect: row.status === "accepted" ? "Yes" : "No", label: `in CIM ${row.ref}`, align: { horizontal: "center" } });
     b.text(r, 11, row.pnlLine ? IS_LABELS[row.pnlLine] : "", { align: { horizontal: "center" } });
-    b.text(r, 12, row.pfMethod ?? "");
-    const hasMonths = n > 0 && (!!row.byMonth || ["pnl", "owner_comp", "replacement_salary", "capital_reserve"].includes(row.origin));
+    b.text(r, 12, row.pfMethod ?? "", { align: { wrap: true, vertical: "top" } });
+    // Months exactly when the engine has them (adjustmentInWindow): a row without months is prorated from its fiscal years.
+    const hasMonths = n > 0 && !!row.byMonth;
     const isPf = row.tier === "pro_forma";
+    // An add-back tied to months by proportion: its fiscal years (and a YTD stub amount) are the blue inputs, each month a formula.
+    const allocation = hasMonths ? allocationFormulas(row, model, r, l) : undefined;
     // Month cells.
     if (hasMonths) {
       months.forEach((m, i) => {
         const col = monthStart + i;
-        const link = monthLink(row, model, i);
+        const link = allocation?.[i] ?? monthLink(row, model, i);
         const engine = amountForMonth(row, model, i);
-        if (link) b.formula(r, col, link.f, { fmt: FMT.body, expect: engine / K, label: `${row.ref} ${m}` });
+        if (link?.f) b.formula(r, col, link.f, { fmt: FMT.body, expect: engine / K, label: `${row.ref} ${m}` });
         else b.num(r, col, engine / K, { fmt: FMT.body });
+      });
+    } else if (n > 0 && !isPf) {
+      // A row without months spreads each fiscal year evenly over its months, as the engine prorates it, so the tier totals by month hold it.
+      months.forEach((m, i) => {
+        const col = monthStart + i;
+        const fy = model.monthly!.months[i]!.fiscalYear;
+        const fyCol = fyCols.find((c) => c.column.fiscalYear === fy);
+        const engine = (row.byFiscalYear[fy] ?? 0) / 12 / K;
+        if (fyCol) b.formula(r, col, `${addr(r, fyCol.col)}/12`, { fmt: FMT.body, expect: engine, label: `${row.ref} ${m} (prorated)` });
+        else b.num(r, col, engine, { fmt: FMT.body });
       });
     }
     // Period cells.
@@ -658,6 +674,11 @@ export function planAdjustments(ctx: TabContext): SheetBuilder {
       const engine = (x.byColumn[key] ?? 0) / K;
       if (isPf && !isPfColumn) {
         b.na(r, col, "n.a.", { style: "line" });
+        continue;
+      }
+      if (allocation && (column.ref.kind === "fiscal_year" || (column.ref.kind === "ytd" && !column.priorYear && row.stub === "amount"))) {
+        // The inputs the month formulas scale: each fiscal year, and the YTD amount the advisor gave for the stub.
+        b.num(r, col, engine, { fmt: FMT.body });
         continue;
       }
       if (hasMonths) {
@@ -714,7 +735,7 @@ export function planAdjustments(ctx: TabContext): SheetBuilder {
   }
   b.cell(b.r("tier_s3"), 2, { v: `Capital reserve [S3]${model.mode.mode === "mainStreet" ? "" : " (zero outside Main Street mode)"}` });
   b.note(lastPrinted, 2, "Note: refs number by tier in row order (insert a row and every ref renumbers). Only Accepted rows enter the ladder; Proposed, Supported and Excluded rows stay out of every total. Rows with months are exact for YTD and LTM; rows without months are prorated by fiscal-year months in the window.");
-  b.print({ area: `B2:${addr(lastPrinted, l.lastValueCol)}`, landscape: true, fitToWidth: 1, fitToHeight: 0, titlesRow: "5:6" });
+  b.print({ area: `B2:${addr(lastPrinted, l.lastValueCol)}`, landscape: true, scale: 80, titlesRow: "5:6", titlesCol: "B:C", colBreaks: [12] });
   b.furniture(ctx.codeName, ctx.asOfLabel);
   b.freeze(7, 3);
   return b;
@@ -724,12 +745,70 @@ function sumTier(model: ModelOutput, columnKey: string, pick: (r: Adjustment) =>
   return model.adjustments.filter((x) => pick(x.row) && (allStatuses || x.row.status === "accepted")).reduce((s, x) => s + (x.byColumn[columnKey] ?? 0), 0);
 }
 
-/** The engine's amount for a schedule row in one month: its months when it has them, else the category link's value. */
+/**
+ * Month formulas for an add-back the data layer allocated by proportion
+ * (ingest/adjustments.ts monthsForRow): a month of a full fiscal year is that
+ * year's amount (the row's blue fiscal-year cell) × the named accounts'
+ * month ÷ their fiscal year on the Databook, or a twelfth when the row names
+ * no account; a stub month follows the row's stub rule (the YTD cell, a
+ * run-rate of the latest year, or a typed zero). Returns undefined when the
+ * row's months do not follow that rule (a hand-entered spread), which then
+ * stays typed.
+ */
+function allocationFormulas(row: Adjustment, model: ModelOutput, r: number, l: PeriodLayout): ({ f?: string } | undefined)[] | undefined {
+  if (row.origin !== "advisor" && row.origin !== "addbacks_csv") return undefined;
+  const grid = model.monthly!;
+  const hist = model.columns.filter((c) => !c.projected);
+  const accounts = row.accounts ?? [];
+  const db = model.databook?.pnl ?? [];
+  if (accounts.some((a) => !db.some((d) => d.account === a))) return undefined;
+  const weight = (m: string) => (accounts.length ? accounts.reduce((s, a) => s + (db.find((d) => d.account === a)!.byMonth?.[m] ?? 0), 0) : 1);
+  const fyCell = (fy: number) => {
+    const c = l.cols.find((x) => x.column.ref.kind === "fiscal_year" && x.column.fiscalYear === fy);
+    return c ? addr(r, c.col) : undefined;
+  };
+  const ytd = l.cols.find((x) => x.column.ref.kind === "ytd" && !x.column.priorYear);
+  const dbCol = (key: string) => DATABOOK_COL.periodStart + hist.findIndex((c) => c.key === key);
+  const dbRange = (c: number) => `${S("databook")}$${colLetter(c)}$${rowOf("databook", "first")}:$${colLetter(c)}$${rowOf("databook", "last")}`;
+  const acc = (c: number) => accounts.map((a) => `SUMIFS(${dbRange(c)},${dbRange(DATABOOK_COL.account)},"${a.replace(/"/g, '""')}")`).join("+");
+  const share = (monthDbCol: number, amount: string, baseDbCol: number, n: number) => (accounts.length ? `IFERROR((${acc(monthDbCol)})*${amount}/(${acc(baseDbCol)}),${amount}/${n})` : `${amount}/${n}`);
+  const latestFy = hist.filter((c) => c.ref.kind === "fiscal_year").at(-1)?.fiscalYear;
+  const stubKeys = grid.months.filter((m) => !hist.some((c) => c.ref.kind === "fiscal_year" && c.fiscalYear === m.fiscalYear)).map((m) => m.key);
+  const out: ({ f?: string } | undefined)[] = [];
+  for (const [i, m] of grid.months.entries()) {
+    const monthDbCol = MONTH_START + i;
+    let f: string | undefined;
+    let value: number;
+    const fy = m.fiscalYear;
+    if (!stubKeys.includes(m.key)) {
+      const cell = fyCell(fy);
+      if (!cell) return undefined;
+      const months = grid.months.filter((x) => x.fiscalYear === fy).map((x) => x.key);
+      const w = months.reduce((s, x) => s + weight(x), 0);
+      value = w ? ((row.byFiscalYear[fy] ?? 0) * weight(m.key)) / w : (row.byFiscalYear[fy] ?? 0) / 12;
+      f = share(monthDbCol, cell, dbCol(`FY${fy}`), 12);
+    } else if (row.stub === "amount" && ytd) {
+      const total = stubKeys.reduce((s, x) => s + (row.byMonth![x] ?? 0), 0);
+      const w = stubKeys.reduce((s, x) => s + weight(x), 0);
+      value = w ? (total * weight(m.key)) / w : total / stubKeys.length;
+      f = share(monthDbCol, addr(r, ytd.col), dbCol(ytd.column.key), stubKeys.length);
+    } else if (row.stub === "run_rate" && latestFy !== undefined && fyCell(latestFy)) {
+      const months = grid.months.filter((x) => x.fiscalYear === latestFy).map((x) => x.key);
+      const w = months.reduce((s, x) => s + weight(x), 0);
+      value = w ? ((row.byFiscalYear[latestFy] ?? 0) * weight(m.key)) / w : (row.byFiscalYear[latestFy] ?? 0) / 12;
+      f = share(monthDbCol, fyCell(latestFy)!, dbCol(`FY${latestFy}`), 12);
+    } else if (row.stub === "zero") {
+      value = 0;
+    } else return undefined;
+    if (Math.abs(value - (row.byMonth![m.key] ?? 0)) > 0.005) return undefined;
+    out.push(f ? { f } : {});
+  }
+  return out;
+}
+
+/** The engine's amount for a schedule row in one month. */
 function amountForMonth(row: Adjustment, model: ModelOutput, i: number): number {
-  const m = model.monthly!.months[i]!.key;
-  if (row.byMonth) return row.byMonth[m] ?? 0;
-  const cat = categoryOf(row);
-  return cat ? cat.sign * model.monthly!.series[cat.category]![i]! : 0;
+  return row.byMonth?.[model.monthly!.months[i]!.key] ?? 0;
 }
 
 function categoryOf(row: Adjustment): { category: IsCategory; sign: 1 | -1 } | undefined {
@@ -748,7 +827,7 @@ function monthLink(row: Adjustment, model: ModelOutput, i: number): { f: string 
   const months = model.monthly!.months;
   const colL = colLetter(MONTH_START + i);
   const series = model.monthly!.series;
-  const equalsSeries = (key: string, sign: 1 | -1) => !row.byMonth || months.every((m, k) => Math.abs((row.byMonth![m.key] ?? 0) - sign * series[key]![k]!) < 0.005);
+  const equalsSeries = (key: string, sign: 1 | -1) => months.every((m, k) => Math.abs((row.byMonth?.[m.key] ?? 0) - sign * series[key]![k]!) < 0.005);
   const cat = categoryOf(row);
   if (cat && equalsSeries(cat.category, cat.sign)) return { f: `${S("monthly")}${colL}${rowOf("monthly", cat.category === "interest_expense" ? "interest" : cat.category === "income_tax" ? "tax" : cat.category === "depreciation_amortization" ? "da" : "owner_comp")}` };
   if (row.origin === "replacement_salary") return { f: `-${A("replacementCost")}/12/${K}` };
@@ -759,5 +838,3 @@ function monthLink(row: Adjustment, model: ModelOutput, i: number): { f: string 
   }
   return undefined;
 }
-
-export { COLOR, MONTHLY_FIRST_ROW };

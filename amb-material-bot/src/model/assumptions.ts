@@ -281,10 +281,12 @@ export function defaultAssumptions(ds: FinancialDataset, row: RequestRow): Assum
       dscrHurdle: 1.25,
     },
     scenarios: {
-      // SUN's pattern (guide F6 §3.3): utilities-type costs at the blended ratio, repairs and other at the average, insurance-type costs at the latest year.
-      low: { revenueGrowth: round(growth[0]! - 0.03, 4), methods: { cogs: "Latest year", payroll: "% of sales, 3-year blended", rent: "Latest year", marketing: "Latest year", otherOpex: "Latest year" }, multiple: 2.5 },
+      // SUN's pattern (guide F6 §3.3) for Mid: variable costs at the blended ratio, fixed costs at the latest year, other at the average.
+      // Low lets every variable cost scale with sales; High holds payroll at the latest year (operating leverage).
+      // Low and High each differ from Mid on growth and an operating driver (C29), and Low <= Mid <= High on EBITDA.
+      low: { revenueGrowth: round(growth[0]! - 0.03, 4), methods: { cogs: "% of sales, 3-year blended", payroll: "% of sales, 3-year blended", rent: "Latest year", marketing: "% of sales, 3-year blended", otherOpex: "% of sales, 3-year blended" }, multiple: 2.5 },
       mid: { revenueGrowth: growth[0]!, methods: { cogs: "% of sales, 3-year blended", payroll: "% of sales, 3-year blended", rent: "Latest year", marketing: "Latest year", otherOpex: "3-year average" }, multiple: 3.0 },
-      high: { revenueGrowth: round(growth[0]! + 0.03, 4), methods: { cogs: "% of sales, 3-year blended", payroll: "3-year average", rent: "Latest year", marketing: "3-year average", otherOpex: "3-year average" }, multiple: 3.5 },
+      high: { revenueGrowth: round(growth[0]! + 0.03, 4), methods: { cogs: "% of sales, 3-year blended", payroll: "Latest year", rent: "Latest year", marketing: "3-year average", otherOpex: "3-year average" }, multiple: 3.5 },
     },
   };
 }

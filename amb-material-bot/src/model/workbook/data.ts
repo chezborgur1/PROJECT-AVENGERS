@@ -4,12 +4,11 @@
 // export), Mapping, and the Raw tabs (values only, as exported).
 
 import { IS_CATEGORIES, IS_LABELS, SOURCE_LABELS, type FinancialDataset, type IsCategory, type MonthKey } from "../../domain/financials.ts";
-import { addr, colLetter, range, rowOf, SheetBuilder } from "../sheet.ts";
+import { addr, colLetter, fitScale, range, rowOf, SheetBuilder } from "../sheet.ts";
 import { COLOR, FMT, WIDTH } from "../styles.ts";
 import type { ModelOutput } from "../types.ts";
 import type { TabContext } from "./assumptionsTab.ts";
-import { A } from "./assumptionsTab.ts";
-import { applyPeriodWidths, gridMonths, LATEST_FY, FYE, periodLayout, S, SHEET, serialOfMonthStart, sumifsFormula, valueSpans, writeMonthHeaders, writePeriodHelpers, type PeriodLayout } from "./layout.ts";
+import { adjMonthStart, applyPeriodWidths, ASOF, gridMonths, LATEST_FY, FYE, periodLayout, S, SHEET, serialOfMonthStart, sumifsFormula, valueSpans, writeMonthHeaders, writePeriodHelpers, type PeriodLayout } from "./layout.ts";
 
 /** Month columns start here on Monthly P&L and Databook so the guide's `SUMIFS(Databook!<month col>, ...)` reads the same letter. */
 export const MONTH_START = 17;
@@ -102,6 +101,11 @@ function isContra(model: ModelOutput, account: string): boolean {
   return !!model.databook?.pnl.find((r) => r.account === account && r.category === "revenue" && Object.values(r.byFiscalYear).every((v) => v <= 0) && Object.values(r.byFiscalYear).some((v) => v < 0));
 }
 
+/** The revenue accounts the "Less: discounts and refunds" row sums. */
+export function contraAccounts(model: ModelOutput): string[] {
+  return (model.databook?.pnl ?? []).filter((x) => x.category === "revenue" && isContra(model, x.account)).map((x) => x.account);
+}
+
 /** Style a P&L row's label and value cells by kind. */
 export function stylePnlRow(b: SheetBuilder, r: number, spec: PnlRowSpec, spans: [number, number][], marginRowFollows: boolean): void {
   switch (spec.kind) {
@@ -185,7 +189,9 @@ export function planMonthly(ctx: TabContext): SheetBuilder | undefined {
   b.anatomy({ subtitle: "Monthly P&L ($000s)", lastCol: notesCol, toggleCol: l.lastValueCol, masterToggle: ctx.masterToggle });
   b.text(3, l.lastValueCol - 1, "Print", { align: { horizontal: "right" } });
 
-  b.tier1(5, [...l.groups, { from: firstMonthCol, to: lastMonthCol, label: "Monthly ($000s)" }, { from: notesCol, to: notesCol, label: "Notes" }]);
+  // One tier-1 group per fiscal year of months, so each printed page (one fiscal year) names its year.
+  const fyGroups = fiscalYearBlocks(model, firstMonthCol).map((g) => ({ from: g.from, to: g.to, label: `Monthly: FY${g.fiscalYear} ($000s)` }));
+  b.tier1(5, [...l.groups, ...fyGroups, { from: notesCol, to: notesCol, label: "Notes" }]);
   b.tier2(6, { from: l.firstCol, to: l.lastValueCol }, [], "Income Statement");
   if (l.deltas) {
     b.cell(6, l.deltas.dollar, { style: "header", v: "($)", role: "text" });
@@ -208,11 +214,10 @@ export function planMonthly(ctx: TabContext): SheetBuilder | undefined {
   const monthHeaderRow = `$${colLetter(firstMonthCol)}$6:$${colLetter(lastMonthCol)}$6`;
   const dbFirst = DATABOOK_FIRST_ROW;
   const dbLast = DATABOOK_FIRST_ROW + (model.databook?.pnl.length ?? 1) - 1;
-  const dbCategory = `${S("databook")}$E$${dbFirst}:$E$${dbLast}`;
-  const dbAccount = `${S("databook")}$B$${dbFirst}:$B$${dbLast}`;
-  const adjFirst = rowOf("adjustments", "tierFirst");
-  const adjLast = rowOf("adjustments", "tierLast");
-  const adjMonthFirst = `$${colLetter(ADJ_MONTH_START)}`;
+  const dbColumn = (c: number) => `${S("databook")}$${colLetter(c)}$${dbFirst}:$${colLetter(c)}$${dbLast}`;
+  const dbCategory = dbColumn(DATABOOK_COL.category);
+  const dbAccount = dbColumn(DATABOOK_COL.account);
+  const adjMonthFirst = adjMonthStart(model);
   const series = model.monthly.series;
 
   for (const spec of rows) {
@@ -221,12 +226,9 @@ export function planMonthly(ctx: TabContext): SheetBuilder | undefined {
     stylePnlRow(b, rr, spec, [...spans, monthSpan], next?.kind === "margin");
     if (spec.kind === "section" || spec.kind === "spacer") continue;
     const vs = valueStyle(spec.kind);
-    const at = (key: string) => addr(rr, 0, {}).replace(/^[A-Z]*/, "") && "";
-    void at;
     // Month cells first, then the period block sums them.
     months.forEach((m, i) => {
       const col = firstMonthCol + i;
-      const cell = addr(rr, col);
       const colL = colLetter(col);
       const inSheet = (key: string) => `${colL}${b.r(key)}`;
       let f: string | undefined;
@@ -238,9 +240,9 @@ export function planMonthly(ctx: TabContext): SheetBuilder | undefined {
         f = `SUMIFS(${S("databook")}${colL}$${dbFirst}:${colL}$${dbLast},${dbAccount},"${spec.account.replace(/"/g, '""')}")/${K}`;
         expect = (series[`rev:${spec.account}`]?.[i] ?? 0) / K;
       } else if (spec.contra) {
-        const contraAccounts = model.databook!.pnl.filter((x) => x.category === "revenue" && isContra(model, x.account)).map((x) => x.account);
-        f = contraAccounts.map((acc) => `SUMIFS(${S("databook")}${colL}$${dbFirst}:${colL}$${dbLast},${dbAccount},"${acc.replace(/"/g, '""')}")`).join("+") + `/${K}`;
-        expect = contraAccounts.reduce((s, acc) => s + (series[`rev:${acc}`]?.[i] ?? 0), 0) / K;
+        const contra = contraAccounts(model);
+        f = contra.map((acc) => `SUMIFS(${S("databook")}${colL}$${dbFirst}:${colL}$${dbLast},${dbAccount},"${acc.replace(/"/g, '""')}")`).join("+") + `/${K}`;
+        expect = contra.reduce((s, acc) => s + (series[`rev:${acc}`]?.[i] ?? 0), 0) / K;
       } else if (spec.kind === "margin") {
         const base = spec.key === "gross_margin" ? "gross_profit" : spec.key === "ebitda_margin" ? "reported_ebitda" : "net_income";
         f = `IFERROR(${inSheet(base)}/${inSheet("revenue")},"n.m.")`;
@@ -260,17 +262,14 @@ export function planMonthly(ctx: TabContext): SheetBuilder | undefined {
       } else if (["definitional", "total_normalization", "owner_comp_as_paid", "market_replacement", "capital_reserve", "total_pro_forma"].includes(spec.key)) {
         const tierRowKey = spec.key === "definitional" ? "tier_definitional" : spec.key === "total_normalization" ? "tier_normalization" : spec.key === "owner_comp_as_paid" ? "tier_s1" : spec.key === "market_replacement" ? "tier_s2" : spec.key === "capital_reserve" ? "tier_s3" : "tier_pro_forma";
         const adjRow = rowOf("adjustments", tierRowKey);
-        const adjMonths = (row: string) => `${S("adjustments")}${adjMonthFirst}$${row}:$${colLetter(ADJ_MONTH_START + n - 1)}$${row}`;
+        const adjMonths = (row: string) => `${S("adjustments")}$${colLetter(adjMonthFirst)}$${row}:$${colLetter(adjMonthFirst + n - 1)}$${row}`;
         f = `INDEX(${adjMonths(adjRow)},MATCH(${colL}$6,${adjMonths("6")},0))`;
         expect = series[spec.key]![i]! / K;
-        void adjFirst;
-        void adjLast;
       } else if (spec.calc) {
         f = spec.calc(inSheet);
         expect = series[spec.key === "revenue" ? "revenue" : spec.key]![i]! / K;
       }
       if (f !== undefined) b.formula(rr, col, f, { style: vs.style, fmt: vs.fmt, expect, label: `${spec.key} ${m}` });
-      void cell;
     });
     // Period block: SUMIFS over the month cells, except ratios which recompute.
     for (const { column, col } of l.cols) {
@@ -284,7 +283,7 @@ export function planMonthly(ctx: TabContext): SheetBuilder | undefined {
         continue;
       }
       if (spec.kind === "ratio") {
-        const prior = priorColumn(model, column, l);
+        const prior = priorColumn(column, l);
         if (!prior) {
           b.na(rr, col, "n.a.", { style: vs.style });
           continue;
@@ -296,38 +295,65 @@ export function planMonthly(ctx: TabContext): SheetBuilder | undefined {
       const f = sumifsFormula({ valuesRow: monthRow(spec.key), monthsRow: monthHeaderRow, startCell: addr(helpers.start, col, { row: true }), endCell: addr(helpers.end, col, { row: true }) });
       b.formula(rr, col, f, { style: vs.style, fmt: vs.fmt, expect: spec.value!(values) / K, label: `${spec.key} ${column.label}` });
     }
-    if (l.deltas) writeDeltas(b, rr, l, vs.fmt === FMT.pct1 || vs.fmt === FMT.pct);
+    if (l.deltas && spec.value) writeDeltas(b, rr, l, spec.kind, deltaValues(model, l, (p) => spec.value!({ pnl: p.pnl, ladder: p.ladder, revenueLines: p.revenueLines }) / K));
   }
   // Tie-out: net income on the grid against the Databook, per month (guide 5.2, V51 row 71).
   b.text(tieRow, 2, "Tie Out: Net Income less Databook", { style: "check" });
-  const dbSign = IS_CATEGORIES.map((c) => `${c === "revenue" || c === "other_income" ? "" : "-"}SUMIFS(${S("databook")}COLX$${dbFirst}:COLX$${dbLast},${dbCategory},"${c}")`).join("");
+  const dbSign = IS_CATEGORIES.map((c, i) => `${c === "revenue" || c === "other_income" ? (i ? "+" : "") : "-"}SUMIFS(${S("databook")}COLX$${dbFirst}:COLX$${dbLast},${dbCategory},"${c}")`).join("");
   months.forEach((m, i) => {
     const col = firstMonthCol + i;
     const colL = colLetter(col);
     const f = `${colL}${b.r("net_income")}-(${dbSign.replace(/COLX/g, colL)})/${K}`;
     b.formula(tieRow, col, f, { style: "check", fmt: FMT.check, expect: 0, tol: 1e-6, label: `tie out ${m}` });
   });
-  b.checkCf(tieRow, firstMonthCol, lastMonthCol);
+  // Each period's tie is the sum of its months' ties, so a break in any month shows in the period block too.
+  for (const { column, col } of l.cols) {
+    const f = sumifsFormula({ valuesRow: monthRow("tie_out"), monthsRow: monthHeaderRow, startCell: addr(helpers.start, col, { row: true }), endCell: addr(helpers.end, col, { row: true }) });
+    b.formula(tieRow, col, f, { style: "check", fmt: FMT.check, expect: 0, tol: 1e-6, label: `tie out ${column.label}` });
+  }
+  b.checkCf(tieRow, l.firstCol, lastMonthCol);
   b.note(lastPrinted + 1, 2, "Note: category rows are SUMIFS of the Databook by AMB category; revenue lines by account; ladder rungs read the Adjustments tier totals by month. Tie Out must equal zero.");
 
-  const lastCol = notesCol;
+  // Page 1 is the period block; each later page one fiscal year of months with column B repeated (guide 5.2).
+  const pages = [range2(2, l.lastValueCol + 1), ...fyGroups.map((g) => [2, ...range2(g.from, g.to)])];
   b.print({
-    area: `B2:${addr(lastPrinted, lastCol)}`,
+    area: `B2:${addr(lastPrinted, notesCol)}`,
     landscape: true,
-    fitToWidth: 0,
-    fitToHeight: 1,
+    scale: fitScale(b.plan, pages, lastPrinted),
     titlesRow: "5:6",
     titlesCol: "B:B",
-    colBreaks: [l.lastValueCol + 1, ...months.map((_, i) => firstMonthCol + i).filter((c, i) => (i + 1) % 12 === 0 && i + 1 < n)],
+    colBreaks: [firstMonthCol - 1, ...fyGroups.slice(1).map((g) => g.from - 1)],
   });
   b.furniture(ctx.codeName, ctx.asOfLabel);
   b.freeze(7, 3);
-  b.toggleRanges = undefined;
   return b;
 }
 
+/** The engine's PF and LTM CY values of a row, for the delta columns. */
+export function deltaValues(model: ModelOutput, l: PeriodLayout, value: (p: ModelOutput["periods"][string]) => number): { pf: number | undefined; ltm: number | undefined } {
+  const pf = l.cols.find((c) => c.column.ref.kind === "pf");
+  const ltm = l.cols.find((c) => c.column.ref.kind === "ltm" && !c.column.priorYear);
+  return { pf: pf ? value(model.periods[pf.column.key]!) : undefined, ltm: ltm ? value(model.periods[ltm.column.key]!) : undefined };
+}
+
+/** Consecutive integers from..to. */
+function range2(from: number, to: number): number[] {
+  return Array.from({ length: Math.max(0, to - from + 1) }, (_, i) => from + i);
+}
+
+/** The grid's months grouped by fiscal year, as column spans starting at `firstCol`. */
+export function fiscalYearBlocks(model: ModelOutput, firstCol: number): { fiscalYear: number; from: number; to: number }[] {
+  const blocks: { fiscalYear: number; from: number; to: number }[] = [];
+  (model.monthly?.months ?? []).forEach((m, i) => {
+    const last = blocks.at(-1);
+    if (last && last.fiscalYear === m.fiscalYear) last.to = firstCol + i;
+    else blocks.push({ fiscalYear: m.fiscalYear, from: firstCol + i, to: firstCol + i });
+  });
+  return blocks;
+}
+
 /** The column one year earlier in the same group, for y/y growth. */
-export function priorColumn(model: ModelOutput, column: ModelOutput["columns"][number], l: PeriodLayout): { column: ModelOutput["columns"][number]; col: number } | undefined {
+export function priorColumn(column: ModelOutput["columns"][number], l: PeriodLayout): { column: ModelOutput["columns"][number]; col: number } | undefined {
   if (column.ref.kind === "fiscal_year") {
     const prev = l.cols.find((c) => c.column.ref.kind === "fiscal_year" && c.column.fiscalYear === column.fiscalYear! - 1);
     return prev;
@@ -336,155 +362,193 @@ export function priorColumn(model: ModelOutput, column: ModelOutput["columns"][n
   return undefined;
 }
 
-/** PF vs. LTM delta columns: Delta ($) and Delta (%). */
-export function writeDeltas(b: SheetBuilder, r: number, l: PeriodLayout, isRatio: boolean): void {
-  if (!l.deltas) return;
+/**
+ * PF vs. LTM delta columns (guide 5.2 N:O): Delta ($) and Delta (%), styled
+ * as the row, with the engine's values for the verifier. Rows that are
+ * ratios, checks or not numbers in either column leave the deltas blank.
+ */
+export function writeDeltas(b: SheetBuilder, r: number, l: PeriodLayout, kind: PnlRowKind, values?: { pf: number | string | undefined; ltm: number | string | undefined }): void {
   const pf = l.cols.find((c) => c.column.ref.kind === "pf");
   const ltm = l.cols.find((c) => c.column.ref.kind === "ltm" && !c.column.priorYear);
-  if (!pf || !ltm) return;
-  if (isRatio) {
-    b.na(r, l.deltas.dollar, "", { style: "line" });
-    return;
-  }
-  b.formula(r, l.deltas.dollar, `${addr(r, pf.col)}-${addr(r, ltm.col)}`, { style: "line", fmt: FMT.body, label: `delta $ row ${r}` });
-  b.formula(r, l.deltas.pct, `IFERROR(${addr(r, pf.col)}/${addr(r, ltm.col)}-1,"n.a.")`, { style: "ratio", fmt: FMT.pct, label: `delta % row ${r}` });
+  if (!l.deltas || !pf || !ltm) return;
+  if (["margin", "ratio", "check"].includes(kind) || typeof values?.pf !== "number" || typeof values.ltm !== "number") return;
+  const vs = valueStyle(kind);
+  b.formula(r, l.deltas.dollar, `${addr(r, pf.col)}-${addr(r, ltm.col)}`, { style: vs.style, fmt: vs.fmt, expect: values.pf - values.ltm, label: `delta $ row ${r}` });
+  b.formula(r, l.deltas.pct, `IFERROR(${addr(r, pf.col)}/${addr(r, ltm.col)}-1,"n.a.")`, { style: kind === "keyTotal" ? "margin" : "ratio", fmt: FMT.pct, expect: values.ltm ? values.pf / values.ltm - 1 : "n.a.", label: `delta % row ${r}` });
 }
 
 // --- Databook -----------------------------------------------------------------------------------
 
-/** Adjustments month columns start here (after B:L text, M spacer, N:U periods, V spacer). */
-export const ADJ_MONTH_START = 23;
+/**
+ * Databook columns other tabs read. The mapping columns are guide 5.2's
+ * (Account | Source | AMB Category | Summary Line | Personal? | Adjustment
+ * Ref); period columns start at I and months at MONTH_START, the letters the
+ * Monthly P&L uses.
+ */
+export const DATABOOK_COL = { account: 2, category: 4, periodStart: 9 } as const;
 
-export function planDatabook(ctx: TabContext, ds: FinancialDataset | undefined): SheetBuilder {
+/** The tie-to-raw block right of the months (guide 5.2): Databook ($) | Raw ($) | Diff ($) | Status. */
+export function databookTieCols(model: ModelOutput): { databook: number; raw: number; diff: number; status: number } {
+  const n = gridMonths(model).length;
+  const databook = n ? MONTH_START + n + 1 : DATABOOK_COL.periodStart + model.columns.filter((c) => !c.projected).length + 1;
+  return { databook, raw: databook + 1, diff: databook + 2, status: databook + 3 };
+}
+
+export function planDatabook(ctx: TabContext): SheetBuilder {
   const { model } = ctx;
   const b = new SheetBuilder("databook", SHEET.databook);
   const months = gridMonths(model);
   const n = months.length;
   const rows = model.databook?.pnl ?? [];
+  const bsRows = model.databook?.bs ?? [];
+  const bsDates = [...new Set(bsRows.flatMap((x) => Object.keys(x.byMonth)))].sort();
   const hist = model.columns.filter((c) => !c.projected);
-  const periodStart = 9;
-  const widths = [40, 24, 14, 22, 30, 9, 9];
+  const { periodStart } = DATABOOK_COL;
+  const lastPeriodCol = periodStart + Math.max(hist.length, bsDates.length, 1) - 1;
+  const tie = databookTieCols(model);
+  const lastCol = tie.status;
+
+  const headers = ["Account (as exported)", "Source", "AMB Category", "Summary Line", "Personal?", "Adjustment Ref"];
   b.width(1, WIDTH.gutter);
-  widths.forEach((w, i) => b.width(2 + i, w));
-  for (let c = periodStart; c < MONTH_START; c++) b.width(c, WIDTH.value);
+  [40, 18, 22, 30, 9, 13].forEach((w, i) => b.width(2 + i, w));
+  b.spacerCol(8);
+  b.outlineCols(3, 7, 1);
+  b.widths(periodStart, lastPeriodCol, WIDTH.value);
+  const monthsFrom = n ? MONTH_START : lastPeriodCol + 1;
+  for (let c = lastPeriodCol + 1; c < monthsFrom; c++) b.spacerCol(c);
   if (n) {
     b.widths(MONTH_START, MONTH_START + n - 1, WIDTH.value);
     b.outlineCols(MONTH_START, MONTH_START + n - 1, 1);
   }
-  b.outlineCols(3, 8, 1);
-  const tieCol = n ? MONTH_START + n + 1 : periodStart + hist.length + 1;
-  const lastCol = tieCol + 1;
-  b.spacerCol(tieCol - 1);
-  b.width(tieCol, 12);
-  b.width(lastCol, 12);
-  b.anatomy({ subtitle: "Databook: account × period ($)", lastCol, toggleCol: periodStart + Math.max(hist.length, 1) - 1, masterToggle: ctx.masterToggle });
-  b.text(3, periodStart + Math.max(hist.length, 1) - 2, "Print", { align: { horizontal: "right" } });
+  b.spacerCol(tie.databook - 1);
+  b.widths(tie.databook, tie.diff, 11);
+  b.width(tie.status, 10);
+  b.anatomy({ subtitle: "Databook: account × period ($)", lastCol, toggleCol: lastPeriodCol, masterToggle: ctx.masterToggle });
+  b.text(3, lastPeriodCol - 1, "Print", { align: { horizontal: "right" } });
 
-  const headers = ["Account (as exported)", "Section", "Source", "AMB Category", "Summary Line", "Personal?", "Adjustment Ref"];
-  b.tier1(5, [
-    { from: 2, to: 8, label: "Mapping" },
-    ...(hist.length ? [{ from: periodStart, to: periodStart + hist.length - 1, label: "Periods ($)" }] : []),
-    ...(n ? [{ from: MONTH_START, to: MONTH_START + n - 1, label: "Monthly ($)" }] : []),
-    { from: tieCol, to: lastCol, label: "Tie to raw" },
-  ]);
-  headers.forEach((h, i) => b.cell(6, 2 + i, { style: "header", v: h, role: "text", align: { horizontal: "left" } }));
-  hist.forEach((c, i) => b.cell(6, periodStart + i, { style: "header", v: c.label, role: "text" }));
-  if (n) writeMonthHeaders(b, 6, MONTH_START, months);
-  b.cell(6, tieCol, { style: "header", v: "Databook ($)", role: "text" });
-  b.cell(6, lastCol, { style: "header", v: "Diff to raw", role: "text" });
-
-  let r = DATABOOK_FIRST_ROW;
-  const firstRow = r;
-  rows.forEach((row, idx) => {
-    b.text(r, 2, row.account);
-    b.text(r, 3, row.section ?? "");
-    b.text(r, 4, SOURCE_LABELS[row.source]);
-    b.text(r, 5, row.category);
-    b.text(r, 6, row.summaryLine);
-    b.text(r, 7, row.personal ? "Personal?" : "");
-    b.text(r, 8, row.adjustmentRef ? `[${row.adjustmentRef}]` : "");
-    if (n) {
-      months.forEach((m, i) => b.num(r, MONTH_START + i, row.byMonth?.[m] ?? 0, { fmt: FMT.body }));
-      const total = `SUM(${addr(r, MONTH_START)}:${addr(r, MONTH_START + n - 1)})`;
-      const engineTotal = months.reduce((s, m) => s + (row.byMonth?.[m] ?? 0), 0);
-      b.formula(r, tieCol, total, { fmt: FMT.body, expect: engineTotal, label: `databook total ${row.account}` });
-      b.formula(r, lastCol, `${addr(r, tieCol)}-INDEX(${S("rawPnl")}$${colLetter(RAW_PNL_TOTAL_COL(n))}:$${colLetter(RAW_PNL_TOTAL_COL(n))},MATCH(${addr(r, 2)},${S("rawPnl")}$A:$A,0))`, {
-        style: "check",
-        fmt: FMT.check,
-        expect: 0,
-        tol: 1e-6,
-        label: `tie to raw ${row.account}`,
-      });
-    } else {
-      hist.forEach((c, i) => {
-        if (c.ref.kind === "fiscal_year") b.num(r, periodStart + i, row.byFiscalYear[c.fiscalYear!] ?? 0, { fmt: FMT.body });
-      });
-      const fyCols = hist.map((c, i) => ({ c, i })).filter((x) => x.c.ref.kind === "fiscal_year");
-      b.formula(r, tieCol, `SUM(${addr(r, periodStart)}:${addr(r, periodStart + hist.length - 1)})`, { fmt: FMT.body, expect: fyCols.reduce((s, x) => s + (row.byFiscalYear[x.c.fiscalYear!] ?? 0), 0), label: `databook total ${row.account}` });
-      b.formula(r, lastCol, `${addr(r, tieCol)}-INDEX(${S("rawPnl")}$${colLetter(RAW_PNL_TOTAL_COL(0) + fyCols.length)}:$${colLetter(RAW_PNL_TOTAL_COL(0) + fyCols.length)},MATCH(${addr(r, 2)},${S("rawPnl")}$A:$A,0))`, {
-        style: "check",
-        fmt: FMT.check,
-        expect: 0,
-        tol: 1e-6,
-        label: `tie to raw ${row.account}`,
-      });
-    }
-    void idx;
-    r++;
+  // Period groups sit side by side (the months must start at MONTH_START), so each is labelled rather than spaced.
+  const periodGroups: { from: number; to: number; label: string }[] = [];
+  hist.forEach((c, i) => {
+    const last = periodGroups.at(-1);
+    if (last && last.label === c.group) last.to = periodStart + i;
+    else periodGroups.push({ from: periodStart + i, to: periodStart + i, label: c.group });
   });
-  const lastRow = r - 1;
+  const fyGroups = n ? fiscalYearBlocks(model, MONTH_START) : [];
+  b.tier1(5, [
+    { from: 2, to: 7, label: "Mapping" },
+    ...periodGroups,
+    ...fyGroups.map((g) => ({ from: g.from, to: g.to, label: `Monthly: FY${g.fiscalYear} ($)` })),
+    { from: tie.databook, to: tie.status, label: "Tie to raw export" },
+  ]);
+  const header = (r: number, c: number, v: string, left = false) => b.cell(r, c, { style: "header", v, role: "text", align: left ? { horizontal: "left" } : undefined });
+  headers.forEach((h, i) => header(6, 2 + i, h, true));
+  hist.forEach((c, i) => header(6, periodStart + i, c.label));
+  if (n) writeMonthHeaders(b, 6, MONTH_START, months);
+  ["Databook ($)", "Raw ($)", "Diff ($)", "Status"].forEach((h, i) => header(6, tie.databook + i, h));
+
+  // P&L accounts: months typed as exported, periods and the tie as formulas.
+  const firstRow = DATABOOK_FIRST_ROW;
+  const lastRow = firstRow + rows.length - 1;
   b.row("first", firstRow);
   b.row("last", lastRow);
-  // Period columns: SUMIFS of the row's months over the helper windows.
+  const rawPnlRows = (c: number) => `${S("rawPnl")}$${colLetter(c)}$4:$${colLetter(c)}$${3 + rows.length}`;
+  const fyCols = hist.map((c, i) => ({ c, col: periodStart + i })).filter((x) => x.c.ref.kind === "fiscal_year");
+  const rawPnlTotal = rawPnlRows(RAW_PNL_TOTAL_COL(n ? n : fyCols.length));
+  rows.forEach((row, i) => {
+    const r = firstRow + i;
+    [row.account, SOURCE_LABELS[row.source], row.category, row.summaryLine, row.personal ? "Personal?" : "", row.adjustmentRef ? `[${row.adjustmentRef}]` : ""].forEach((v, k) => b.text(r, 2 + k, v));
+    let total: string;
+    let engineTotal: number;
+    if (n) {
+      months.forEach((m, k) => b.num(r, MONTH_START + k, row.byMonth?.[m] ?? 0, { fmt: FMT.body }));
+      total = `SUM(${addr(r, MONTH_START)}:${addr(r, MONTH_START + n - 1)})`;
+      engineTotal = months.reduce((s, m) => s + (row.byMonth?.[m] ?? 0), 0);
+    } else {
+      fyCols.forEach(({ c, col }) => b.num(r, col, row.byFiscalYear[c.fiscalYear!] ?? 0, { fmt: FMT.body }));
+      total = fyCols.map(({ col }) => addr(r, col)).join("+") || "0";
+      engineTotal = fyCols.reduce((s, { c }) => s + (row.byFiscalYear[c.fiscalYear!] ?? 0), 0);
+    }
+    const raw = `INDEX(${rawPnlTotal},MATCH(${addr(r, 2)},${rawPnlRows(1)},0))`;
+    writeTie(b, r, tie, total, raw, engineTotal, row.account);
+  });
+
+  // Balance-sheet accounts: one row per account, one column per statement date, tied to Raw - Balance Sheet date by date.
+  const bsSection = lastRow + 2;
+  const bsHeader = bsSection + 1;
+  const bsFirst = bsHeader + 1;
+  const bsLast = bsFirst + bsRows.length - 1;
+  b.row("bsHeader", bsHeader);
+  b.row("bsFirst", bsFirst);
+  b.row("bsLast", bsLast);
+  b.section(bsSection, "Balance sheet accounts ($)", [[2, 7]]);
+  headers.slice(0, 4).forEach((h, i) => header(bsHeader, 2 + i, h, true));
+  for (let c = 6; c <= 7; c++) b.cell(bsHeader, c, { style: "header", v: null, role: "text" });
+  bsDates.forEach((m, i) => {
+    // Statement dates are derived from Assumptions like every other period label: a fiscal year-end from the latest
+    // fiscal year, any other month-end from AsOfDate.
+    const yearEnd = Number(m.slice(5)) === model.fiscalYearEndMonth;
+    const k = latestFyOf(model) - fiscalYearOfMonth(m, model.fiscalYearEndMonth);
+    const offset = monthOffset(model.assumptions!.asOfMonth, m);
+    const f = yearEnd ? `EOMONTH(DATE(${LATEST_FY}-${k},${FYE},1),-1)+1` : `EOMONTH(${ASOF},${offset - 1})+1`;
+    b.formula(bsHeader, periodStart + i, f, { style: "monthHeader", fmt: FMT.monthHeader, role: "text", expect: serialOfMonthStart(m), label: `bs date ${m}` });
+  });
+  const rawBsRows = (c: number) => `${S("rawBs")}$${colLetter(c)}$4:$${colLetter(c)}$${3 + bsRows.length}`;
+  bsRows.forEach((row, i) => {
+    const r = bsFirst + i;
+    [row.account, SOURCE_LABELS[row.source], row.category, bsLabel(row.category)].forEach((v, k) => b.text(r, 2 + k, v));
+    bsDates.forEach((m, k) => b.num(r, periodStart + k, row.byMonth[m] ?? 0, { fmt: FMT.body }));
+    const dates = bsDates.map((_, k) => addr(r, periodStart + k));
+    const raw = bsDates.map((_, k) => `SUMIFS(${rawBsRows(3 + k)},${rawBsRows(1)},${addr(r, 2)})`).join("+");
+    writeTie(b, r, tie, dates.join("+") || "0", raw || "0", bsDates.reduce((s, m) => s + (row.byMonth[m] ?? 0), 0), row.account);
+  });
+  const lastPrinted = Math.max(bsLast, lastRow);
+
+  // Period columns: SUMIFS of the row's months over helper windows that sit directly below the last printed row (guide 5.2).
   if (n) {
-    const helpers = writePeriodHelpers(b, { ...periodLayout(model, periodStart), cols: hist.map((c, i) => ({ column: c, col: periodStart + i })) } as PeriodLayout, model, lastRow + 3);
+    const helpers = writePeriodHelpers(b, { ...periodLayout(model, periodStart), cols: hist.map((c, i) => ({ column: c, col: periodStart + i })) } as PeriodLayout, model, lastPrinted + 2);
     const monthHeaderRow = `$${colLetter(MONTH_START)}$6:$${colLetter(MONTH_START + n - 1)}$6`;
-    rows.forEach((row, idx) => {
-      const rr = firstRow + idx;
-      hist.forEach((c, i) => {
-        const col = periodStart + i;
-        const f = sumifsFormula({ valuesRow: `$${colLetter(MONTH_START)}${rr}:$${colLetter(MONTH_START + n - 1)}${rr}`, monthsRow: monthHeaderRow, startCell: addr(helpers.start, col, { row: true }), endCell: addr(helpers.end, col, { row: true }) });
-        b.formula(rr, col, f, { fmt: FMT.body, expect: model.periods[c.key]!.accountLines[row.account] ?? 0, label: `${row.account} ${c.label}` });
+    rows.forEach((row, i) => {
+      const r = firstRow + i;
+      hist.forEach((c, k) => {
+        const col = periodStart + k;
+        const f = sumifsFormula({ valuesRow: `$${colLetter(MONTH_START)}${r}:$${colLetter(MONTH_START + n - 1)}${r}`, monthsRow: monthHeaderRow, startCell: addr(helpers.start, col, { row: true }), endCell: addr(helpers.end, col, { row: true }) });
+        b.formula(r, col, f, { fmt: FMT.body, expect: model.periods[c.key]!.accountLines[row.account] ?? 0, label: `${row.account} ${c.label}` });
       });
     });
   }
-  const bsFirstRow = lastRow + (n ? 6 : 3);
-  // Balance-sheet accounts: one row per account, one column per statement date.
-  const bsRows = model.databook?.bs ?? [];
-  const bsDates = [...new Set(bsRows.flatMap((x) => Object.keys(x.byMonth)))].sort();
-  b.row("bsHeader", bsFirstRow - 1);
-  b.section(bsFirstRow - 2, "Balance sheet accounts ($)", [[2, 8]]);
-  headers.slice(0, 5).forEach((h, i) => b.cell(bsFirstRow - 1, 2 + i, { style: "header", v: h, role: "text", align: { horizontal: "left" } }));
-  for (let c = 7; c <= 8; c++) b.cell(bsFirstRow - 1, c, { style: "header", v: null, role: "text" });
-  bsDates.forEach((m, i) => {
-    const col = periodStart + i;
-    const k = model.assumptions ? latestFyOf(model) - fiscalYearOfMonth(m, model.fiscalYearEndMonth) : 0;
-    const isFye = m.endsWith(`-${String(model.fiscalYearEndMonth).padStart(2, "0")}`);
-    const f = isFye ? `EOMONTH(DATE(${LATEST_FY}-${k},${FYE},1),-1)+1` : `DATE(${m.slice(0, 4)},${Number(m.slice(5))},1)`;
-    b.formula(bsFirstRow - 1, col, f, { style: "monthHeader", fmt: FMT.monthHeader, role: "text", expect: serialOfMonthStart(m), label: `bs date ${m}` });
+  b.cf({ ref: range(firstRow, tie.diff, lastPrinted, tie.diff), formula: `ROUND(${addr(firstRow, tie.diff)},3)<>0`, font: { color: COLOR.pending } });
+  b.cf({ ref: range(firstRow, tie.status, lastPrinted, tie.status), formula: `${addr(firstRow, tie.status)}="CHECK"`, font: { color: COLOR.pending, bold: true } });
+
+  // Pages: the mapping, the periods (with the statement dates), each fiscal year of months, then the tie; column B repeats.
+  const pages = [range2(2, 8), [2, ...range2(periodStart, monthsFrom - 1)], ...fyGroups.map((g) => [2, ...range2(g.from, g.to)]), [2, ...range2(tie.databook - 1, lastCol)]];
+  b.print({
+    area: `B2:${addr(lastPrinted, lastCol)}`,
+    landscape: true,
+    scale: fitScale(b.plan, pages, lastPrinted),
+    titlesRow: "5:6",
+    titlesCol: "B:B",
+    colBreaks: [8, monthsFrom - 1, ...fyGroups.map((g) => g.to)],
   });
-  b.row("bsFirst", bsFirstRow);
-  let rb = bsFirstRow;
-  for (const row of bsRows) {
-    b.text(rb, 2, row.account);
-    b.text(rb, 3, row.section ?? "");
-    b.text(rb, 4, SOURCE_LABELS[row.source]);
-    b.text(rb, 5, row.category);
-    b.text(rb, 6, bsLabel(row.category));
-    bsDates.forEach((m, i) => b.num(rb, periodStart + i, row.byMonth[m] ?? 0, { fmt: FMT.body }));
-    rb++;
-  }
-  b.row("bsLast", rb - 1);
-  b.row("bsDatesFrom", periodStart);
-  b.print({ area: `B2:${addr(Math.max(rb - 1, lastRow), lastCol)}`, landscape: true, fitToWidth: 0, fitToHeight: 1, titlesRow: "5:6", titlesCol: "B:B", colBreaks: n ? [MONTH_START - 1] : [] });
   b.furniture(ctx.codeName, ctx.asOfLabel);
   b.freeze(7, 3);
-  void ds;
   return b;
+}
+
+/** One row of the tie-to-raw block: the Databook's total, the raw export's, the difference and its status at a $1 tolerance (guide 5.2). */
+function writeTie(b: SheetBuilder, r: number, tie: ReturnType<typeof databookTieCols>, total: string, raw: string, expect: number, account: string): void {
+  b.formula(r, tie.databook, total, { fmt: FMT.body, expect, label: `databook total ${account}` });
+  b.formula(r, tie.raw, raw, { fmt: FMT.body, expect, label: `raw total ${account}` });
+  b.formula(r, tie.diff, `${addr(r, tie.databook)}-${addr(r, tie.raw)}`, { style: "check", fmt: FMT.check, expect: 0, tol: 1e-6, label: `tie to raw ${account}` });
+  b.formula(r, tie.status, `IF(ABS(${addr(r, tie.diff)})<=1,"TIES OUT","CHECK")`, { role: "text", align: { horizontal: "center" }, expect: "TIES OUT", label: `tie status ${account}` });
 }
 
 function latestFyOf(model: ModelOutput): number {
   return model.columns.filter((c) => c.ref.kind === "fiscal_year" && !c.projected).map((c) => c.fiscalYear!).sort((a, b) => b - a)[0]!;
+}
+
+/** Months from `a` to `b` (negative when `b` is earlier). */
+function monthOffset(a: MonthKey, b: MonthKey): number {
+  return (Number(b.slice(0, 4)) - Number(a.slice(0, 4))) * 12 + Number(b.slice(5)) - Number(a.slice(5));
 }
 
 function fiscalYearOfMonth(m: MonthKey, fye: number): number {
@@ -545,6 +609,19 @@ export function planMapping(ctx: TabContext): SheetBuilder {
 /** Column of the Total on Raw - P&L: A account, B section, months from C, then Total. */
 export const RAW_PNL_TOTAL_COL = (n: number) => 3 + n;
 
+/** Raw tabs print landscape, one page wide, over the cells they use (they are values as exported, not output tabs). */
+function printRaw(b: SheetBuilder): SheetBuilder {
+  let lastRow = 1;
+  let lastCol = 1;
+  for (const k of b.plan.cells.keys()) {
+    const [r, c] = k.split(":").map(Number) as [number, number];
+    lastRow = Math.max(lastRow, r);
+    lastCol = Math.max(lastCol, c);
+  }
+  b.print({ area: `A1:${addr(lastRow, lastCol)}`, landscape: true, fitToWidth: 1, fitToHeight: 0, titlesRow: "3:3" });
+  return b;
+}
+
 function rawSheet(key: "rawPnl" | "rawBs" | "rawBank" | "rawCustomers" | "rawPayroll", title: string, headers: string[], widths: number[]): SheetBuilder {
   const b = new SheetBuilder(key, SHEET[key], { output: false, tabColor: COLOR.rawTab, gridlines: true });
   widths.forEach((w, i) => b.width(1 + i, w));
@@ -570,7 +647,7 @@ export function planRawPnl(model: ModelOutput): SheetBuilder {
     b.num(r, 3 + values.length, values.reduce((s, v) => s + v, 0), { fmt: FMT.rawCents });
     r++;
   }
-  return b;
+  return printRaw(b);
 }
 
 export function planRawBs(model: ModelOutput): SheetBuilder {
@@ -585,7 +662,7 @@ export function planRawBs(model: ModelOutput): SheetBuilder {
     dates.forEach((m, i) => b.num(r, 3 + i, row.byMonth[m] ?? 0, { fmt: FMT.rawCents }));
     r++;
   }
-  return b;
+  return printRaw(b);
 }
 
 export function planRawBank(ds: FinancialDataset): SheetBuilder | undefined {
@@ -600,16 +677,28 @@ export function planRawBank(ds: FinancialDataset): SheetBuilder | undefined {
     b.num(r, 4, d.amount + d.excluded, { fmt: FMT.rawCents });
     r++;
   }
-  return b;
+  return printRaw(b);
 }
 
 /** Column map of Raw - Customers, shared with the retention formulas. */
 export const RAW_CUSTOMER_COLS = { code: 1, name: 2, type: 3, segment: 4, start: 5, end: 6, lossReason: 7, contractBasis: 8, firstFy: 9 } as const;
 
-export function planRawCustomers(ds: FinancialDataset): SheetBuilder | undefined {
+/**
+ * Fiscal-year revenue columns of Raw - Customers: the model's fiscal years and
+ * any later year the list carries (the partial current year), so an LTM that
+ * straddles the year-end prorates the same years the engine does.
+ */
+export function customerYears(years: number[], list?: FinancialDataset["customers"]): number[] {
+  const first = years[0] ?? 0;
+  const last = years[years.length - 1] ?? 0;
+  const carried = new Set([...(list?.customers ?? []), ...(list?.residual ? [list.residual] : [])].flatMap((c) => Object.keys(c.revenueByFiscalYear).map(Number)));
+  // The year before the first column gives that year's dollar roll-forward its prior year.
+  return [...(carried.has(first - 1) ? [first - 1] : []), ...years, ...[...carried].filter((y) => y > last).sort((a, b) => a - b)];
+}
+
+export function planRawCustomers(ds: FinancialDataset, years: number[]): SheetBuilder | undefined {
   const list = ds.customers;
   if (!list) return undefined;
-  const years = ds.years;
   const b = rawSheet("rawCustomers", `Raw - Customers (${list.source}: ${list.file}). Names stay on this tab only.`, ["Code", "Name", "Type", "Segment", "Start date", "End date", "Loss reason", "Contract basis", ...years.map((y) => `FY${y} revenue`)], [9, 30, 18, 14, 11, 11, 14, 18, ...years.map(() => 13)]);
   let r = 4;
   const date = (d?: string) => (d ? { v: excelSerialOf(d), fmt: FMT.date, role: "input" as const } : { v: null });
@@ -633,15 +722,15 @@ export function planRawCustomers(ds: FinancialDataset): SheetBuilder | undefined
     b.row("residual", r);
     r++;
   }
-  return b;
+  return printRaw(b);
 }
 
 export const RAW_PAYROLL_COLS = { id: 1, name: 2, role: 3, department: 4, owner: 5, management: 6, hire: 7, termination: 8, terminationType: 9, payBasis: 10, fte: 11, firstWages: 12 } as const;
 
-export function planRawPayroll(ds: FinancialDataset): SheetBuilder | undefined {
+/** `years` are the model's fiscal-year columns, so the Headcount tab's column offsets land on the same years. */
+export function planRawPayroll(ds: FinancialDataset, years: number[]): SheetBuilder | undefined {
   const reg = ds.payroll;
   if (!reg) return undefined;
-  const years = ds.years;
   const b = rawSheet(
     "rawPayroll",
     `Raw - Payroll register (${reg.source}: ${reg.file}). Names stay on this tab only.`,
@@ -666,12 +755,10 @@ export function planRawPayroll(ds: FinancialDataset): SheetBuilder | undefined {
     r++;
   }
   b.row("lastEmployee", r - 1);
-  return b;
+  return printRaw(b);
 }
 
 function excelSerialOf(date: string): number {
   const [y, m, d] = date.split("-").map(Number) as [number, number, number];
   return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / 86400000);
 }
-
-export { range, A };

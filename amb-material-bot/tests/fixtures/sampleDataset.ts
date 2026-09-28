@@ -78,7 +78,6 @@ const SHAPES = {
   // Interest falls through the year as the loans amortize.
   interest: [1.1, 1.08, 1.06, 1.04, 1.02, 1.0, 0.98, 0.96, 0.94, 0.92, 0.9, 0.88],
 } as const;
-type ShapeName = keyof typeof SHAPES;
 
 /** Growth inside the year (about 1% a month) so the revenue lines trend up rather than repeat. */
 function withRamp(shape: readonly number[], monthlyGrowth = 0.01): number[] {

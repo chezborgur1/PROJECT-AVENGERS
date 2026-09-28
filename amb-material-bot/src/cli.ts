@@ -65,7 +65,10 @@ async function main() {
         return;
       }
       if (!claudeAvailable()) {
-        console.log("Note: ANTHROPIC_API_KEY is not set. PDFs will be skipped and CIM copy will be templated.\n");
+        console.log(
+          "Note: ANTHROPIC_API_KEY is not set. PDFs and images in the source folders are skipped, intake notes are not transcribed (intake.json still works),\n" +
+            "and CIM copy comes from a folder's cim-copy.fixture.json or is templated with [Confirm: ...] placeholders.\n",
+        );
       }
       // --no-update leaves the request list untouched (demos, dry runs).
       const update: typeof store.update = args.includes("--no-update") ? () => {} : (id, patch) => store.update(id, patch);
@@ -81,7 +84,9 @@ async function main() {
             last_run: new Date().toISOString().slice(0, 16).replace("T", " "),
           });
           console.log(`✓ ${path.relative(repoRoot, result.folder)}`);
-          console.log(`  ${result.verification.formulas} formulas verified; ${result.openQuestions.length} open questions; ${result.warnings.length} warnings`);
+          console.log(`  Model: ${result.verification.formulas.toLocaleString("en-US")} formulas verified, ${result.masterCheck}`);
+          console.log(`  CIM: ${result.pages} pages (copy: ${result.copySource})${result.pdf ? ", PDF" : ", no PDF"}${result.pngs.length ? ` and ${result.pngs.length} page images` : ""}`);
+          console.log(`  ${result.openQuestions.length} open questions; ${result.warnings.length} warnings (open-questions.md, run-summary.md)`);
         } catch (err) {
           failures++;
           const message = (err as Error).message;
@@ -119,7 +124,8 @@ async function main() {
 
   list [--priority P2]            show the request queue
   run  [--id REQ-0001] [--priority P2] [--force] [--no-update]
-                                  build the model + CIM for queued requests
+                                  build the model, CIM (.pptx, .pdf, page images),
+                                  open-questions.md and run-summary.md for queued requests
   qbo-connect <realmId>           connect a client's QuickBooks Online company
   qbo-token <code> <realmId>      finish the QuickBooks connection`);
   }

@@ -32,8 +32,8 @@ export function nwcLines(p: BalanceSheetPeriod, trailing: { revenue: number; cog
   const ap = v.accounts_payable;
   const totalCurrentLiabExDebt = ap + accrued + deferredRevenue + customerDeposits + otherOcl;
   const reportedNwc = totalCurrentAssetsExCash - totalCurrentLiabExDebt;
-  // Balances a buyer settles outside working capital, removed from the liabilities they sit in.
-  const adjustments = (d.related_party_balances ?? 0) + (d.accrued_interest ?? 0) + (d.income_tax_payable ?? 0);
+  // Balances a buyer settles outside working capital: liabilities removed (NWC rises), a related-party receivable removed (NWC falls).
+  const adjustments = (d.related_party_balances ?? 0) + (d.accrued_interest ?? 0) + (d.income_tax_payable ?? 0) - (d.related_party_receivable ?? 0);
   const adjustedNwc = reportedNwc + adjustments;
   const rev = trailing?.revenue ?? 0;
   const cogs = trailing?.cogs ?? 0;

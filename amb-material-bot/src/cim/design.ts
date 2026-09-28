@@ -116,39 +116,96 @@ export const SPACE = {
 } as const;
 
 // ---------------------------------------------------------------------------
-// Text measurement (spec 4.2). Arial and Liberation Sans are metric-compatible.
+// Text measurement (spec 4.2). Arial and its render substitute Liberation Sans
+// share advance widths, so wrapping is simulated from Arial's metrics (the
+// Helvetica AFM widths, 1/1000 em) word by word, as PowerPoint and LibreOffice
+// wrap. The spec's average-advance formula over-counted lines on lower-case
+// text and left the slack rows the judges saw.
 // ---------------------------------------------------------------------------
 
-/** Average Arial advance in inches at a point size. */
+const ASCII_REG = [278,278,355,556,556,889,667,191,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,278,278,584,584,584,556,1015,667,667,722,722,667,611,778,722,278,500,667,556,833,722,778,667,778,722,667,611,722,667,944,667,667,611,278,278,278,469,556,333,556,556,500,556,556,278,556,556,222,222,500,222,833,556,556,556,556,333,500,278,556,500,722,500,500,500,334,260,334,584];
+const ASCII_BOLD = [278,333,474,556,556,889,722,238,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,333,333,584,584,584,611,975,722,722,722,722,667,611,778,722,278,556,722,611,833,722,778,667,778,722,667,611,722,667,944,667,667,611,333,278,333,584,556,333,556,611,556,611,556,333,611,611,278,278,556,278,889,611,611,611,611,389,556,333,611,556,778,556,556,500,389,280,389,584];
+const WIDE: Record<string, number> = { "–": 556, "—": 1000, "÷": 584, "Δ": 612, "’": 222, "‘": 222, "“": 333, "”": 333, "·": 278, "▪": 604, "≥": 549, "≤": 549 };
+
+/** Advance width of a string in inches at a point size. */
+export function textWidth(t: string, pt: number, bold = false): number {
+  const table = bold ? ASCII_BOLD : ASCII_REG;
+  let units = 0;
+  for (const ch of t) {
+    const c = ch.codePointAt(0)!;
+    units += c >= 32 && c < 127 ? table[c - 32]! : (WIDE[ch] ?? 556);
+  }
+  return (units / 1000) * (pt / 72);
+}
+
+/** Average Arial advance in inches at a point size, for rough widths (legends). */
 export const charW = (pt: number, bold = false): number => ((bold ? 0.54 : 0.5) * pt) / 72;
 
-/** Lines a string wraps to in a box `w` wide with 0.10 in of side margins. */
-export function linesFor(text: string, w: number, pt: number, bold = false): number {
-  const usable = Math.max(0.2, w - 0.1);
-  let lines = 0;
-  for (const para of text.split("\n")) lines += Math.max(1, Math.ceil((para.length * charW(pt, bold)) / usable));
+/** Page tokens resolve after layout; measure them as they print ("page 00", "00"). */
+const printed = (t: string): string => t.replace(/\{\{page:[^}]+\}\}/g, "page 00").replace(/\{\{pageno:[^}]+\}\}/g, "00");
+
+export interface MeasureRun {
+  text: string;
+  bold?: boolean;
+}
+
+/** Lines a sequence of runs wraps to in a text area `w` inches wide: greedy word wrap, hard breaks on "\n". */
+export function wrapLines(runs: MeasureRun[], w: number, pt: number): number {
+  const width = Math.max(0.2, w);
+  let lines = 1;
+  let x = 0;
+  for (const r of runs) {
+    // Renderers break after a hyphen inside a word ("maintenance-agreement") as well as at spaces.
+    const parts = printed(r.text).split(/(\n| )|(?<=[A-Za-z]-)(?=[A-Za-z])/);
+    for (const part of parts) {
+      if (part === undefined) continue;
+      if (part === "\n") {
+        lines += 1;
+        x = 0;
+        continue;
+      }
+      if (part === "") continue;
+      const pw = textWidth(part, pt, r.bold);
+      if (part === " ") {
+        x += pw;
+        continue;
+      }
+      if (x > 0 && x + pw > width) {
+        lines += 1;
+        x = 0;
+      }
+      // A word longer than the line breaks across lines.
+      const extra = pw > width ? Math.ceil(pw / width) - 1 : 0;
+      lines += extra;
+      x += pw - extra * width;
+    }
+  }
   return lines;
 }
 
+/** Lines a string wraps to in a table cell `w` wide with 0.10 in of side margins. */
+export function linesFor(text: string, w: number, pt: number, bold = false): number {
+  return wrapLines([{ text, bold }], w - 0.1, pt);
+}
+
 /** Text-table row height from its longest cell: 0.07 + lines x (pt x 1.15 / 72). */
-export function rowHeightFor(cells: { text: string; bold?: boolean }[], colW: number[], pt: number): number {
+export function rowHeightFor(cells: { text: string; bold?: boolean; runs?: MeasureRun[] }[], colW: number[], pt: number): number {
   let lines = 1;
   cells.forEach((c, i) => {
-    lines = Math.max(lines, linesFor(c.text, colW[i] ?? 1, pt, c.bold));
+    lines = Math.max(lines, c.runs ? wrapLines(c.runs, (colW[i] ?? 1) - 0.1, pt) : linesFor(c.text, colW[i] ?? 1, pt, c.bold));
   });
   return r3(0.07 + lines * ((pt * 1.15) / 72));
 }
 
-/** Observation item height: 0.09 + lines x 0.145 at 9 pt, from the text column's width. */
+/** Observation item height: 0.09 + lines x 0.145 at 9 pt, from the text column's width (0.02 right margin). */
 export function observationHeight(lead: string, body: string, textW: number, pt = 9): number {
-  const lines = Math.max(1, Math.ceil(((lead.length + 1) * charW(pt, true) + body.length * charW(pt)) / Math.max(0.5, textW - 0.1)));
+  const lines = wrapLines([{ text: `${lead} `, bold: true }, { text: body }], textW - 0.03, pt);
   return r3(0.09 + lines * ((pt * 1.16) / 72));
 }
 
 /** Callout height: 0.10 + lines x 0.155 at 9 pt inside the 0.14 / 0.10 insets. */
 export function calloutHeight(lead: string, body: string, w: number, pt = 9): number {
-  const usable = w - 0.24;
-  const lines = Math.max(1, Math.ceil(((lead.length + 1) * charW(pt, true) + body.length * charW(pt)) / usable));
+  const lines = wrapLines([{ text: `${lead} `, bold: true }, { text: body }], w - 0.25, pt);
   return r3(0.1 + lines * ((pt * 1.24) / 72));
 }
 
@@ -161,8 +218,7 @@ export interface Paragraph {
 export function proseHeight(paragraphs: Paragraph[], w: number, pt = 9.5): number {
   let h = 0;
   for (const p of paragraphs) {
-    const chars = (p.lead ? (p.lead.length + 1) * 1.08 : 0) + p.body.length;
-    const lines = Math.max(1, Math.ceil((chars * charW(pt)) / (w - 0.05)));
+    const lines = wrapLines([...(p.lead ? [{ text: `${p.lead} `, bold: true }] : []), { text: p.body }], w - 0.02, pt);
     h += lines * ((pt * 1.2 * 1.08) / 72) + 7 / 72;
   }
   return r3(h);
@@ -222,10 +278,15 @@ export interface NumTableSpec {
   fontSize?: number;
 }
 
+/** A text-table cell: plain text, or a bold lead-in followed by regular text in the same cell (a ruled list). */
+export type TextCell = string | { lead: string; body: string };
+
+export const cellText = (c: TextCell): string => (typeof c === "string" ? c : `${c.lead} ${c.body}`);
+
 export interface TextTableSpec {
   colW: number[];
   head?: string[];
-  rows: string[][];
+  rows: TextCell[][];
   fontSize?: number;
   aligns?: ("left" | "right" | "center")[];
   obsCol?: number;
@@ -236,6 +297,8 @@ export interface TextTableSpec {
   tintFirstCol?: boolean;
   /** Rows whose first cell is bold even when `firstBold` is off (anchor rows of the process table). */
   boldRows?: number[];
+  /** Stable key per row an observation can point at; the observation's letter lands in `obsCol`. */
+  rowKeys?: string[];
 }
 
 export interface ObsItem {
@@ -263,10 +326,10 @@ export type ChartSpec =
       labels: string[];
       values: number[];
       format?: string;
-      /** Lower panel sharing the category axis, about 30% of the height: a line whose last point is labelled. */
-      line?: { name: string; values: (number | null)[]; format?: string; color?: string };
     }
-  | { type: "diverging"; labels: string[]; wins: number[]; losses: number[]; format?: string };
+  | { type: "diverging"; labels: string[]; wins: number[]; losses: number[]; format?: string }
+  /** Bridge from one total to another: totals in maroon, increases B5727A, decreases 5E5552 (guide 2.6). */
+  | { type: "waterfall"; labels: string[]; steps: { value: number; total?: boolean }[]; format?: string };
 
 export interface OrgNode {
   label: string;
@@ -340,18 +403,54 @@ export interface LaidOutPage {
 
 const DEFAULT_CHART_H = 2.6;
 
+/**
+ * Row heights of a numeric table: the spec's 0.195 (0.19 on long lists) unless
+ * a label, text column or header wraps, in which case the row takes the
+ * wrapped height, so what is measured is what renders and nothing below the
+ * table is overlapped.
+ */
+export function numTableRowHeights(spec: NumTableSpec): { head: number[]; rows: number[] } {
+  const pt = spec.fontSize ?? 8.5;
+  const base = spec.rowH ?? (spec.rows.length >= 12 ? 0.19 : 0.195);
+  const twoTier = spec.cols.some((c) => c.group);
+  const headLines = Math.max(
+    1,
+    ...spec.cols.map((c, i) => (c.kind === "gap" || (twoTier && !c.group) ? 1 : linesFor(i === 0 ? spec.name : (c.head ?? ""), c.w, 8, true))),
+  );
+  const tier2 = r3(Math.max(0.21, 0.07 + headLines * ((8 * 1.15) / 72)));
+  const head = twoTier ? [0.21, tier2] : [tier2];
+  const rows = spec.rows.map((r) => {
+    let lines = 1;
+    let v = 0;
+    spec.cols.forEach((c) => {
+      if (c.kind === "label") {
+        const indent = r.type === "section" || r.type === "key" || r.type === "subtotal" ? 0.05 : r.type === "sub" ? 0.29 : 0.17;
+        lines = Math.max(lines, linesFor(`${r.label}${r.note ? ` (${r.note})` : ""}`, c.w - indent + 0.05, pt, r.type === "key" || r.type === "subtotal" || r.type === "section"));
+      } else if (c.kind === "text" && r.type !== "section") lines = Math.max(lines, linesFor(r.text ?? "", c.w - 0.03, 8));
+      else if (c.kind === "num") {
+        if (c.left && r.type !== "section") lines = Math.max(lines, linesFor(r.vals?.[v] ?? "", c.w, pt));
+        v += 1;
+      }
+    });
+    return lines === 1 ? base : r3(Math.max(base, 0.06 + lines * ((pt * 1.15) / 72)));
+  });
+  return { head, rows };
+}
+
 export function numTableHeight(spec: NumTableSpec): number {
-  const headH = 0.21;
-  const tiers = spec.cols.some((c) => c.group) ? 2 : 1;
-  const rowH = spec.rowH ?? (spec.rows.length >= 12 ? 0.19 : 0.195);
-  return r3(tiers * headH + spec.rows.length * rowH);
+  const { head, rows } = numTableRowHeights(spec);
+  return r3([...head, ...rows].reduce((a, b) => a + b, 0));
 }
 
 export function textTableRowHeights(spec: TextTableSpec): number[] {
   const pt = spec.fontSize ?? 8.5;
   return spec.rows.map((r, ri) =>
     rowHeightFor(
-      r.map((text, i) => ({ text, bold: (i === 0 && (spec.firstBold ?? true)) || spec.totalRow === ri || (spec.boldRows?.includes(ri) ?? false) })),
+      r.map((c, i) =>
+        typeof c === "string"
+          ? { text: c, bold: (i === 0 && (spec.firstBold ?? true)) || spec.totalRow === ri || (spec.boldRows?.includes(ri) ?? false) }
+          : { text: "", runs: [{ text: `${c.lead} `, bold: true }, { text: c.body }] },
+      ),
       spec.colW,
       pt,
     ),
@@ -366,11 +465,6 @@ export function observationsHeight(items: ObsItem[], w: number): number {
   return r3(items.reduce((s, it) => s + observationHeight(it.lead, it.body, w - 0.3), 0));
 }
 
-export function chartHeight(spec: ChartSpec, h?: number): number {
-  if (spec.type === "monthly" && spec.line) return r3((h ?? DEFAULT_CHART_H) + 1.1);
-  return h ?? DEFAULT_CHART_H;
-}
-
 /** Height of a block at width w, including its exhibit header when it has one. */
 export function blockHeight(block: Block, w: number): number {
   const head = "header" in block && block.header ? SPACE.headerBody : 0;
@@ -380,7 +474,7 @@ export function blockHeight(block: Block, w: number): number {
     case "textTable":
       return r3(head + textTableHeight(block.spec));
     case "chart":
-      return r3(head + chartHeight(block.spec, block.h));
+      return r3(head + (block.h ?? DEFAULT_CHART_H));
     case "prose":
       return proseHeight(block.paragraphs, w, block.pt);
     case "observations":
@@ -436,9 +530,9 @@ function stackHeight(blocks: Block[], w: number): number {
 
 /**
  * Place every block of a page. Floating blocks go to the column that ends
- * highest; then, if the page overflows, trailing observation items are
- * dropped one at a time (never an exhibit) until it fits or nothing is left
- * to drop, in which case the page is refused.
+ * highest; then, if the page overflows, it is fitted one step at a time
+ * (`fitOverflow`) until it fits or nothing is left to give, in which case the
+ * page is refused. No exhibit is ever dropped.
  */
 export function layoutPage(spec: PageSpec): LaidOutPage {
   const warnings: string[] = [];
@@ -497,58 +591,85 @@ export function layoutPage(spec: PageSpec): LaidOutPage {
   for (let guard = 0; guard < 12; guard++) {
     const out = attempt(page);
     if (out.bottom <= BAND.bottom + 1e-6) return out;
-    const trimmed = dropOneObservation(page);
-    if (!trimmed) throw new Error(`Page ${spec.id} overflows the content band: ends at ${out.bottom.toFixed(2)} in (guard 6.48)`);
-    warnings.push(`${spec.id}: dropped an observation to fit the page`);
-    page = trimmed;
+    const fitted = fitOverflow(page, out);
+    if (!fitted) throw new Error(`Page ${spec.id} overflows the content band: ends at ${out.bottom.toFixed(2)} in (guard 6.48)`);
+    warnings.push(`${spec.id}: ${fitted.note} to fit the page`);
+    page = fitted.page;
   }
   throw new Error(`Page ${spec.id} could not be fitted`);
 }
 
-function dropOneObservation(page: PageSpec): PageSpec | undefined {
-  let done = false;
-  const visit = (b: Block): Block => {
-    if (done || b.kind !== "observations" || b.items.length <= 2) return b;
-    done = true;
-    return { ...b, items: b.items.slice(0, -1) };
+/** The spec's floor for a table figure (spec 2: "no table figure below 8 pt"). */
+const TABLE_FLOOR_PT = 8;
+
+/**
+ * One fitting step for an overflowing page, aimed at the column that runs past
+ * the guard: drop its last observation, else set its numeric tables at the
+ * 8 pt floor (a long adjustment label that wraps is the usual cause), else
+ * drop an observation anywhere on the page, since an earlier row sets where
+ * the overflowing row starts.
+ */
+function fitOverflow(page: PageSpec, out: LaidOutPage): { page: PageSpec; note: string } | undefined {
+  const over = new Set(out.placed.filter((p) => p.y + p.h > BAND.bottom + 1e-6).map((p) => p.x));
+  const inOverflow = new Set(out.placed.filter((p) => over.has(p.x)).map((p) => p.block));
+  const replace = (pick: (b: Block) => Block | undefined): PageSpec | undefined => {
+    let done = false;
+    const visit = (b: Block): Block => {
+      if (done) return b;
+      const next = pick(b);
+      if (!next) return b;
+      done = true;
+      return next;
+    };
+    const rows = page.rows.map((r) => ({
+      columns: r.columns.map((c) => ({ ...c, blocks: c.blocks.map(visit) })),
+      floating: r.floating?.map(visit),
+    }));
+    return done ? { ...page, rows } : undefined;
   };
-  const rows = page.rows.map((r) => ({
-    columns: r.columns.map((c) => ({ ...c, blocks: c.blocks.map(visit) })),
-    floating: r.floating?.map(visit),
-  }));
-  return done ? { ...page, rows } : undefined;
+  const dropObservation = (b: Block): Block | undefined => (b.kind === "observations" && b.items.length > 2 ? { ...b, items: b.items.slice(0, -1) } : undefined);
+  const local = replace((b) => (inOverflow.has(b) ? dropObservation(b) : undefined));
+  if (local) return { page: local, note: "dropped an observation" };
+  const tightened = replace((b) => (inOverflow.has(b) && b.kind === "numTable" && (b.spec.fontSize ?? 8.5) > TABLE_FLOOR_PT ? { ...b, spec: { ...b.spec, fontSize: TABLE_FLOOR_PT } } : undefined));
+  if (tightened) return { page: tightened, note: `set a table at ${TABLE_FLOOR_PT} pt` };
+  const anywhere = replace(dropObservation);
+  return anywhere ? { page: anywhere, note: "dropped an observation" } : undefined;
 }
 
 // ---------------------------------------------------------------------------
 // Chart post-pass registry. pptxgenjs exposes neither per-series label colour
-// nor the legend's manual layout, so the deck is patched after write().
+// nor the legend's manual layout, so the deck is patched after write(). Each
+// chart registers its patch as it is added; pptxgenjs numbers chart files in
+// add order and writes series in data order, so the pass finds them by
+// position.
 // ---------------------------------------------------------------------------
 
 interface SeriesPatch {
   labelColor?: string;
+  /** Per-series data-label number format (a decrease series prints in parentheses). */
+  labelFormat?: string;
   whiteOutline?: boolean;
-  /** Keep only the last point's data label and put a marker on it. */
-  lastPointOnly?: boolean;
-  /** Drop empty points so a line starts where its data does. */
-  gapBlanks?: boolean;
+  /** No fill, no outline, no labels: the base series under a waterfall. */
+  invisible?: boolean;
 }
 
 /** Layout the XML pass writes into one chart file: a top-left legend of a known height and the plot area beneath it. */
 interface ChartPatch {
-  /** Height of the legend as a fraction of the chart; the plot area starts under it. */
-  legendFraction?: number;
+  /** The legend's box as fractions of the chart, anchored top-left; the plot area starts under it. */
+  legendFraction?: { h: number; w: number };
   /** Anchor the chart title (a panel caption) at the top-left. */
   titleLeft?: boolean;
   /** Inner plot area as fractions of the chart, when the caller wants it fixed. */
   plot?: { y: number; h: number };
+  /** Category labels wider than their category (quarter starts on a 36-month axis) stay on one line. */
+  noWrap?: boolean;
+  /** One entry per series, in data order. */
+  series?: SeriesPatch[];
 }
 
 export class Deck {
   readonly pptx: Pptx;
-  private readonly seriesPatches = new Map<string, SeriesPatch>();
-  private readonly chartPatches = new Map<string, ChartPatch>();
-  private seriesCounter = 0;
-  chartCount = 0;
+  private readonly chartPatches: ChartPatch[] = [];
 
   constructor(title: string) {
     this.pptx = new PptxGenJS();
@@ -558,18 +679,9 @@ export class Deck {
     this.pptx.title = title;
   }
 
-  /** A series name unique across the deck, so the XML pass can find it. */
-  seriesName(name: string, patch: SeriesPatch): string {
-    // A zero-width joiner sequence keeps the visible legend text intact while making the name unique.
-    const tagged = `${name}${"‍".repeat(++this.seriesCounter)}`;
-    this.seriesPatches.set(tagged, patch);
-    return tagged;
-  }
-
-  /** Register the chart about to be added (pptxgenjs numbers chart files in add order). */
+  /** Register the chart about to be added. */
   noteChart(patch: ChartPatch = {}): void {
-    this.chartCount += 1;
-    this.chartPatches.set(`ppt/charts/chart${this.chartCount}.xml`, patch);
+    this.chartPatches.push(patch);
   }
 
   async write(): Promise<Buffer> {
@@ -581,21 +693,14 @@ export class Deck {
     const zip = await JSZip.loadAsync(buf);
     const names = Object.keys(zip.files).filter((f) => /^ppt\/charts\/chart\d+\.xml$/.test(f));
     for (const f of names) {
+      const n = Number(/chart(\d+)\.xml$/.exec(f)![1]);
+      const cp = this.chartPatches[n - 1] ?? {};
       let xml = await zip.file(f)!.async("string");
+      let si = 0;
       xml = xml.replace(/<c:ser>[\s\S]*?<\/c:ser>/g, (ser) => {
-        const name = /<c:tx>[\s\S]*?<c:v>([^<]*)<\/c:v>/.exec(ser)?.[1];
-        const patch = name ? this.seriesPatches.get(name) : undefined;
-        if (!patch) return ser;
-        let out = ser;
-        if (patch.labelColor) out = out.replace(/(<c:dLbls>[\s\S]*?<a:srgbClr val=")[0-9A-Fa-f]{6}("\/>)/, `$1${patch.labelColor}$2`);
-        if (patch.whiteOutline) out = out.replace(/(<c:spPr><a:solidFill><a:srgbClr val="[0-9A-Fa-f]{6}"\/><\/a:solidFill>)/, `$1<a:ln w="9525"><a:solidFill><a:srgbClr val="${C.white}"/></a:solidFill></a:ln>`);
-        if (patch.gapBlanks) out = out.replace(/<c:pt idx="\d+"><c:v><\/c:v><\/c:pt>/g, "");
-        if (patch.lastPointOnly) out = keepLastLabel(out);
-        return out;
+        const patch = cp.series?.[si++];
+        return patch ? patchSeries(ser, patch) : ser;
       });
-      // Strip the zero-width tags so the legend shows the plain series name.
-      xml = xml.replace(/‍+/g, "");
-      const cp = this.chartPatches.get(f) ?? {};
       let plot = cp.plot;
       if (cp.legendFraction !== undefined) {
         const lf = cp.legendFraction;
@@ -604,10 +709,10 @@ export class Deck {
           (legend) =>
             legend.replace(/<c:layout\/>|<c:layout>[\s\S]*?<\/c:layout>/, "").replace(
               /<c:legendPos val="[a-z]+"\/>/,
-              `<c:legendPos val="t"/><c:layout><c:manualLayout><c:xMode val="edge"/><c:yMode val="edge"/><c:x val="0"/><c:y val="0"/><c:w val="1"/><c:h val="${lf.toFixed(3)}"/></c:manualLayout></c:layout>`,
+              `<c:legendPos val="t"/><c:layout><c:manualLayout><c:xMode val="edge"/><c:yMode val="edge"/><c:x val="0"/><c:y val="0"/><c:w val="${lf.w.toFixed(3)}"/><c:h val="${lf.h.toFixed(3)}"/></c:manualLayout></c:layout>`,
             ),
         );
-        plot ??= { y: r3(lf + 0.04), h: r3(1 - lf - 0.04 - 0.14) };
+        plot ??= { y: r3(lf.h + 0.04), h: r3(1 - lf.h - 0.04 - 0.14) };
       }
       if (cp.titleLeft) {
         xml = xml.replace(/(<c:title>[\s\S]*?<\/c:tx>)\s*<c:layout\/>/, '$1<c:layout><c:manualLayout><c:xMode val="edge"/><c:yMode val="edge"/><c:x val="0"/><c:y val="0"/></c:manualLayout></c:layout>');
@@ -620,30 +725,25 @@ export class Deck {
         );
       }
       if (!xml.includes("<c:dispBlanksAs")) xml = xml.replace("</c:plotArea>", '</c:plotArea><c:dispBlanksAs val="gap"/>');
+      // Category labels are never rotated (guide 2.6): an unset rotation lets renderers tilt crowded labels. Renderers break a
+      // label wider than its category when the rotation is exactly 0, so an axis that must not wrap carries 0.01 degree.
+      xml = xml.replace(/(<c:catAx>[\s\S]*?<c:txPr>\s*)<a:bodyPr\/>/, `$1<a:bodyPr rot="${cp.noWrap ? 600 : 0}" vert="horz"/>`);
       zip.file(f, xml);
     }
     return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
   }
 }
 
-/** Rewrite a line series so only its last point carries a label and a marker. */
-function keepLastLabel(ser: string): string {
-  const count = Number(/<c:val>[\s\S]*?<c:ptCount val="(\d+)"\/>/.exec(ser)?.[1] ?? 0);
-  const pts = [...ser.matchAll(/<c:val>[\s\S]*?<\/c:val>/g)][0]?.[0] ?? "";
-  const idxs = [...pts.matchAll(/<c:pt idx="(\d+)">/g)].map((m) => Number(m[1]));
-  const last = idxs.length ? Math.max(...idxs) : count - 1;
-  const label = /<c:dLbls>([\s\S]*?)<\/c:dLbls>/.exec(ser);
-  if (!label || last < 0) return ser;
-  const body = label[1]!;
-  const txPr = /<c:txPr>[\s\S]*?<\/c:txPr>/.exec(body)?.[0] ?? "";
-  const numFmt = /<c:numFmt[^>]*\/>/.exec(body)?.[0] ?? "";
-  const dLbls =
-    `<c:dLbls><c:dLbl><c:idx val="${last}"/>${numFmt}<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>${txPr}<c:dLblPos val="t"/>` +
-    `<c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbl>` +
-    `<c:showLegendKey val="0"/><c:showVal val="0"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbls>`;
-  let out = ser.replace(/<c:dLbls>[\s\S]*?<\/c:dLbls>/, dLbls);
-  const marker = `<c:dPt><c:idx val="${last}"/><c:marker><c:symbol val="circle"/><c:size val="5"/><c:spPr><a:solidFill><a:srgbClr val="${C.maroon}"/></a:solidFill><a:ln><a:noFill/></a:ln></c:spPr></c:marker></c:dPt>`;
-  out = out.replace(/(<c:marker>[\s\S]*?<\/c:marker>)/, `$1${marker}`);
+function patchSeries(ser: string, patch: SeriesPatch): string {
+  let out = ser;
+  if (patch.invisible) {
+    out = out.replace(/<c:spPr>[\s\S]*?<\/c:spPr>/, "<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>");
+    out = out.replace(/(<c:dLbls>[\s\S]*?)<c:showVal val="1"\/>/, '$1<c:showVal val="0"/>');
+    return out;
+  }
+  if (patch.labelColor) out = out.replace(/(<c:dLbls>[\s\S]*?<a:srgbClr val=")[0-9A-Fa-f]{6}("\/>)/, `$1${patch.labelColor}$2`);
+  if (patch.labelFormat) out = out.replace(/(<c:dLbls>\s*<c:numFmt formatCode=")[^"]*(")/, `$1${patch.labelFormat.replace(/"/g, "&quot;")}$2`);
+  if (patch.whiteOutline) out = out.replace(/(<c:spPr>\s*<a:solidFill>\s*<a:srgbClr val="[0-9A-Fa-f]{6}"\/>\s*<\/a:solidFill>)/, `$1<a:ln w="9525"><a:solidFill><a:srgbClr val="${C.white}"/></a:solidFill></a:ln>`);
   return out;
 }
 
@@ -680,7 +780,8 @@ function cellRuns(text: string, o: TableCellProps = {}): TableCell[] {
 }
 
 export function text(slide: Slide, t: string | Run[], o: TextOpts): void {
-  const runs = typeof t === "string" ? runsWithPending(t, { fontSize: o.fontSize, color: o.color, bold: o.bold }) : t;
+  // Runs carry their own face, so a string inherits the box's face (Georgia titles) rather than the run default.
+  const runs = typeof t === "string" ? runsWithPending(t, { fontSize: o.fontSize, color: o.color, bold: o.bold, ...(o.fontFace ? { fontFace: o.fontFace } : {}) }) : t;
   slide.addText(runs, { fontFace: SANS, color: C.ink, margin: 0, isTextBox: true, valign: "top", fit: "none", ...o });
 }
 
@@ -706,13 +807,13 @@ function cell(t: string | TableCell[], o: TableCellProps = {}): TableCell {
 export function exhibitHeader(slide: Slide, x: number, y: number, w: number, h: ExhibitHeader): number {
   const runs = [run(h.title, { bold: true, color: C.ink, fontSize: 9.5 })];
   if (h.units) runs.push(run(`  ${h.units}`, { color: C.muted, fontSize: 9.5 }));
-  const titleW = r3(h.title.length * charW(9.5, true) + (h.units ? (h.units.length + 2) * charW(9.5) : 0) + 0.1);
+  const titleW = r3(textWidth(h.title, 9.5, true) + (h.units ? textWidth(`  ${h.units}`, 9.5) : 0) + 0.1);
   let annotation = h.annotation;
   if (annotation) {
     // The annotation takes what the title leaves; if that is too little it is shortened at a word boundary rather than overlapping.
     const room = w - titleW - 0.15;
-    const fits = Math.floor(room / charW(8));
-    if (annotation.length > fits) annotation = annotation.slice(0, Math.max(0, fits)).replace(/\s+\S*$/, "");
+    // An annotation that does not fit is dropped whole rather than cut mid-phrase.
+    if (textWidth(annotation, 8) > room) annotation = undefined;
   }
   text(slide, runs, { x, y, w: annotation ? Math.min(titleW, w) : w, h: SPACE.headerRule, valign: "bottom", fontSize: 9.5 });
   if (annotation) text(slide, annotation, { x: r3(x + titleW), y, w: r3(w - titleW), h: SPACE.headerRule, valign: "bottom", align: "right", fontSize: 8, color: C.muted });
@@ -729,8 +830,7 @@ export function exhibitHeader(slide: Slide, x: number, y: number, w: number, h: 
 export function numTable(slide: Slide, x: number, y: number, spec: NumTableSpec): number {
   const { cols, rows, name } = spec;
   const fontSize = spec.fontSize ?? 8.5;
-  const rowH = spec.rowH ?? (rows.length >= 12 ? 0.19 : 0.195);
-  const headH = 0.21;
+  const heights = numTableRowHeights(spec);
   const colW = cols.map((c) => c.w);
   const w = r3(colW.reduce((s, v) => s + v, 0));
   const out: TableCell[][] = [];
@@ -768,13 +868,13 @@ export function numTable(slide: Slide, x: number, y: number, spec: NumTableSpec)
       i += n;
     }
     out.push(tier1, tier2);
-    rh.push(headH, headH);
+    rh.push(...heights.head);
   } else {
     out.push(cols.map((c, i) => (c.kind === "gap" ? gapCell() : headCell(i === 0 ? name : (c.head ?? ""), { align: headAlign(c, i) }))));
-    rh.push(headH);
+    rh.push(...heights.head);
   }
 
-  rows.forEach((r) => {
+  rows.forEach((r, ri) => {
     const isSection = r.type === "section";
     const isKey = r.type === "key";
     const isSubtotal = r.type === "subtotal";
@@ -807,7 +907,7 @@ export function numTable(slide: Slide, x: number, y: number, spec: NumTableSpec)
       return cell(val, { ...o, align: c.left ? "left" : "right" });
     });
     out.push(cells);
-    rh.push(rowH);
+    rh.push(heights.rows[ri]!);
   });
   slide.addTable(out, { x, y, w, colW, rowH: rh, autoPage: false, fontFace: SANS });
   return r3(y + rh.reduce((s, h) => s + h, 0));
@@ -835,6 +935,10 @@ export function textTable(slide: Slide, x: number, y: number, spec: TextTableSpe
         if (spec.refCol === i) o.color = C.muted;
         if (spec.tintFirstCol && i === 0) o.fill = { color: C.tint };
         if (spec.totalRow === ri) Object.assign(o, { bold: true, border: [hair(C.maroon, 0.75), NONE, hair(C.maroon, 0.75), NONE] });
+        if (typeof t !== "string") {
+          o.bold = false;
+          return cell([cellRun(`${t.lead} `, { bold: true, fontSize, color: C.ink }), ...cellRuns(t.body, { fontSize, color: C.ink })], o);
+        }
         return cell(t, o);
       }),
     );
@@ -947,6 +1051,7 @@ const chartBase: ChartOpts = {
   catAxisLineShow: true,
   catAxisLineColor: C.rule,
   catAxisLineSize: 0.5,
+  catAxisMajorTickMark: "none",
   valAxisHidden: true,
   valGridLine: { style: "none" },
   catGridLine: { style: "none" },
@@ -959,25 +1064,49 @@ const chartBase: ChartOpts = {
 };
 
 /** Category labels never wrap at a hyphen ("Jan-25" stays on one line). */
-const nb = (labels: string[]): string[] => labels.map((l) => l.replace(/-/g, "\u2011"));
+const nb = (labels: string[]): string[] => labels.map((l) => l.replace(/-/g, "‑"));
 
 /** Rows a top-left legend needs at 8 pt across a chart of width w, and the fraction of height h they take. */
-function legendFraction(names: string[], w: number, h: number): number {
+function legendFraction(names: string[], w: number, h: number): { h: number; w: number } {
   const width = names.reduce((s, n) => s + n.length * charW(8) + 0.35, 0);
   const rows = Math.max(1, Math.ceil(width / w));
-  return r3((rows * 0.17) / h);
+  return { h: r3((rows * 0.17) / h), w: r3(Math.min(1, width / w + 0.02)) };
+}
+
+const labelOn = (fill: string): string => (DARK_FILLS.has(fill) ? C.white : C.ink);
+const maxOf = (vals: number[]): number => Math.max(0, ...vals.filter((v) => Number.isFinite(v)));
+
+/** Waterfall as stacked bars over an invisible base: one series each for totals, increases and decreases. */
+export function waterfallSeries(steps: { value: number; total?: boolean }[]): { base: number[]; total: number[]; up: number[]; down: number[] } {
+  const base: number[] = [];
+  const total: number[] = [];
+  const up: number[] = [];
+  const down: number[] = [];
+  let run = 0;
+  for (const s of steps) {
+    if (s.total) {
+      run = s.value;
+      base.push(0), total.push(s.value), up.push(0), down.push(0);
+    } else if (s.value >= 0) {
+      base.push(run), total.push(0), up.push(s.value), down.push(0);
+      run += s.value;
+    } else {
+      run += s.value;
+      base.push(run), total.push(0), up.push(0), down.push(-s.value);
+    }
+  }
+  return { base, total, up, down };
 }
 
 export function chart(deck: Deck, slide: Slide, x: number, y: number, w: number, spec: ChartSpec, hOverride?: number): number {
   const h = hOverride ?? DEFAULT_CHART_H;
-  const fmt = "format" in spec && spec.format ? spec.format : "#,##0";
-  const maxOf = (vals: number[]) => Math.max(0, ...vals.filter((v) => Number.isFinite(v)));
+  const fmt = spec.format ?? "#,##0";
   switch (spec.type) {
     case "twinPanels": {
       const pw = r3((w - 0.2 * (spec.panels.length - 1)) / spec.panels.length);
       spec.panels.forEach((p, i) => {
         deck.noteChart({ titleLeft: true, plot: { y: 0.12, h: 0.72 } });
-        slide.addChart("bar", [{ name: deck.seriesName(p.caption, {}), labels: nb(p.labels), values: p.values }], {
+        slide.addChart("bar", [{ name: p.caption, labels: nb(p.labels), values: p.values }], {
           ...chartBase,
           x: r3(x + i * (pw + 0.2)),
           y,
@@ -992,7 +1121,6 @@ export function chart(deck: Deck, slide: Slide, x: number, y: number, w: number,
           titleFontFace: SANS,
           titleFontSize: 8,
           titleColor: C.muted,
-          titleAlign: "left",
           valAxisMaxVal: Math.ceil(maxOf(p.values) * 1.2),
           valAxisMinVal: 0,
         });
@@ -1002,27 +1130,28 @@ export function chart(deck: Deck, slide: Slide, x: number, y: number, w: number,
     case "bars": {
       const colors = spec.colors ?? (spec.series.length <= 2 ? SERIES2 : SERIES4);
       const stacked = spec.grouping !== "clustered";
-      const data = spec.series.map((s, i) => ({
-        name: deck.seriesName(s.name, { labelColor: DARK_FILLS.has(colors[i % colors.length]!) ? C.white : C.ink, whiteOutline: stacked }),
-        labels: nb(s.labels),
-        values: s.values,
-      }));
       const legend = spec.legend ?? spec.series.length > 1;
-      deck.noteChart(legend ? { legendFraction: legendFraction(spec.series.map((s) => s.name), w, h) } : {});
-      const top = stacked ? undefined : (spec.maxVal ?? Math.ceil(maxOf(spec.series.flatMap((s) => s.values)) * 1.2));
-      slide.addChart("bar", data, {
-        ...chartBase,
-        x, y, w, h,
-        barGrouping: spec.grouping,
-        chartColors: colors,
-        dataLabelPosition: spec.labelPos ?? (stacked ? "ctr" : "outEnd"),
-        dataLabelFormatCode: fmt,
-        dataLabelColor: stacked ? C.white : C.ink,
-        showLegend: legend,
-        legendPos: "t",
-        valAxisMaxVal: top,
-        valAxisMinVal: 0,
+      deck.noteChart({
+        ...(legend ? { legendFraction: legendFraction(spec.series.map((s) => s.name), w, h) } : {}),
+        series: spec.series.map((_, i) => ({ labelColor: stacked ? labelOn(colors[i % colors.length]!) : C.ink, whiteOutline: stacked })),
       });
+      const top = stacked ? undefined : (spec.maxVal ?? Math.ceil(maxOf(spec.series.flatMap((s) => s.values)) * 1.2));
+      slide.addChart(
+        "bar",
+        spec.series.map((s) => ({ name: s.name, labels: nb(s.labels), values: s.values })),
+        {
+          ...chartBase,
+          x, y, w, h,
+          barGrouping: spec.grouping,
+          chartColors: colors,
+          dataLabelPosition: spec.labelPos ?? (stacked ? "ctr" : "outEnd"),
+          dataLabelFormatCode: fmt,
+          showLegend: legend,
+          legendPos: "t",
+          valAxisMaxVal: top,
+          valAxisMinVal: 0,
+        },
+      );
       return r3(y + h);
     }
     case "hbar": {
@@ -1041,60 +1170,34 @@ export function chart(deck: Deck, slide: Slide, x: number, y: number, w: number,
         valAxisMinVal: 0,
         catAxisOrientation: "maxMin",
       } as unknown as ChartOpts;
-      slide.addChart("bar", [{ name: deck.seriesName("Share", {}), labels: nb(spec.labels), values: spec.values }], opts);
+      slide.addChart("bar", [{ name: "Value", labels: nb(spec.labels), values: spec.values }], opts);
       return r3(y + h);
     }
     case "monthly": {
-      deck.noteChart();
-      // Above 16 bars only quarter starts are labelled (guide 2.6); the axis skips labels itself so the ones shown get three slots of width.
-      const labels = nb(spec.labels);
-      const every = spec.labels.length > 16 ? 3 : 1;
-      slide.addChart("bar", [{ name: deck.seriesName("Monthly", {}), labels, values: spec.values }], {
+      // One maroon series, every bar labelled up to 36 bars, no legend (guide 2.6 monthly series). Above 16 bars only quarter
+      // starts are labelled; the other categories print blank, which every renderer honours, where LibreOffice ignores a skip interval.
+      const quarterly = spec.labels.length > 16;
+      const labels = nb(spec.labels.map((l) => (!quarterly || /^(Jan|Apr|Jul|Oct)-/.test(l) ? l : "")));
+      deck.noteChart({ noWrap: quarterly });
+      slide.addChart("bar", [{ name: "Monthly", labels, values: spec.values }], {
         ...chartBase,
         x, y, w, h,
         chartColors: [C.maroon],
-        barGapWidthPct: 60,
         dataLabelPosition: "outEnd",
         dataLabelFormatCode: fmt,
-        dataLabelFontSize: spec.values.length > 24 ? 7 : 8,
-        catAxisLabelFrequency: every,
         showLegend: false,
         valAxisMaxVal: Math.ceil(maxOf(spec.values) * 1.18),
         valAxisMinVal: 0,
       });
-      if (!spec.line) return r3(y + h);
-      deck.noteChart({ titleLeft: true, plot: { y: 0.22, h: 0.5 } });
-      const lh = 1.1;
-      const vals = spec.line.values.map((v) => (v === null ? null : v)) as number[];
-      const present = spec.line.values.filter((v): v is number => v !== null);
-      slide.addChart("line", [{ name: deck.seriesName(spec.line.name, { lastPointOnly: true, gapBlanks: true }), labels, values: vals }], {
-        ...chartBase,
-        x, y: r3(y + h), w, h: lh,
-        chartColors: [spec.line.color ?? C.slate],
-        lineSize: 1.75,
-        lineDataSymbol: "none",
-        dataLabelFormatCode: spec.line.format ?? fmt,
-        dataLabelPosition: "t",
-        showLegend: false,
-        showTitle: true,
-        title: spec.line.name,
-        titleFontFace: SANS,
-        titleFontSize: 8,
-        titleColor: C.muted,
-        titleAlign: "left",
-        catAxisLabelFrequency: every,
-        valAxisMaxVal: Math.ceil(maxOf(present) * 1.15),
-        valAxisMinVal: Math.floor(Math.min(...present) * 0.85),
-      });
-      return r3(y + h + lh);
+      return r3(y + h);
     }
     case "diverging": {
-      deck.noteChart({ legendFraction: legendFraction(["Wins", "Losses"], w, h) });
+      deck.noteChart({ legendFraction: legendFraction(["Wins", "Losses"], w, h), series: [{ labelColor: C.ink }, { labelColor: C.ink }] });
       slide.addChart(
         "bar",
         [
-          { name: deck.seriesName("Wins", { labelColor: C.ink }), labels: nb(spec.labels), values: spec.wins },
-          { name: deck.seriesName("Losses", { labelColor: C.ink }), labels: nb(spec.labels), values: spec.losses.map((v) => -Math.abs(v)) },
+          { name: "Wins", labels: nb(spec.labels), values: spec.wins },
+          { name: "Losses", labels: nb(spec.labels), values: spec.losses.map((v) => -Math.abs(v)) },
         ],
         {
           ...chartBase,
@@ -1106,6 +1209,40 @@ export function chart(deck: Deck, slide: Slide, x: number, y: number, w: number,
           showLegend: true,
           legendPos: "t",
           catAxisLabelPos: "low",
+        },
+      );
+      return r3(y + h);
+    }
+    case "waterfall": {
+      const s = waterfallSeries(spec.steps);
+      const labels = nb(spec.labels);
+      deck.noteChart({
+        series: [
+          { invisible: true },
+          { labelColor: C.white },
+          { labelColor: C.ink },
+          { labelColor: C.white, labelFormat: `(${fmt});(${fmt});""` },
+        ],
+      });
+      const top = Math.ceil(maxOf(s.base.map((b, i) => b + s.total[i]! + s.up[i]! + s.down[i]!)) * 1.08);
+      slide.addChart(
+        "bar",
+        [
+          { name: "Base", labels, values: s.base },
+          { name: "Total", labels, values: s.total },
+          { name: "Increase", labels, values: s.up },
+          { name: "Decrease", labels, values: s.down },
+        ],
+        {
+          ...chartBase,
+          x, y, w, h,
+          barGrouping: "stacked",
+          chartColors: [C.white, C.maroon, C.estimate, C.slate],
+          dataLabelPosition: "ctr",
+          dataLabelFormatCode: `${fmt};(${fmt});""`,
+          showLegend: false,
+          valAxisMaxVal: top,
+          valAxisMinVal: 0,
         },
       );
       return r3(y + h);

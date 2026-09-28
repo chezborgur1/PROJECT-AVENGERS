@@ -16,6 +16,8 @@ declare module "fast-formula-parser" {
   export default class FormulaParser {
     constructor(config: {
       functions?: Record<string, (...params: { value: unknown }[]) => unknown>;
+      /** Resolves a defined name to the cell or range it names. */
+      onVariable?: (name: string) => CellRef | RangeRef | undefined;
       onCell: (ref: CellRef) => unknown;
       onRange: (ref: RangeRef) => unknown[][];
     });

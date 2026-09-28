@@ -27,8 +27,8 @@ export const CHECKS: { id: string; check: string; tab: string }[] = [
   { id: "C18", check: "No hard-coded number inside a formula grid", tab: "Checks" },
   { id: "C19", check: "Deferred revenue and customer deposits appear in exactly one of NWC and Debt-Like Items", tab: "Debt-Like Items" },
   { id: "C20", check: "NWC peg built from >= 12 month-ends", tab: "NWC" },
-  { id: "C21", check: "Every chart-data row equals its source row for the same months", tab: "Charts" },
-  { id: "C22", check: "Chart lint: ranges, names, colours, axes", tab: "Charts" },
+  { id: "C21", check: "Every chart-data row equals its source row for the same months", tab: "Revenue Charts" },
+  { id: "C22", check: "Chart lint: ranges, names, colours, axes", tab: "Revenue Charts" },
   { id: "C23", check: "Tie Out: Consideration vs. Deal Structure, per Offer Comparison column", tab: "Offer Comparison" },
   { id: "C24", check: "Tie Out: value by source vs. offer equals zero per column", tab: "Offer Comparison" },
   { id: "C25", check: "Every shared-assumption row on Offer Comparison has Variance = 0", tab: "Offer Comparison" },
@@ -118,8 +118,8 @@ export function computeChecks(ctx: CheckContext): { checks: CheckResult[]; maste
   ok("C05", maxAbs(ladderCols.map((c) => out.periods[c.key]!.ladder.checks.reportedEbitdaTie)));
   ok("C06", maxAbs(hist.flatMap((c) => Object.values(out.periods[c.key]!.ladder.checks.scheduleTieByTier))));
 
-  // C07: balance sheets.
-  const bsChecks = hist.map((c) => out.periods[c.key]!.bs?.check).filter((v): v is number => v !== undefined);
+  // C07: every dated balance sheet the Balance Sheet tab carries.
+  const bsChecks = ds.balanceSheets?.length ? ds.balanceSheets.map(({ values: v }) => v.cash + v.accounts_receivable + v.inventory + v.other_current_assets + v.fixed_assets_net + v.other_assets - v.accounts_payable - v.other_current_liabilities - v.debt - v.equity) : hist.map((c) => out.periods[c.key]!.bs?.check).filter((v): v is number => v !== undefined);
   if (bsChecks.length) ok("C07", maxAbs(bsChecks));
   else na("C07", "No balance sheet in the sources");
 
@@ -154,7 +154,7 @@ export function computeChecks(ctx: CheckContext): { checks: CheckResult[]; maste
     const months = Object.keys(ds.depositsByMonth).filter((m) => grid.values[m]).sort();
     const deposits = months.reduce((s, m) => s + ds.depositsByMonth![m]!.amount, 0);
     const revenue = months.reduce((s, m) => s + grid.values[m]!.revenue, 0);
-    ok("C14", revenue ? (deposits - revenue) / revenue : 0, 0.05, "Deposits less revenue over the months with bank data, as a share of revenue");
+    ok("C14", revenue ? (deposits - revenue) / revenue : 0, 0.05, "Deposits less revenue for the months with bank data, % of revenue");
   } else if (ds.deposits && Object.keys(ds.deposits).length) {
     const [fy, d] = Object.entries(ds.deposits)[0]!;
     const revenue = ds.pnl[Number(fy)]?.revenue ?? 0;
@@ -180,8 +180,15 @@ export function computeChecks(ctx: CheckContext): { checks: CheckResult[]; maste
 
   // C21, C22: chart tabs.
   if (tabs.charts) {
-    ok("C21", 0, 0, "Chart data rows are INDEX/MATCH links");
-    ok("C22", 0, 0, "Chart XML lint in verifyWorkbook");
+    // Engine side of C21: every mix sums to total revenue month by month; the workbook adds each row against its source.
+    const mixGap = (out.charts ?? []).filter((e) => e.form === "stacked").reduce((worst, e) => {
+      const total = e.series.find((x) => x.source.kind === "monthly" && x.source.rowKey === "revenue" && x.plotted === false);
+      if (!total) return worst;
+      const parts = e.series.filter((x) => x !== total);
+      return Math.max(worst, ...total.values.map((v, i) => Math.abs(parts.reduce((s, x) => s + x.values[i]!, 0) - v)));
+    }, 0);
+    ok("C21", mixGap, 1e-6, "Chart-data rows link their source by month; mixes sum to total revenue");
+    ok("C22", 0, 0, "Writer-side lint: verifyWorkbook reads every chart part");
   } else {
     na("C21", "Chart tabs not built");
     na("C22", "Chart tabs not built");

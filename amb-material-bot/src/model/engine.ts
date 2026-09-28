@@ -9,6 +9,7 @@
 // payroll analytics, valuation, deal structure, sensitivities, checks and
 // the named outputs of guide 5.14.
 
+import { chartExhibits } from "./chartData.ts";
 import {
   ADJUSTMENT_TIERS,
   IS_LABELS,
@@ -46,7 +47,7 @@ import {
   scheduleFor,
   windowMonths,
 } from "./periods.ts";
-import type { DatabookBsRow, DatabookRow, Ladder, ModelOutput, NamedOutputs, PeriodColumn, PeriodValues, PnlLines, ProFormaScenario } from "./types.ts";
+import type { DatabookBsRow, DatabookRow, Ladder, ModelOutput, NamedOutputs, PeriodColumn, PeriodValues, ProFormaScenario } from "./types.ts";
 
 export interface BalanceSheetValues {
   cash: number;
@@ -65,6 +66,8 @@ export interface BalanceSheetValues {
   check: number;
   /** True when the opening balance sheet was estimated (no actuals in the sources). */
   estimated?: boolean;
+  /** Statement month when it is not the fiscal year-end (the projections open from the latest dated sheet). */
+  asOfMonth?: MonthKey;
 }
 
 export interface CashFlowValues {
@@ -210,8 +213,10 @@ function legacyModel(ds: FinancialDataset, a: Assumptions): ModelResult {
     });
   }
 
+  // Without a year-end sheet the projections open from the latest dated one, and only without any sheet from an estimate.
   const lastHist = years[years.length - 1]!;
-  lastHist.bs ??= estimatedOpeningBalanceSheet(ds, a);
+  const latestSheet = ds.balanceSheets?.at(-1);
+  lastHist.bs ??= latestSheet ? { ...bsValues(latestSheet.values), asOfMonth: latestSheet.period.key } : estimatedOpeningBalanceSheet(ds, a);
 
   let prev = lastHist;
   a.projectionYears.forEach((y, i) => {
@@ -485,7 +490,8 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
         asOfDate,
         years,
         fye,
-        window: { revenue: latestValues.pnl.revenue, payroll: latestValues.pnl.payroll, fiscalYear: latest.fiscalYear ?? latestFy },
+        window: { revenue: latestValues.pnl.revenue, payroll: latestValues.pnl.payroll },
+        fiscalYear: { year: latestFy, revenue: ds.pnl[latestFy]!.revenue, payroll: ds.pnl[latestFy]!.payroll },
         customersLatest: customers?.latestCount,
         gridMonths,
       })
@@ -499,7 +505,7 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
     if (ds.revenueLines?.length && p.pnl.revenue) k.recurring_revenue_pct = p.revenueLines.filter((l) => l.recurring).reduce((s, l) => s + l.amount, 0) / p.pnl.revenue;
     if (ds.customers) {
       const end = monthEndDate(c.end);
-      const active = ds.customers.customers.filter((x) => customerActiveAt(x, end)).length;
+      const active = ds.customers.customers.filter((x) => customerActiveAt(x, end, fye)).length;
       k.customers = active;
       if (active) k.revenue_per_customer = p.pnl.revenue / active;
     }
@@ -508,6 +514,7 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
       const staff = ds.payroll.employees.filter((e) => !e.isOwner && onPayrollAt(e, end));
       const fte = staff.reduce((s, e) => s + e.fte, 0);
       const field = staff.filter((e) => isFieldDepartment(e.department)).reduce((s, e) => s + e.fte, 0);
+      k.employees = fte;
       if (fte && c.months === 12) k.revenue_per_employee = p.pnl.revenue / fte;
       if (field && c.months === 12) k.revenue_per_field_employee = p.pnl.revenue / field;
     }
@@ -581,16 +588,20 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
         mappedBy: l.mappedBy,
         byFiscalYear: Object.fromEntries(years.map((y) => [y, ds.lines.filter((x) => x.statement === "pnl" && x.account === l.account && x.year === y).reduce((s, x) => s + x.amount, 0)])),
       }));
-  const databookBs: DatabookBsRow[] = [...new Map(ds.lines.filter((l) => l.statement === "balance_sheet").map((l) => [l.account, l])).values()].map((l) => ({
+  // One Databook column per dated balance sheet (month-ends and year-ends alike), so the Balance Sheet, NWC and
+  // Cash Flow tabs all read the same dates. Datasets built before sheets carried their lines fall back to the year-ends in `lines`.
+  const bsSheets: { key: MonthKey; lines: typeof ds.lines }[] = ds.balanceSheets?.length
+    ? ds.balanceSheets.map((p) => ({ key: p.period.key, lines: p.lines ?? ds.lines.filter((l) => l.statement === "balance_sheet" && p.fiscalYearEnd && l.year === p.period.fiscalYear) }))
+    : years.map((y) => ({ key: fiscalYearEndKey(y, fye), lines: ds.lines.filter((l) => l.statement === "balance_sheet" && l.year === y) }));
+  const bsAccounts = [...new Map(bsSheets.flatMap((s) => s.lines).map((l) => [l.account, l])).values()];
+  const databookBs: DatabookBsRow[] = bsAccounts.map((l) => ({
     account: l.account,
     section: l.section,
     category: l.category as BsCategory,
     source: l.source,
     file: l.file,
     mappedBy: l.mappedBy,
-    byMonth: Object.fromEntries(
-      ds.lines.filter((x) => x.statement === "balance_sheet" && x.account === l.account).map((x) => [fiscalYearEndKey(x.year, fye), x.amount]),
-    ),
+    byMonth: Object.fromEntries(bsSheets.filter((s) => s.lines.some((x) => x.account === l.account)).map((s) => [s.key, s.lines.filter((x) => x.account === l.account).reduce((t, x) => t + x.amount, 0)])),
   }));
 
   // --- Named outputs, modules, checks ----------------------------------------------------------------------
@@ -625,7 +636,7 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
     NWC_Peg: nwc?.peg ?? null,
     NWC_Latest: nwc?.latest ?? null,
     NWC_vsPeg: nwc?.latestVsPeg ?? null,
-    DefRev_Latest: nwc ? nwc.periods.at(-1)!.lines.deferredRevenue : null,
+    DefRev_Latest: nwc?.available.deferred_revenue ? nwc.periods.at(-1)!.lines.deferredRevenue : null,
     MasterCheck: "",
     LOIDate: null,
     SigningDate: null,
@@ -678,11 +689,14 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
     cashFlow,
     databook: { pnl: databookPnl, bs: databookBs },
   };
+  // The chart exhibits read the analytics above; each chart tab follows its analysis tab (guide 5.12).
+  const charts = chartExhibits(ds, draft);
+  module("Chart tabs (guide 5.12)", charts.length > 0, "Fewer than 12 months of monthly P&L");
   const { checks, masterCheck } = computeChecks({
     ds,
-    out: draft,
+    out: { ...draft, charts },
     tabs: {
-      charts: false,
+      charts: charts.length > 0,
       offerComparison: false,
       realEstate: false,
       strips: a.sourceGranularity === "monthly",
@@ -691,5 +705,5 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
     },
   });
   namedOutputs.MasterCheck = masterCheck;
-  return { ...draft, checks, masterCheck, namedOutputs, modules: { built, omitted } };
+  return { ...draft, charts, checks, masterCheck, namedOutputs, modules: { built, omitted } };
 }

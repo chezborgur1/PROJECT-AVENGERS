@@ -2,7 +2,7 @@
   "name": "amb-material-bot",
   "version": "0.1.0",
   "private": true,
-  "description": "AMB Advisory: turns a high-priority request list into a 3-statement model (.xlsx) and a 10-page CIM (.pptx) per business",
+  "description": "AMB Advisory: turns a high-priority request list into a verified financial model (.xlsx) and a variable-length CIM (.pptx and .pdf) per business",
   "type": "module",
   "bin": {
     "amb-bot": "./src/cli.ts"
@@ -23,6 +23,7 @@
     "dotenv": "^18.0.4",
     "exceljs": "^4.4.0",
     "fast-formula-parser": "^1.0.19",
+    "jszip": "^3.10.2",
     "pptxgenjs": "^4.0.1",
     "zod": "^4.6.5"
   },

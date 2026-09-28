@@ -16,6 +16,8 @@
 //   payroll*.csv           payroll register
 //   kpis*.csv              operating metrics
 //   mapping-overrides.csv  account, category
+//   cim-copy.fixture.json  reviewed CIM copy for a sample folder (read by
+//                          src/cim/narrative.ts, not a financial source)
 
 import fs from "node:fs";
 import path from "node:path";
@@ -46,7 +48,7 @@ export interface IntakeBundle {
   intakeFacts: "intake.json" | "claude" | "none";
 }
 
-type IntakeFileKind = "adjustments" | "addbacks" | "overrides" | "customers" | "payroll" | "kpis" | "intake";
+type IntakeFileKind = "adjustments" | "addbacks" | "overrides" | "customers" | "payroll" | "kpis" | "intake" | "copyFixture";
 
 const INTAKE_FILES: { test: RegExp; kind: IntakeFileKind }[] = [
   { test: /^adjustments\.(csv|xlsx)$/, kind: "adjustments" },
@@ -56,6 +58,8 @@ const INTAKE_FILES: { test: RegExp; kind: IntakeFileKind }[] = [
   { test: /^payroll([-_ ].*)?\.(csv|xlsx)$/, kind: "payroll" },
   { test: /^kpis?([-_ ].*)?\.(csv|xlsx)$/, kind: "kpis" },
   { test: /^intake\.json$/, kind: "intake" },
+  // The name is COPY_FIXTURE in src/cim/narrative.ts; matched here so the ingest does not import the CIM engine.
+  { test: /^cim-copy\.fixture\.json$/, kind: "copyFixture" },
 ];
 
 export function loadAddbacks(file: string): Addback[] {
@@ -147,6 +151,8 @@ export async function gatherIntake(row: RequestRow, repoRoot: string, log: (msg:
         intake = loadIntakeFile(file, row.business_name);
         intakeFacts = "intake.json";
         files.push({ file: name, used: "Structured intake facts" });
+      } else if (special === "copyFixture") {
+        files.push({ file: name, used: "CIM copy fixture (used when no API key is set)" });
       } else if (ext === ".md" || ext === ".txt" || ext === ".docx") {
         const text = ext === ".docx" ? readDocxText(file) : fs.readFileSync(file, "utf8");
         noteParts.push(`### ${name}\n${text.trim()}`);

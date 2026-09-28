@@ -60,7 +60,7 @@ import type { IngestExtract } from "./extract.ts";
 import type { LoadedIntake } from "./intake.ts";
 import { buildPayrollRegister, type PayrollFile } from "./payroll.ts";
 import type { DatedBalanceSheet } from "./reportTable.ts";
-import { sentenceCase } from "../util/tables.ts";
+import { clientLabel } from "../util/tables.ts";
 
 export const HISTORY_YEARS = 3;
 /** Fewer usable months than this and the model runs in the annual-only layout (guide 5.2A). */
@@ -259,7 +259,7 @@ export function mergeSources(input: MergeInput): FinancialDataset {
     for (const l of raw) {
       const { category, mappedBy } = mapBsLine(l, overrides);
       values[category] += l.amount;
-      const dl = bsDetailLine(l.account, l.section ?? "");
+      const dl = bsDetailLine(l.account, l.section ?? "", category);
       if (dl) detail[dl] = (detail[dl] ?? 0) + l.amount;
       mapped.push({ ...l, year: period.fiscalYear, statement: "balance_sheet", category, mappedBy, source: src.kind, file: src.file });
       if (mappedBy === "default") defaulted.add(l.account);
@@ -271,7 +271,7 @@ export function mergeSources(input: MergeInput): FinancialDataset {
       warnings.push(`Balance sheet at ${monthLabel(key)} from ${SOURCE_LABELS[src.kind]} was out of balance by ${fmt(gap)}; equity adjusted to balance. Check the account mapping.`);
       values.equity += gap;
     }
-    balanceSheets.push({ period, asOf: monthEndDate(key), fiscalYearEnd: period.fiscalMonth === 12, values, ...(Object.keys(detail).length ? { detail } : {}), source: src.kind, file: src.file });
+    balanceSheets.push({ period, asOf: monthEndDate(key), fiscalYearEnd: period.fiscalMonth === 12, values, ...(Object.keys(detail).length ? { detail } : {}), lines: mapped, source: src.kind, file: src.file });
     bsLinesByKey.set(key, mapped);
   }
   const balanceSheet: FinancialDataset["balanceSheet"] = {};
@@ -287,8 +287,11 @@ export function mergeSources(input: MergeInput): FinancialDataset {
   if (lastYear === undefined) {
     warnings.push("No full fiscal year of P&L data found in any source.");
   } else if (!balanceSheet[lastYear]) {
+    const latest = balanceSheets[balanceSheets.length - 1];
     warnings.push(
-      `No FY${lastYear} balance sheet in the sources. The model builds an opening balance sheet from working-capital assumptions; replace it with actuals when available.`,
+      latest
+        ? `No FY${lastYear} year-end balance sheet in the sources; the projections open from the latest dated sheet (${monthLabel(latest.period.key)}). Request the ${monthLabel(monthKey(lastYear, fyEndMonth))} balance sheet.`
+        : `No FY${lastYear} balance sheet in the sources. The model builds an opening balance sheet from working-capital assumptions; replace it with actuals when available.`,
     );
   }
   if (defaulted.size) {
@@ -398,7 +401,7 @@ export function mergeSources(input: MergeInput): FinancialDataset {
       const contra = isContraRevenueName(account) || (values.some((v) => v < 0) && values.every((v) => v <= 0));
       revenueLines.push({
         account,
-        label: fact?.label ?? sentenceCase(leaf(account)),
+        label: fact?.label ?? clientLabel(leaf(account)),
         byFiscalYear: Object.fromEntries(years.map((y) => [y, amounts[y] ?? 0])),
         ...(byMonth ? { byMonth } : {}),
         recurring: fact?.recurring ?? isRecurringRevenueName(account),
@@ -436,14 +439,17 @@ export function mergeSources(input: MergeInput): FinancialDataset {
   let legacyAddbacks: Addback[] = addbacks.filter((a) => years.includes(a.year));
   if (lastYear !== undefined) {
     let fileRows: ScheduleRow[];
+    // A grid that ends inside a fiscal year leaves that year's file column as the YTD amount.
+    const lastGridFy = grid?.monthly.months.at(-1)?.fiscalYear;
+    const stubFy = lastGridFy !== undefined && !years.includes(lastGridFy) ? lastGridFy : undefined;
     if (input.adjustmentRows) {
-      const fitted = fitRowsToYears(input.adjustmentRows, years);
+      const fitted = fitRowsToYears(input.adjustmentRows, years, stubFy);
       fileRows = fitted.rows;
       warnings.push(...fitted.warnings);
     } else {
-      fileRows = legacyAddbacksToRows(addbacks, years);
+      fileRows = legacyAddbacksToRows(addbacks, years, stubFy);
       for (const a of addbacks) {
-        if (!years.includes(a.year)) warnings.push(`Add-back "${a.description}" is for FY${a.year}, which is not in the model; ignored.`);
+        if (!years.includes(a.year) && a.year !== stubFy) warnings.push(`Add-back "${a.description}" is for FY${a.year}, which is not in the model; ignored.`);
       }
     }
     const intakeSalary = input.intake?.facts.transaction.replacementSalary?.amount;
@@ -492,7 +498,7 @@ export function mergeSources(input: MergeInput): FinancialDataset {
       if (!cls) return;
       ranked.push({
         item: {
-          item: sentenceCase(leaf(l.account)),
+          item: clientLabel(leaf(l.account)),
           balance: l.amount,
           asOf: latestBs.asOf,
           treatment: cls.treatment,

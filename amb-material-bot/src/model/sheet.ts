@@ -11,7 +11,8 @@
 // and resolved once every tab has laid out its rows (resolveTokens), so a
 // planner never needs another tab's row numbers up front.
 
-import { COLOR, FMT, MARGINS, ROW_HEIGHT, STYLES, WIDTH, type AlignSpec, type FontSpec, type Role, type StyleName } from "./styles.ts";
+import type { ChartPlacement } from "./charts.ts";
+import { COLOR, ROW_HEIGHT, STYLES, WIDTH, type AlignSpec, type FontSpec, type Role, type StyleName } from "./styles.ts";
 
 export type BorderStyle = "thin" | "medium" | "double";
 export type BorderSpec = Partial<Record<"top" | "bottom" | "left" | "right", BorderStyle>>;
@@ -26,6 +27,8 @@ export interface CellSpec {
   font?: FontSpec;
   fill?: string;
   border?: BorderSpec;
+  /** Border colour (hex); black by default. */
+  borderColor?: string;
   align?: AlignSpec;
   /** What the engine says this cell evaluates to, in the cell's own units. */
   expect?: number | string | boolean;
@@ -49,6 +52,8 @@ export interface PrintSpec {
   landscape: boolean;
   fitToWidth: number;
   fitToHeight: number;
+  /** A fixed print scale (%) in place of fit-to-page, for tabs printed across pages at manual breaks. */
+  scale?: number;
   rowBreaks: number[];
   colBreaks: number[];
 }
@@ -70,6 +75,8 @@ export interface SheetPlan {
   footer?: string;
   cf: CfRule[];
   images: { file: string; tl: { col: number; row: number }; ext: { width: number; height: number } }[];
+  /** Merged ranges; used only for table notes, never for headers (guide 5.2: centre across selection, never merged). */
+  merges: string[];
   names: { name: string; ref: string }[];
   output: boolean;
   autoFilter?: string;
@@ -77,6 +84,8 @@ export interface SheetPlan {
   toggle?: { row: number; col: number };
   /** Ranges the Print-mode conditional format covers (defaults to the print areas). */
   toggleRanges?: string[];
+  /** Native charts drawn on the tab after ExcelJS saves it (guide 5.12). */
+  charts: ChartPlacement[];
 }
 
 export function colLetter(n: number): string {
@@ -140,7 +149,9 @@ export class SheetBuilder {
       print: { areas: [], landscape: false, fitToWidth: 1, fitToHeight: 0, rowBreaks: [], colBreaks: [] },
       cf: [],
       images: [],
+      merges: [],
       names: [],
+      charts: [],
       output: opts.output ?? true,
       rows: {},
     };
@@ -167,23 +178,30 @@ export class SheetBuilder {
     return this.plan.cells.get(cellKey(row, col));
   }
 
+  /** A typed value replaces any formula planned for the cell earlier, with its expectation. */
   text(row: number, col: number, v: string, spec: CellSpec = {}): CellSpec {
-    return this.cell(row, col, { v, role: "text", ...spec });
+    return this.cell(row, col, { v, f: undefined, expect: undefined, role: "text", ...spec });
   }
 
   /** A typed number: an input, blue unless another role is given. */
   num(row: number, col: number, v: number, spec: CellSpec = {}): CellSpec {
-    return this.cell(row, col, { v, role: "input", ...spec });
+    return this.cell(row, col, { v, f: undefined, expect: undefined, role: "input", ...spec });
   }
 
-  /** A formula. The colour code follows the formula unless a role is given: cross-sheet = link, a bare in-sheet reference = inSheet, else calc. */
+  /**
+   * A formula. The colour code follows the formula unless a role is given:
+   * cross-sheet = link, a bare in-sheet reference = inSheet, else calc. Check
+   * rows are rounded to six places so floating-point noise on an exact tie
+   * prints as the en dash rather than 0.000.
+   */
   formula(row: number, col: number, f: string, spec: CellSpec = {}): CellSpec {
-    return this.cell(row, col, { f, role: spec.role ?? roleOfFormula(f), ...spec });
+    const formula = spec.style === "check" && !/^ROUND\(/.test(f) ? `ROUND(${f},6)` : f;
+    return this.cell(row, col, { f: formula, role: spec.role ?? roleOfFormula(f), ...spec });
   }
 
   /** A text or number that means "not available", right-aligned. */
   na(row: number, col: number, text = "n.a.", spec: CellSpec = {}): CellSpec {
-    return this.cell(row, col, { v: text, role: "text", align: { horizontal: "right" }, ...spec });
+    return this.cell(row, col, { v: text, f: undefined, expect: undefined, role: "text", align: { horizontal: "right" }, ...spec });
   }
 
   applyStyle(row: number, col: number, style: StyleName, extra: CellSpec = {}): CellSpec {
@@ -246,26 +264,29 @@ export class SheetBuilder {
   anatomy(o: AnatomyOptions): void {
     this.width(1, WIDTH.gutter);
     this.height(2, ROW_HEIGHT.title);
-    this.formula(2, 2, o.titleFormula ?? "Cover!B24", { style: "title", role: "link" });
+    // The company name is furniture, so it prints black even though it links to the Cover.
+    this.formula(2, 2, o.titleFormula ?? "Cover!B24", { style: "title", role: "text" });
     this.text(3, 2, o.subtitle, { style: "subtitle" });
     for (let c = 2; c <= o.lastCol; c++) this.cell(3, c, { border: { bottom: "thin" } });
     if (o.toggleCol && o.masterToggle) {
       this.text(3, o.toggleCol - 1, "Print", { align: { horizontal: "right" }, font: { italic: false } });
-      this.formula(3, o.toggleCol, o.masterToggle, { style: "printToggle", role: "link", border: { top: "thin", bottom: "thin", left: "thin", right: "thin" }, label: "Print toggle" });
+      // Each tab's toggle defaults to the master switch on Contents (a green link); typing 0 or 1 over it overrides that tab (guide 5.9).
+      this.formula(3, o.toggleCol, o.masterToggle, { style: "printToggle", role: "link", font: { color: COLOR.link }, border: { top: "thin", bottom: "thin", left: "thin", right: "thin" }, label: "Print toggle" });
       this.plan.toggle = { row: 3, col: o.toggleCol };
     }
   }
 
-  /** Tier-1 header: each group filled maroon, label in the first cell, centre across selection. */
+  /** Tier-1 header: each group filled maroon, label in the first cell, centre across selection; the label column is filled too so rows 5-6 read as one band. */
   tier1(row: number, groups: { from: number; to: number; label: string }[]): void {
+    if (!groups.some((g) => g.from <= 2 && g.to >= 2)) this.cell(row, 2, { style: "headerGroup", v: null, role: "text" });
     for (const g of groups) {
       for (let c = g.from; c <= g.to; c++) this.cell(row, c, { style: "headerGroup", v: c === g.from ? g.label : null, role: "text" });
     }
   }
 
-  /** Tier-2 header cells over a filled span; the label cell (column B) is left-aligned. */
+  /** Tier-2 header cells over a filled span, broken at spacer columns like tier 1; the label cell (column B) is left-aligned. */
   tier2(row: number, span: { from: number; to: number }, entries: { col: number; v?: string; f?: string; fmt?: string; expect?: string | number; role?: Role }[], label?: string): void {
-    for (let c = span.from; c <= span.to; c++) this.cell(row, c, { style: "header", v: null, role: "text" });
+    for (let c = span.from; c <= span.to; c++) if (this.plan.widths.get(c) !== WIDTH.spacer) this.cell(row, c, { style: "header", v: null, role: "text" });
     if (label !== undefined) this.cell(row, 2, { style: "header", v: label, role: "text", align: { horizontal: "left" } });
     for (const e of entries) {
       if (e.f) this.formula(row, e.col, e.f, { style: "header", fmt: e.fmt, expect: e.expect, role: e.role ?? "text", label: `header ${e.expect ?? e.f}` });
@@ -355,7 +376,7 @@ export function roleOfFormula(f: string): Role {
 export function resolveTokens(plans: SheetPlan[]): void {
   const rows = new Map(plans.map((p) => [p.key, p.rows]));
   const sub = (s: string) =>
-    s.replace(/@\{([A-Za-z0-9_]+)\.([A-Za-z0-9_:.-]+)\}/g, (_, sheet: string, key: string) => {
+    s.replace(/@\{([A-Za-z0-9_]+)\.([^}]+)\}/g, (_, sheet: string, key: string) => {
       const r = rows.get(sheet)?.[key];
       if (r === undefined) throw new Error(`Unresolved row token @{${sheet}.${key}}`);
       return String(r);
@@ -369,6 +390,111 @@ export function resolveTokens(plans: SheetPlan[]): void {
   }
 }
 
+/**
+ * The largest print scale (%, at most 100) at which every horizontal page
+ * fits a landscape Letter page (10 in between the 5.11 margins) and rows
+ * 2..lastRow fit one page tall (7 in, leaving room for the footer). `pages`
+ * lists each page's columns, repeated title columns included. Column widths
+ * convert as Excel does at the default font: width × 7 + 5 pixels at 96 dpi.
+ */
+export function fitScale(p: SheetPlan, pages: number[][], lastRow: number): number {
+  const inches = (cols: number[]) => cols.reduce((s, c) => s + (p.hiddenCols.has(c) ? 0 : (widthOf(p, c) * 7 + 5) / 96), 0);
+  let height = 0;
+  for (let r = 2; r <= lastRow; r++) height += (p.heights.get(r) ?? ROW_HEIGHT.body) / 72;
+  const widest = Math.max(...pages.map(inches));
+  return Math.min(100, Math.floor(100 * Math.min(10 / widest, 7 / height)));
+}
+
+/** Width of a column in characters (Excel's default is 8.43). */
+const widthOf = (p: SheetPlan, c: number) => p.widths.get(c) ?? 8.43;
+
+/**
+ * Widen a standard label column (guide 5.2 width 34) until its longest
+ * printed label fits: labels are verbatim (5.4) or the advisor's own words,
+ * and a truncated label is worse than a wider grid. Section rows, notes and
+ * helpers are left out: sections overflow into their own filled band.
+ */
+export function fitLabelColumn(p: SheetPlan): void {
+  const current = widthOf(p, 2);
+  if (!p.output || current < 30 || current > 50) return;
+  let longest = 0;
+  for (const [key, spec] of p.cells) {
+    const [r, c] = key.split(":").map(Number) as [number, number];
+    if (c !== 2 || r < 7 || typeof spec.v !== "string" || ["section", "note", "helper", "header", "headerGroup"].includes(spec.style ?? "")) continue;
+    const indent = spec.align?.indent ?? STYLES[spec.style ?? "text"]?.align?.indent ?? 0;
+    const bold = spec.font?.bold ?? STYLES[spec.style ?? "text"]?.font?.bold ?? false;
+    // Arial 9 averages about 0.9 of a default-font width unit per character, 1.0 in bold; an indent step is about 1.5 units.
+    longest = Math.max(longest, spec.v.length * (bold ? 1.0 : 0.9) + indent * 1.5 + 1);
+  }
+  p.widths.set(2, Math.min(60, Math.max(current, Math.ceil(longest))));
+}
+
+/**
+ * A Notes column (tier-1 label "Notes") with nothing written below its
+ * header is dropped with the spacer before it, and the print area and the
+ * subtitle rule end at the last value column: an empty 60-wide column only
+ * shrinks the printed table.
+ */
+export function dropEmptyNotesColumn(p: SheetPlan): void {
+  const entry = [...p.cells].find(([k, spec]) => k.startsWith("5:") && spec.v === "Notes" && spec.style === "headerGroup");
+  if (!entry) return;
+  const notesCol = Number(entry[0].split(":")[1]);
+  const used = [...p.cells].some(([k, spec]) => {
+    const [r, c] = k.split(":").map(Number) as [number, number];
+    return c === notesCol && r >= 7 && ((spec.v !== null && spec.v !== undefined && spec.v !== "") || spec.f !== undefined);
+  });
+  if (used) return;
+  const spacer = p.widths.get(notesCol - 1) === WIDTH.spacer ? notesCol - 1 : notesCol;
+  for (const k of [...p.cells.keys()]) {
+    const c = Number(k.split(":")[1]);
+    if (c >= spacer && c <= notesCol) p.cells.delete(k);
+  }
+  p.widths.delete(notesCol);
+  p.widths.delete(spacer);
+  const lastCol = colLetter(spacer - 1);
+  p.print.areas = p.print.areas.map((a) => a.replace(/:\$?([A-Z]+)(\$?\d+)$/, `:${lastCol}$2`));
+}
+
+/**
+ * Wrapping text gets the height it needs. A table note ("Note: ..." in
+ * column B) is merged across the print width so it prints as a paragraph
+ * under the table; a note in a notes or source column, or any cell that
+ * wraps, grows its row instead. A row that grows top-aligns its other cells,
+ * so figures sit beside the first line. Runs once the print area is known.
+ */
+export function finalizeNotes(p: SheetPlan): void {
+  const area = p.print.areas[0];
+  const lastCol = area ? colIndex(/:\$?([A-Z]+)/.exec(area)?.[1] ?? "B") : 2;
+  for (const [key, spec] of [...p.cells]) {
+    const [r, c] = key.split(":").map(Number) as [number, number];
+    const wraps = spec.align?.wrap === true || (spec.style === "note" && spec.align?.wrap !== false);
+    if (!wraps || r < 7 || (typeof spec.v !== "string" && typeof spec.expect !== "string")) continue;
+    // A merged cell (the sensitivity row-axis label) wraps inside its own block of rows.
+    if (p.merges.some((m) => m.startsWith(`${addr(r, c)}:`))) continue;
+    const text = typeof spec.v === "string" ? spec.v : String(spec.expect);
+    const tableNote = spec.style === "note" && c === 2 && lastCol > 2 && !spec.f;
+    let chars = 0;
+    if (tableNote) {
+      for (let k = 2; k <= lastCol; k++) if (!p.hiddenCols.has(k)) chars += widthOf(p, k);
+      p.merges.push(`${addr(r, 2)}:${addr(r, lastCol)}`);
+    } else chars = widthOf(p, c);
+    // Arial 9 italic runs about 1.2 characters per width unit of the default font.
+    const lines = Math.max(1, Math.ceil(text.length / (chars * 1.2)));
+    if (lines === 1) continue;
+    p.heights.set(r, Math.max(p.heights.get(r) ?? 0, lines * 11.5 + 2));
+    if (!tableNote) {
+      for (const [k2, other] of p.cells) {
+        const [r2] = k2.split(":").map(Number) as [number];
+        if (r2 === r && other.align?.vertical === undefined) other.align = { ...other.align, vertical: "top" };
+      }
+    }
+  }
+}
+
+function colIndex(letters: string): number {
+  return [...letters].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0);
+}
+
 /** Every cell of a plan that carries an expectation. */
 export function expectations(plan: SheetPlan): { row: number; col: number; spec: CellSpec }[] {
   const out: { row: number; col: number; spec: CellSpec }[] = [];
@@ -379,5 +505,3 @@ export function expectations(plan: SheetPlan): { row: number; col: number; spec:
   }
   return out;
 }
-
-export { FMT, STYLES, MARGINS, WIDTH, ROW_HEIGHT };

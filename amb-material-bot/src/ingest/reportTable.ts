@@ -2,7 +2,7 @@
 // period columns: QuickBooks exports (CSV/XLSX) and the QuickBooks Online
 // Reports API both reduce to this shape.
 
-import { monthKey, type MonthKey, type RawLine } from "../domain/financials.ts";
+import { addMonths, fiscalYearOf, monthKey, monthLabel, parseMonthKey, type MonthKey, type RawLine } from "../domain/financials.ts";
 import type { Period } from "../util/tables.ts";
 
 export interface ReportRow {
@@ -45,6 +45,18 @@ export interface ReportLines {
   monthly?: { months: MonthKey[]; accounts: MonthlyAccount[] };
   /** Balance sheet only: every dated column, ascending, year-ends included. */
   balanceSheets?: DatedBalanceSheet[];
+  /**
+   * P&L columns left out because they straddle two fiscal years (a calendar
+   * year under a June year-end), described for the run's warnings.
+   */
+  misaligned: string[];
+}
+
+/** A multi-month P&L column that starts in one fiscal year and ends in the next cannot be split without inventing a spread. */
+function straddlesFiscalYears(p: Period, fyEndMonth: number): boolean {
+  if (p.months <= 1) return false;
+  const start = parseMonthKey(addMonths(monthKey(p.endYear, p.endMonth), -(p.months - 1)));
+  return fiscalYearOf(start.year, start.month, fyEndMonth) !== p.fiscalYear;
 }
 
 /**
@@ -56,14 +68,24 @@ export interface ReportLines {
  */
 export function reportToLines(
   rows: ReportRow[],
-  periods: (Period | undefined)[],
+  columns: (Period | undefined)[],
   kind: ReportKind,
   fyEndMonth: number,
 ): ReportLines {
   const computed = kind === "pnl" ? PNL_COMPUTED : BS_COMPUTED;
+  let periods = columns;
   const monthsByYear = new Map<number, number>();
   const bsColumnByYear = new Map<number, number>();
   const bsColumns: { key: MonthKey; col: number }[] = [];
+  const misaligned: string[] = [];
+  if (kind === "pnl") {
+    periods = periods.map((p) => {
+      if (!p || !straddlesFiscalYears(p, fyEndMonth)) return p;
+      const start = addMonths(monthKey(p.endYear, p.endMonth), -(p.months - 1));
+      misaligned.push(`${monthLabel(start)} to ${monthLabel(monthKey(p.endYear, p.endMonth))}`);
+      return undefined;
+    });
+  }
   const valueColumns = periods.map((p, col) => ({ p, col })).filter((x) => x.p);
   const allSingleMonths = kind === "pnl" && valueColumns.length > 0 && valueColumns.every((x) => x.p!.months === 1);
   const monthColumns = allSingleMonths ? valueColumns.map((x) => ({ key: monthKey(x.p!.endYear, x.p!.endMonth), col: x.col })) : [];
@@ -124,7 +146,7 @@ export function reportToLines(
     const partialYears = [...monthsByYear]
       .filter(([, m]) => m < 12)
       .map(([year, months]) => ({ year, months }));
-    const result: ReportLines = { lines, fullYears: fullYears.sort(), partialYears };
+    const result: ReportLines = { lines, fullYears: fullYears.sort(), partialYears, misaligned };
     if (allSingleMonths) {
       const months = [...new Set(monthColumns.map((c) => c.key))].sort();
       result.monthly = { months, accounts };
@@ -132,7 +154,7 @@ export function reportToLines(
     return result;
   }
   const dated = balanceSheets.filter((b) => b.lines.length > 0).sort((a, b) => a.key.localeCompare(b.key));
-  return { lines, fullYears: [...bsColumnByYear.keys()].sort(), partialYears: [], balanceSheets: dated };
+  return { lines, fullYears: [...bsColumnByYear.keys()].sort(), partialYears: [], balanceSheets: dated, misaligned };
 }
 
 /**

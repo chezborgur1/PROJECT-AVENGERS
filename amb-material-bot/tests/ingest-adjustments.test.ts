@@ -2,10 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { fitRowsToYears, legacyAddbacksToRows, loadAdjustmentsCsv, type ScheduleRow } from "../src/ingest/adjustments.ts";
-import { loadAddbacks } from "../src/ingest/index.ts";
+import { gatherIntake, loadAddbacks } from "../src/ingest/index.ts";
 import { mergeSources } from "../src/ingest/merge.ts";
 import { parseQuickbooksExport } from "../src/ingest/quickbooksExport.ts";
-import { REPO, tmpDir } from "./helpers.ts";
+import { defaultAssumptions } from "../src/model/assumptions.ts";
+import { runModel } from "../src/model/engine.ts";
+import { modeMeasure } from "../src/model/periods.ts";
+import { REPO, sampleRow, tmpDir } from "./helpers.ts";
+import { midYear } from "./scenarios.ts";
 
 const SAMPLE = path.join(REPO, "samples/project-ridgeline");
 const ANNUAL = path.join(SAMPLE, "QuickBooks Profit and Loss FY23-FY25.csv");
@@ -53,9 +57,13 @@ describe("adjustments.csv", () => {
     expect(byRef("N2")).toMatchObject({ category: "non_operating", origin: "pnl", byFiscalYear: { 2025: -3_100 } });
     expect(byRef("PF1")).toMatchObject({ pnlLine: "rent", pfMethod: "Market rate" });
     expect(byRef("D2").basis).toMatch(/pass-through/);
-    // Reported EBITDA 319,515 − 3,100 interest income + 200,000 owner comp − 109,250 replacement − 10,000 PF; the excluded boat stays out.
-    expect(ds.mode!.measure).toBeCloseTo(319_515 - 3_100 + 200_000 - 109_250 - 10_000, 2);
+    // Reported EBITDA 319,515 − 3,100 interest income + 200,000 owner comp − 109,250 replacement; the excluded boat stays out,
+    // and so does the PF row: annual-only mode has no PF column, so the engine's PF Adj. EBITDA cannot carry it either.
+    expect(ds.mode!.measure).toBeCloseTo(319_515 - 3_100 + 200_000 - 109_250, 2);
     expect(ds.mode!.mode).toBe("mainStreet");
+    expect(ds.warnings.some((w) => /pro forma rows are not applied in annual-only mode/.test(w))).toBe(true);
+    const model = runModel(ds, defaultAssumptions(ds, sampleRow()));
+    expect(modeMeasure(model.periods.FY2025!.ladder)).toBeCloseTo(ds.mode!.measure, 2);
     // The excluded row is not in the legacy flat list either.
     expect(ds.addbacks).toEqual([]);
     // Bot-flagged accounts arrive as proposed zeros, one per account, charitable giving included since nothing backs it.
@@ -85,5 +93,30 @@ describe("adjustments.csv", () => {
     expect(ds.addbacks.every((a) => ["discretionary", "non_recurring"].includes(a.type))).toBe(true);
     // Charitable giving is fully backed by its N row, so the bot does not flag it again.
     expect(ds.adjustments!.some((a) => a.description === "Charitable Contributions (bot-flagged)")).toBe(false);
+  });
+});
+
+describe("the partial current year (YTD stub)", () => {
+  it("spreads the advisor's FY2025 column over the stub months as a YTD amount", async () => {
+    const s = midYear(31);
+    const ds = (await gatherIntake(s.row, REPO, () => {})).dataset;
+    const vehicle = ds.adjustments!.find((a) => a.description === "Owner's personal vehicle")!;
+    expect(vehicle).toMatchObject({ stub: "amount", accounts: ["Vehicle Expenses"] });
+    const stub = Object.entries(vehicle.byMonth!).filter(([m]) => m >= "2025-01").reduce((t, [, v]) => t + v, 0);
+    expect(stub).toBeCloseTo(18_000, 6);
+    // Each full year still sums to its fiscal-year amount, split by the account's own months.
+    const fy2024 = Object.entries(vehicle.byMonth!).filter(([m]) => m.startsWith("2024")).reduce((t, [, v]) => t + v, 0);
+    expect(fy2024).toBeCloseTo(17_000, 6);
+    expect(ds.warnings.some((w) => /FY2025 is not in the model/.test(w))).toBe(false);
+  });
+
+  it("gives every add-back months when the file names no account, so a window never prorates a year it does not cover", async () => {
+    const s = midYear(31, { ytdAddbacks: false });
+    const ds = (await gatherIntake(s.row, REPO, () => {})).dataset;
+    const phones = ds.adjustments!.find((a) => a.description.startsWith("Owner family cell phones"))!;
+    expect(phones.accounts).toBeUndefined();
+    expect(phones.byMonth!["2025-03"]).toBe(0);
+    // Run-rate of FY2024, which was zero for this row: nothing is invented.
+    expect(Object.values(phones.byMonth!).filter((v) => v !== 0)).toEqual([]);
   });
 });

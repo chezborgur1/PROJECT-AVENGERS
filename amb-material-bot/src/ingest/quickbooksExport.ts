@@ -137,7 +137,7 @@ export async function parseQuickbooksExport(file: string, fyEndMonth: number): P
   const { rows, periods } = gridToReport(grid, kind, fyEndMonth);
   const result = reportToLines(rows, periods, kind, fyEndMonth);
   const lastMonth = result.monthly?.months[result.monthly.months.length - 1];
-  const notes = result.partialYears.map((p) => partialYearNote(p, file, Boolean(result.monthly), lastMonth));
+  const notes = [...result.partialYears.map((p) => partialYearNote(p, file, Boolean(result.monthly), lastMonth)), ...misalignedNotes(result.misaligned, file, fyEndMonth)];
   const out: IngestExtract = {
     kind: "quickbooks_export",
     file,
@@ -152,6 +152,13 @@ export async function parseQuickbooksExport(file: string, fyEndMonth: number): P
   const basis = detectReportBasis(grid);
   if (basis) out.booksBasis = basis;
   return out;
+}
+
+/** Warnings for P&L columns that do not match the fiscal year (a calendar-year export under a June year-end). */
+export function misalignedNotes(misaligned: string[], file: string, fyEndMonth: number): string[] {
+  const month = new Date(Date.UTC(2000, fyEndMonth - 1, 1)).toLocaleString("en-US", { month: "long", timeZone: "UTC" });
+  const name = file.split("/").pop();
+  return misaligned.map((span) => `${name}: the column for ${span} does not match the fiscal year ending in ${month}, so it is left out. Check fiscal_year_end on the request row, or export the P&L by fiscal year.`);
 }
 
 /** The month key of a period column, for callers that need to name it. */

@@ -28,9 +28,6 @@ export function fmtPct(v: number, dp = 1): string {
   return v < 0 ? `(${a})` : a;
 }
 
-/** A ratio as a whole-number percentage for prose: 0.1235 -> "12%". */
-export const fmtPct0 = (v: number): string => fmtPct(v, 0);
-
 /** Growth rate between two values as a ratio (0.118 for +11.8%); NaN when the base is zero. */
 export function growth(from: number, to: number): number {
   return from === 0 ? Number.NaN : to / from - 1;
@@ -57,17 +54,9 @@ export function k(dollars: number | null | undefined, opts: { dollar?: boolean }
 /** Whole thousands as a number, for chart values that must match the table's displayed figure. */
 export const toK = (dollars: number): number => Math.round(dollars / 1000);
 
-/** Legacy name kept for the pipeline summary: table cells in $000s from whole dollars. */
-export const fmtThousands = (v: number): string => k(v);
-
 /** A count with thousands separators: 1450 -> "1,450". */
 export function fmtCount(v: number): string {
   return Math.round(v).toLocaleString("en-US");
-}
-
-/** A multiple: 5.4 -> "5.4x". */
-export function fmtMultiple(v: number): string {
-  return Number.isFinite(v) ? `${v.toFixed(1)}x` : "n.a.";
 }
 
 /**
@@ -81,14 +70,6 @@ export function fmtBps(from: number, to: number): string {
   return `${bps < 0 ? EN_DASH : "+"}${Math.abs(bps).toLocaleString("en-US")} bps`;
 }
 
-/** Change between two ratios in percentage points: +2.6 pts. Used only where a column is declared in pts. */
-export function fmtPts(from: number, to: number): string {
-  if (!Number.isFinite(from) || !Number.isFinite(to)) return "n.a.";
-  const pts = (to - from) * 100;
-  if (Math.abs(pts) < 0.05) return EN_DASH;
-  return `${pts < 0 ? EN_DASH : "+"}${Math.abs(pts).toFixed(1)} pts`;
-}
-
 /** Growth as a table figure with the n.m. rule: from a zero or negative base, or to zero, the cell reads "n.m.". */
 export function fmtGrowth(from: number, to: number, dp = 1): string {
   if (from <= 0 || to === 0) return "n.m.";
@@ -98,6 +79,7 @@ export function fmtGrowth(from: number, to: number, dp = 1): string {
 /** A margin change in prose: "up 90 bps", "down 2.6 pts" (guide 4.6: bps under a point, pts otherwise). */
 export function describeDelta(from: number, to: number): string {
   const pts = (to - from) * 100;
+  if (Math.round(Math.abs(pts) * 100) === 0) return "flat";
   const dir = pts < 0 ? "down" : "up";
   return Math.abs(pts) < 1 ? `${dir} ${Math.round(Math.abs(pts) * 100)} bps` : `${dir} ${Math.abs(pts).toFixed(1)} pts`;
 }

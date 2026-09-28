@@ -151,7 +151,8 @@ export const WIDTH = {
   stripRetention: 9.1,
 } as const;
 
-export const ROW_HEIGHT = { spacer: 3.95, title: 16.5, body: 12, thin: 2.1 } as const;
+/** Row heights in points; `body` is every sheet's default row height. */
+export const ROW_HEIGHT = { spacer: 3.95, title: 16.5, body: 12.75, thin: 2.1 } as const;
 
 export function argb(hex: string): string {
   return `FF${hex.toUpperCase()}`;

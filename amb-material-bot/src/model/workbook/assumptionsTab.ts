@@ -4,7 +4,7 @@
 // terms; sensitivity settings; and, in annual-only mode, the Pro Forma
 // Low / Mid / High scenario block.
 
-import { monthEndDate } from "../../domain/financials.ts";
+import { monthEndDate, type KpiSeries } from "../../domain/financials.ts";
 import type { Assumptions } from "../assumptions.ts";
 import { excelSerial, firstDayOf, latestFullFiscalYear } from "../periods.ts";
 import { addr, colLetter, rowOf, SheetBuilder, type CellSpec } from "../sheet.ts";
@@ -26,6 +26,10 @@ export interface TabContext {
   /** Coded customers and employees for the helper blocks (from the dataset; empty when planning for verification only). */
   customers: { id: string; startDate?: string; endDate?: string; revenueByFiscalYear: Record<number, number> }[];
   employees: { id: string; department: string; hireDate: string; terminationDate?: string; isOwner: boolean }[];
+  /** Fiscal-year revenue columns of Raw - Customers, in order (`customerYears`). */
+  customerYears: number[];
+  /** Operating metrics the sources state (members, rating, fleet), for the Summary's management-facts table. */
+  kpis: KpiSeries[];
 }
 
 export function planAssumptions(ctx: TabContext): SheetBuilder {
@@ -55,14 +59,14 @@ export function planAssumptions(ctx: TabContext): SheetBuilder {
     b.row(key, r);
     b.text(r, 2, label, { align: { indent: 1 } });
     b.cell(r, C, { v: v === "" ? null : v, role: "input", fmt, align: typeof v === "string" ? { horizontal: "right" } : undefined, ...extra });
-    b.note(r, SOURCE_COL, source, { align: { wrap: false } });
+    b.note(r, SOURCE_COL, source);
     r++;
   };
   const derived = (key: string, label: string, f: string, fmt: string | undefined, expect: number | string, source: string, role: CellSpec["role"] = "calc") => {
     b.row(key, r);
     b.text(r, 2, label, { align: { indent: 1 } });
     b.formula(r, C, f, { fmt, expect, role, label });
-    b.note(r, SOURCE_COL, source, { align: { wrap: false } });
+    b.note(r, SOURCE_COL, source);
     r++;
   };
   const here = (key: string) => addr(b.r(key), C, { row: true, col: true });
@@ -126,7 +130,7 @@ export function planAssumptions(ctx: TabContext): SheetBuilder {
     b.row(d.key, r);
     b.text(r, 2, d.label, { align: { indent: 1 } });
     (a[d.key] as number[]).forEach((v, i) => b.num(r, C + i, v, { fmt: d.fmt }));
-    b.note(r, SOURCE_COL, a.notes[d.key] ?? "", { align: { wrap: false } });
+    b.note(r, SOURCE_COL, a.notes[d.key] ?? "");
     r++;
   }
   spacer();
@@ -140,12 +144,12 @@ export function planAssumptions(ctx: TabContext): SheetBuilder {
   b.row("sdeMultiples", r);
   b.text(r, 2, "SDE multiple (x)", { align: { indent: 1 } });
   a.sdeMultiples.forEach((v, i) => b.num(r, C + i, v, { fmt: FMT.multiple }));
-  b.note(r, SOURCE_COL, a.multiplesSource, { align: { wrap: false } });
+  b.note(r, SOURCE_COL, a.multiplesSource);
   r++;
   b.row("ebitdaMultiples", r);
   b.text(r, 2, "Adj. EBITDA multiple (x)", { align: { indent: 1 } });
   a.ebitdaMultiples.forEach((v, i) => b.num(r, C + i, v, { fmt: FMT.multiple }));
-  b.note(r, SOURCE_COL, a.multiplesSource, { align: { wrap: false } });
+  b.note(r, SOURCE_COL, a.multiplesSource);
   r++;
   spacer();
 
@@ -193,7 +197,7 @@ export function planAssumptions(ctx: TabContext): SheetBuilder {
     b.row("scenarioGrowth", r);
     b.text(r, 2, "Revenue growth (%)", { align: { indent: 1 } });
     [sc.low, sc.mid, sc.high].forEach((x, i) => b.num(r, C + i, x.revenueGrowth, { fmt: FMT.pct1 }));
-    b.note(r, SOURCE_COL, "Mid is the base case; Low and High must differ from Mid on growth and one operating driver (check C29)", { align: { wrap: false } });
+    b.note(r, SOURCE_COL, "Mid is the base case; Low and High must differ from Mid on growth and one operating driver (check C29)");
     r++;
     const methods: { key: keyof typeof sc.mid.methods; label: string }[] = [
       { key: "cogs", label: "Cost of goods sold method" },
@@ -206,13 +210,13 @@ export function planAssumptions(ctx: TabContext): SheetBuilder {
       b.row(`scenario_${m.key}`, r);
       b.text(r, 2, m.label, { align: { indent: 1 } });
       [sc.low, sc.mid, sc.high].forEach((x, i) => b.cell(r, C + i, { v: x.methods[m.key], role: "input", align: { horizontal: "right" } }));
-      b.note(r, SOURCE_COL, "3-year average / Latest year / % of sales, 3-year blended (guide 5.5)", { align: { wrap: false } });
+      b.note(r, SOURCE_COL, "3-year average / Latest year / % of sales, 3-year blended (guide 5.5)");
       r++;
     }
     b.row("scenarioMultiple", r);
     b.text(r, 2, "Valuation multiple (x SDE)", { align: { indent: 1 } });
     [sc.low, sc.mid, sc.high].forEach((x, i) => b.num(r, C + i, x.multiple, { fmt: FMT.multiple }));
-    b.note(r, SOURCE_COL, a.multiplesSource, { align: { wrap: false } });
+    b.note(r, SOURCE_COL, a.multiplesSource);
     r++;
   }
 

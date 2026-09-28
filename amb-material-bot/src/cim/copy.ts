@@ -1,110 +1,129 @@
-// The words Claude writes, one schema per section of the CIM (guide 3.3),
-// and the lint that keeps them inside AMB's voice (guide 4.4). Numbers in
-// the copy are read from the numbers brief the engine builds; the exhibits
-// never read the copy for a figure, so a table and a sentence cannot
-// disagree (guide 4.8). Anything the sources do not say becomes a
-// "[Confirm: …]" marker, which the deck prints in red italic and lists in
-// open-questions.md.
+// The words Claude writes, one schema per page of the CIM (guide 3.3), and
+// the lint that keeps them inside AMB's voice (guide 4.4). Figures in the
+// copy are tokens from the numbers brief ("{{rev.FY2025}}"), resolved at
+// build time, so a sentence and the exhibit beside it cannot disagree
+// (guide 4.8). Anything the sources do not say becomes a "[Confirm: …]"
+// marker, which the deck prints in red italic and lists in
+// open-questions.md. Word budgets are sized to the boxes of
+// design/FINAL_DESIGN_SPEC.md, so copy that passes the lint fits the page.
 
 import { z } from "zod";
+import type { Brief } from "./brief.ts";
+import { unknownTokens } from "./brief.ts";
 
 // ---------------------------------------------------------------------------
 // Schema
 // ---------------------------------------------------------------------------
 
-/** An observation keyed to a row of the exhibit it sits beside; the deck assigns the letter. */
+const Title = z
+  .string()
+  .describe(
+    "Action title: one sentence, sentence case, no final stop, stating the page's finding with at least one figure token and its period. 60 to 110 characters once the tokens resolve (one line is about 85 characters), never over 130. Never a topic label.",
+  )
+  .optional();
+
+/** An observation keyed to a row of the exhibit it sits beside; the deck assigns the letter from the row's position. */
 const Observation = z.object({
-  row: z.string().describe("Row key of the exhibit the observation points at, from the list given for that exhibit; an empty string when it keys no row"),
-  lead: z.string().describe("Bold lead-in of 3 to 10 words carrying a number"),
-  body: z.string().describe("One or two sentences with the mechanism, at most 40 words; every sentence carries a figure or a named thing"),
+  row: z.string().describe("Row key from the list given for this page's exhibits, or an empty string when the observation keys no single row"),
+  lead: z.string().describe("Bold lead-in, 3 to 10 words, carrying a figure token"),
+  body: z.string().describe("One or two sentences, at most 26 words, naming the mechanism (because, driven by, as a result) with a figure or a named thing"),
 });
 export type Observation = z.infer<typeof Observation>;
 
-/** A rail bullet or a run-in paragraph lead. */
-const Bullet = z.object({
-  lead: z.string().describe("Bold lead-in of 3 to 8 words stating the point"),
-  body: z.string().describe("One or two sentences of evidence with a number, at most 40 words"),
-});
-export type Bullet = z.infer<typeof Bullet>;
+/**
+ * Item counts live in the descriptions and the lint rather than as array
+ * constraints: structured outputs do not enforce them (the SDK would only
+ * reject the whole draft client-side), and a count one off is a lint note,
+ * not a reason to throw the copy away.
+ */
+const COUNTS: { match: RegExp; min: number; max: number }[] = [];
+const observations = (min: number, max: number, what: string, key?: string) => {
+  if (key) COUNTS.push({ match: new RegExp(`^${key.replace(".", "\\.")}$`), min, max });
+  return z.array(Observation).describe(`${min} to ${max} observations keyed to ${what}; counts follow the evidence, never padded`);
+};
 
-const observations = (min: number, max: number, what: string) => z.array(Observation).min(min).max(max).describe(`${min} to ${max} observations keyed to ${what}`);
-const bullets = (min: number, max: number, what: string) => z.array(Bullet).min(min).max(max).describe(`${min} to ${max} bullets: ${what}`);
+const Consideration = z.object({
+  lead: z.string().describe("One bold sentence, at most 16 words, stating the claim with a figure token"),
+  evidence: z.string().describe("One or two sentences of evidence and mechanism, at most 38 words"),
+  page: z.string().describe("Section id of the page that proves it, from the list given (e.g. S6.1, S7.1, S4.1)"),
+});
+
+const BuyerConsideration = z.object({
+  consideration: z.string().describe("Two or three words: Owner involvement, Customer concentration, Technician labor, Add-back quality, Lead generation, Seasonality"),
+  shows: z.string().describe("What the data shows, quantified, at most 42 words"),
+  addressed: z.string().describe("How it is addressed, quantified where the data allows, at most 42 words; never a promise the sources do not make"),
+});
 
 export const CimCopySchema = z.object({
-  s1_1: z.object({
-    overview: z
-      .string()
-      .describe(
-        "Company at a glance paragraph in fixed fact order (HQ and market served; founded; employees; customers and units; revenue mix; ownership; reason for sale; owner's transition offer), 120 to 170 words, opening with the legal name and its defined short form",
-      ),
-    transaction: z.string().describe("Transaction paragraph, 50 to 80 words: what is offered, basis of offers, transition, timing"),
-    observations: observations(2, 4, "the Quick Stats table"),
-  }),
-  s1_2: z.object({
-    considerations: z
-      .array(
-        z.object({
-          lead: z.string().describe("One bold sentence stating the claim, with a number"),
-          evidence: z.string().describe("One or two sentences of evidence and mechanism, at most 45 words"),
-          refSection: z.string().describe("Section id whose page proves it: S1.3, S2.2, S2.3, S4.2, S4.4, S5.1, S6.1, S6.3, S6.4, S7.1, S9.1"),
-        }),
-      )
-      .min(5)
-      .max(7)
-      .describe("5 to 7 investment considerations, each a claim proved on a later page"),
-  }),
-  s1_3: z.object({ pnl: observations(2, 3, "the summary P&L"), ladder: observations(2, 3, "the condensed EBITDA ladder") }),
-  s1_4: z.object({
-    rows: z
-      .array(
-        z.object({
-          consideration: z.string().describe("Two or three words: Owner involvement, Customer concentration, Technician labor, Add-back quality, Lead generation, Seasonality"),
-          whatTheDataShows: z.string().describe("Quantified, at most 45 words"),
-          howAddressed: z.string().describe("Quantified where the data allows, at most 45 words"),
-        }),
-      )
-      .min(3)
-      .max(6)
-      .describe("Buyer considerations beyond the mandatory Financial reporting row the deck adds; Owner involvement, Customer concentration and Add-back quality are required"),
-    observations: observations(2, 3, "the owner responsibilities table"),
-  }),
-  s2_2: z.object({ observations: observations(2, 4, "the service-line table") }),
-  s2_3: z.object({ bullets: bullets(3, 4, "the unit-economics mechanism (revenue per field employee, labor cost share, capacity)") }),
-  s2_4: z.object({ observations: observations(2, 3, "the facilities and systems tables") }),
-  s4_1: z.object({ observations: observations(2, 4, "the customer mix table") }),
-  s4_2: z.object({ observations: observations(3, 4, "the retention roll-forward") }),
-  s4_4: z.object({ observations: observations(3, 4, "the top-customer list") }),
-  s5_1: z.object({ observations: observations(2, 3, "the organization table") }),
-  s5_2: z.object({ observations: observations(2, 4, "the headcount tables") }),
-  s6_1: z.object({ observations: observations(4, 5, "the income statement") }),
-  s6_2: z.object({ observations: observations(3, 4, "the revenue by line table") }),
-  s6_3: z.object({ bullets: bullets(3, 4, "cost structure, one per cost line that moved") }),
-  s6_4: z.object({ bullets: bullets(3, 4, "seasonality and the trailing-12 trend") }),
-  s7_1: z.object({
-    observations: observations(3, 3, "the EBITDA ladder"),
-    takeaway: z.string().describe("Callout body, 35 to 60 words: who underwrites Adj. EBITDA and who SDE, then what is not assumed (nothing pro forma; no change in pricing, headcount or programs after closing)"),
-  }),
-  s7_2: z.object({ observations: observations(2, 3, "the adjustment support table") }),
-  s8_1: z.object({ observations: observations(2, 3, "the balance sheet and working capital tables") }),
-  s9_1: z.object({ bullets: bullets(2, 4, "the growth levers, each with its baseline and what would size it") }),
-  s10_1: z.object({
-    transaction: z.string().describe("Fact-order transaction paragraph, 50 to 80 words: '[Owner] is offering …' with the basis of offers and timing"),
-    transition: z.string().describe("Owner transition and key employees, 50 to 80 words"),
-    premises: z.string().describe("Real estate, fleet and systems a buyer takes over, 40 to 70 words"),
-    process: z.string().describe("How to proceed, 30 to 50 words, ending with the AMB Advisory contact instruction"),
-  }),
+  s1_1: z
+    .object({
+      title: Title,
+      overview: z
+        .string()
+        .describe(
+          "Company at a glance, 80 to 95 words (the box under the Quick Stats holds about 95), in fixed fact order: legal name with its defined short form, what it does, HQ and market served; founded; employees; customers and units; revenue mix; ownership; reason for sale; the owner's transition offer",
+        ),
+      observations: observations(2, 3, "the Quick Stats tables", "s1_1.observations"),
+    })
+    .optional(),
+  s1_2: z.object({ title: Title, considerations: z.array(Consideration).describe("5 to 7 investment considerations, each a claim proved on a later page") }).optional(),
+  s1_3: z.object({ title: Title, pnl: observations(2, 3, "the summary income statement", "s1_3.pnl"), ladder: observations(2, 3, "the condensed EBITDA ladder", "s1_3.ladder") }).optional(),
+  s1_4: z
+    .object({
+      title: Title,
+      rows: z
+        .array(BuyerConsideration)
+        .describe("Buyer considerations; Owner involvement, Customer concentration (when a customer list exists) and Add-back quality are required. The deck adds the Financial reporting row itself"),
+      observations: observations(2, 3, "the owner responsibilities table", "s1_4.observations"),
+    })
+    .optional(),
+  s2_2: z.object({ title: Title, observations: observations(2, 4, "the revenue by service line table and the service-line table", "s2_2.observations") }).optional(),
+  s2_3: z.object({ title: Title, observations: observations(2, 4, "the unit economics table", "s2_3.observations") }).optional(),
+  s2_4: z.object({ title: Title, observations: observations(2, 3, "the facilities and systems tables", "s2_4.observations") }).optional(),
+  s3_1: z.object({ title: Title, observations: observations(2, 3, "the market and competitor tables", "s3_1.observations") }).optional(),
+  s4_1: z.object({ title: Title, observations: observations(3, 4, "the top-10 list and the customer mix table", "s4_1.observations") }).optional(),
+  s4_2: z.object({ title: Title, observations: observations(3, 4, "the account and revenue retention tables", "s4_2.observations") }).optional(),
+  s5_1: z.object({ title: Title, observations: observations(2, 3, "the organization table", "s5_1.observations") }).optional(),
+  s5_2: z.object({ title: Title, observations: observations(2, 3, "the headcount tables", "s5_2.observations") }).optional(),
+  s6_1: z.object({ title: Title, observations: observations(4, 5, "the income statement", "s6_1.observations") }).optional(),
+  s6_2: z.object({ title: Title, observations: observations(3, 4, "the revenue by line table", "s6_2.observations") }).optional(),
+  s6_3: z.object({ title: Title, observations: observations(3, 4, "the cost structure table", "s6_3.observations") }).optional(),
+  s6_4: z.object({ title: Title, observations: observations(2, 3, "the quarterly revenue table", "s6_4.observations") }).optional(),
+  s7_1: z
+    .object({
+      title: Title,
+      observations: observations(3, 3, "the EBITDA ladder", "s7_1.observations"),
+      takeaway: z
+        .string()
+        .describe("Callout body, 35 to 55 words: who underwrites Adj. EBITDA and who SDE (Main Street), then what is not assumed (nothing pro forma; no change in pricing, headcount or programs after closing)"),
+    })
+    .optional(),
+  s7_2: z.object({ title: Title, observations: observations(2, 3, "the owner compensation table", "s7_2.observations") }).optional(),
+  s8_1: z.object({ title: Title, observations: observations(2, 3, "the balance sheet and working capital tables", "s8_1.observations") }).optional(),
+  s9_1: z.object({ title: Title, observations: observations(2, 3, "the growth levers table", "s9_1.observations") }).optional(),
+  s10_1: z
+    .object({
+      title: Title,
+      transaction: z.string().describe("Fact-order transaction paragraph, 50 to 75 words: who is offering what, the basis of offers, and the target timing"),
+      transition: z.string().describe("Owner transition and key employees, 45 to 70 words"),
+      premises: z.string().describe("Premises, fleet and systems the buyer takes over, 40 to 65 words"),
+      process: z.string().describe("How to proceed, 30 to 45 words, ending with the AMB Advisory contact instruction"),
+    })
+    .optional(),
   open_questions: z.array(z.string()).describe("Every fact the advisor must confirm with the Seller before this CIM goes out, one per item"),
 });
 export type CimCopy = z.infer<typeof CimCopySchema>;
+COUNTS.push({ match: /^s1_2\.considerations$/, min: 5, max: 7 }, { match: /^s1_4\.rows$/, min: 3, max: 5 });
+export type PageCopyKey = Exclude<keyof CimCopy, "open_questions">;
 
-/** Page ids a copy field belongs to, so a missing block can be reported by page. */
-export const COPY_SECTIONS = ["s1_1", "s1_2", "s1_3", "s1_4", "s2_2", "s2_3", "s2_4", "s4_1", "s4_2", "s4_4", "s5_1", "s5_2", "s6_1", "s6_2", "s6_3", "s6_4", "s7_1", "s7_2", "s8_1", "s9_1", "s10_1"] as const;
+/** Page copy key for a section-library id: "S6.1" -> "s6_1". */
+export const copyKey = (id: string): PageCopyKey => id.toLowerCase().replace(".", "_") as PageCopyKey;
 
 // ---------------------------------------------------------------------------
-// Lint (guide 4.4, 4.2 rule 10, 2.10 T21)
+// Lint (guide 4.4, 4.2 rule 10, 4.5, 2.10 T21)
 // ---------------------------------------------------------------------------
 
-/** Banned words and constructions, verbatim from guide 4.4, as case-insensitive patterns on word boundaries. */
+/** Banned words and constructions, verbatim from guide 4.4 and the build brief, as case-insensitive patterns on word boundaries. */
 export const BANNED_PHRASES: string[] = [
   "well-positioned",
   "well positioned",
@@ -166,13 +185,16 @@ export const BANNED_PHRASES: string[] = [
 ];
 
 /** Adjectives banned only when no figure sits in the same sentence. */
-const BANNED_WITHOUT_NUMBER = ["strong", "solid", "healthy", "significant", "substantial", "meaningful", "leading", "diversified"];
+const BANNED_WITHOUT_NUMBER = ["strong", "solid", "healthy", "significant", "substantial", "meaningful", "leading", "diversified", "loyal", "sticky"];
 
 /** Sentence openers that are filler. */
 const BANNED_OPENERS = ["Furthermore", "Moreover", "Additionally"];
 
 /** "leverage" is banned as a verb; "leverage ratio" or "financial leverage" is not. */
 const LEVERAGE_VERB = /\bleverag(e|es|ed|ing)\b(?!\s+(ratio|ratios))/i;
+
+/** Price opinions and valuation language never appear in the CIM (guide D5). */
+const PRICE_TALK = /\b(asking price|valuation of|valued at|[0-9.]+x (ebitda|sde|revenue))\b/i;
 
 export interface LintIssue {
   path: string;
@@ -189,17 +211,20 @@ function sentences(text: string): string[] {
     .filter(Boolean);
 }
 
-/** Lint one string of client-facing prose. */
+/** Lint one string of client-facing prose (tokens already resolved). */
 export function lintText(text: string, path: string): LintIssue[] {
   const out: LintIssue[] = [];
+  const bare = text.replace(/\[Confirm:[^\]]*\]/g, "");
   if (/—/.test(text)) out.push({ path, issue: "em dash", text });
-  if (/!/.test(text.replace(/\[Confirm:[^\]]*\]/g, ""))) out.push({ path, issue: "exclamation mark", text });
+  if (/\s[–-]\s/.test(bare)) out.push({ path, issue: "dash used as punctuation", text });
+  if (/!/.test(bare)) out.push({ path, issue: "exclamation mark", text });
   for (const b of BANNED_PHRASES) {
     const re = new RegExp(`(^|[^A-Za-z-])${b.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=$|[^A-Za-z-])`, "i");
-    if (re.test(text)) out.push({ path, issue: `banned phrase "${b}"`, text });
+    if (re.test(bare)) out.push({ path, issue: `banned phrase "${b}"`, text });
   }
-  if (LEVERAGE_VERB.test(text)) out.push({ path, issue: 'banned phrase "leverage" as a verb', text });
-  for (const s of sentences(text)) {
+  if (LEVERAGE_VERB.test(bare)) out.push({ path, issue: 'banned phrase "leverage" as a verb', text });
+  if (PRICE_TALK.test(bare)) out.push({ path, issue: "valuation or price language (guide D5)", text });
+  for (const s of sentences(bare)) {
     for (const o of BANNED_OPENERS) if (s.startsWith(`${o},`) || s.startsWith(`${o} `)) out.push({ path, issue: `filler opener "${o}"`, text: s });
     if (!HAS_FIGURE.test(s)) {
       for (const b of BANNED_WITHOUT_NUMBER) {
@@ -212,19 +237,72 @@ export function lintText(text: string, path: string): LintIssue[] {
   return out;
 }
 
-/** Walk every string of the copy (except the open questions, which are advisor notes) and lint it. */
-export function lintCopy(copy: CimCopy): LintIssue[] {
+/** Title rules (guide 4.5, spec 6.1): a finding with a figure, at most 130 characters, sentence case, no final stop. */
+export function lintTitle(title: string, path: string): LintIssue[] {
+  const out: LintIssue[] = [];
+  if (!HAS_FIGURE.test(title)) out.push({ path, issue: "title carries no figure (a label, not a finding)", text: title });
+  if (title.length > 130) out.push({ path, issue: `title is ${title.length} characters (cap 130)`, text: title });
+  if (title.length < 40) out.push({ path, issue: `title is ${title.length} characters (60 to 110 expected)`, text: title });
+  if (/[.:;]\s*$/.test(title)) out.push({ path, issue: "title ends with punctuation", text: title });
+  const words = title.split(/\s+/).filter((w) => /^[A-Za-z]{4,}$/.test(w));
+  if (words.length >= 4 && words.filter((w) => /^[A-Z]/.test(w)).length / words.length > 0.6) out.push({ path, issue: "title in Title Case", text: title });
+  return [...out, ...lintText(title, path).filter((i) => i.issue !== "first person outside the transaction section")];
+}
+
+const wordsIn = (s: string): number => s.trim().split(/\s+/).filter(Boolean).length;
+
+/** Word budgets per field, matched to the boxes they fill. */
+const BUDGETS: { match: RegExp; max: number }[] = [
+  { match: /\.(observations|pnl|ladder)\[\d+\]\.lead$/, max: 12 },
+  { match: /\.(observations|pnl|ladder)\[\d+\]\.body$/, max: 30 },
+  { match: /^s1_1\.overview$/, max: 110 },
+  { match: /\.considerations\[\d+\]\.lead$/, max: 18 },
+  { match: /\.considerations\[\d+\]\.evidence$/, max: 42 },
+  { match: /^s1_4\.rows\[\d+\]\.(shows|addressed)$/, max: 46 },
+  { match: /^s7_1\.takeaway$/, max: 60 },
+  { match: /^s10_1\.(transaction|transition|premises)$/, max: 80 },
+  { match: /^s10_1\.process$/, max: 50 },
+];
+
+/** Money and percentage literals, for the check that every figure came from the brief. */
+const FIGURE_LITERAL = /[–-]?\$[0-9][0-9,]*(\.[0-9]+)?[KM]?|[0-9]+(\.[0-9]+)?%/g;
+
+/**
+ * Walk every string of the copy (except the advisor's open questions),
+ * resolve its figure tokens against the brief, and lint it. With a brief,
+ * unknown tokens are issues, and so is any money or percentage typed as a
+ * literal that matches no brief figure: a figure the engine and the sources
+ * did not produce is an invented one.
+ */
+export function lintCopy(copy: CimCopy, brief?: Brief): LintIssue[] {
   const issues: LintIssue[] = [];
+  const known = brief?.texts();
   const walk = (v: unknown, path: string) => {
-    if (typeof v === "string") issues.push(...lintText(v, path));
-    else if (Array.isArray(v)) v.forEach((x, i) => walk(x, `${path}[${i}]`));
-    else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) walk(x, path ? `${path}.${k}` : k);
+    if (typeof v === "string") {
+      if (path.endsWith(".row") || path.endsWith(".page")) return;
+      if (brief) for (const k of unknownTokens(v, brief)) issues.push({ path, issue: `unknown figure token {{${k}}}`, text: v });
+      const text = (brief ? brief.resolve(v) : v).replace(/\{\{page:[^}]+\}\}/g, "page 00");
+      issues.push(...(path.endsWith(".title") ? lintTitle(text, path) : lintText(text, path)));
+      const budget = BUDGETS.find((b) => b.match.test(path));
+      if (budget && wordsIn(text) > budget.max) issues.push({ path, issue: `${wordsIn(text)} words (budget ${budget.max})`, text });
+      if (known) {
+        // Only literals typed into the raw copy are checked; resolved tokens came from the brief by construction.
+        for (const m of v.replace(/\{\{[^}]+\}\}/g, " ").matchAll(FIGURE_LITERAL)) {
+          const lit = m[0].replace(/^-/, "–");
+          if (!known.has(lit) && !known.has(lit.replace(/^–/, ""))) issues.push({ path, issue: `figure "${m[0]}" typed as a literal and not in the numbers brief`, text: v });
+        }
+      }
+    } else if (Array.isArray(v)) {
+      const count = COUNTS.find((c) => c.match.test(path));
+      if (count && (v.length < count.min || v.length > count.max)) issues.push({ path, issue: `${v.length} items (expected ${count.min} to ${count.max})`, text: "" });
+      v.forEach((x, i) => walk(x, `${path}[${i}]`));
+    } else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) walk(x, path ? `${path}.${k}` : k);
   };
   walk({ ...copy, open_questions: [] }, "");
   return issues;
 }
 
-/** Every "[Confirm: …]" placeholder in the copy, deduplicated, in order of appearance. */
+/** Every "[Confirm: …]" placeholder in a value, deduplicated, in order of appearance. */
 export function placeholdersIn(value: unknown): string[] {
   const found = new Set<string>();
   const walk = (v: unknown) => {
@@ -237,14 +315,4 @@ export function placeholdersIn(value: unknown): string[] {
 }
 
 /** Words in a string, for the density targets of guide 3.2. */
-export const wordCount = (s: string): number => s.trim().split(/\s+/).filter(Boolean).length;
-
-/** Cut prose at a sentence boundary past the budget, so a box never overflows silently. */
-export function clampWords(text: string, max: number): string {
-  const words = text.trim().split(/\s+/);
-  if (words.length <= max) return text.trim();
-  const cut = words.slice(0, max).join(" ");
-  const lastStop = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("] "));
-  if (lastStop > cut.length * 0.4) return cut.slice(0, lastStop + 1);
-  return `${cut}.`;
-}
+export const wordCount = (s: string): number => wordsIn(s);

@@ -260,13 +260,16 @@ export interface CustomerAnalytics {
   /** Period the concentration and mix are measured on (LTM CY, or the latest FY in annual mode). */
   period: PeriodColumn;
   latestCount: number;
-  mixByType: { type: string; count: number; countPct: number; revenue: number; revenuePct: number; avgRevenue: number }[];
+  /** `residual` marks the households bucket that is not a coded customer (it has no count or dates). */
+  mixByType: { type: string; count: number; countPct: number; revenue: number; revenuePct: number; avgRevenue: number; residual?: boolean }[];
   retention?: {
     byFiscalYear: Record<number, { counts: RetentionCounts; dollars: RetentionDollars }>;
     ltm?: { counts: RetentionCounts; dollars: RetentionDollars };
     /** Monthly count roll-forward for the strip and MC-C1; `startingCount` of month m equals `endingCount` of m−1. */
     monthly?: { month: MonthKey; counts: RetentionCounts }[];
     medianTenureYears: number;
+    /** True when some listed customers have no dates, so their dollar retention is classified from revenue alone. */
+    revenueInferred?: boolean;
   };
   concentration: {
     top: ConcentrationRow[];
@@ -278,9 +281,17 @@ export interface CustomerAnalytics {
     /** Customer-list total vs P&L revenue (check C12). */
     tieToPnl: { customerTotal: number; pnlRevenue: number; variancePct: number };
   };
+  /**
+   * Cohorts by the fiscal year of the start date. `cohort` is that fiscal
+   * year; the first row may be `pre`, every start before the window's first
+   * cohort in one row (its `cohort` is the last fiscal year it covers).
+   * `retainedByYear` runs over the fiscal-year columns from the cohort's year.
+   */
   cohorts?: {
-    countTriangle: { cohort: number; size: number; retainedByYear: number[] }[];
-    revenueTriangle: { cohort: number; revenue: number; retainedByYear: number[] }[];
+    countTriangle: { cohort: number; label: string; pre?: true; size: number; retainedByYear: number[] }[];
+    revenueTriangle: { cohort: number; label: string; pre?: true; revenue: number; retainedByYear: number[] }[];
+    /** Per fiscal-year column: dated customers active at the year-end, and listed revenue excluding the residual (the rows sum to both). */
+    tie: { activeByYear: number[]; revenueByYear: number[] };
   };
 }
 
@@ -299,6 +310,57 @@ export interface HeadcountAnalytics {
   loadRatios: { revenuePerEmployee: number; revenuePerFieldEmployee: number; customersPerEmployee?: number; laborCostPctRevenue: number };
   /** Payroll register vs P&L payroll (check C13). */
   tieToPnl: { registerTotal: number; pnlPayroll: number; variancePct: number };
+}
+
+// --- Chart exhibits (guide 5.12) ------------------------------------------------------
+
+export type ChartTab = "revenueCharts" | "expenseCharts" | "retentionCharts" | "headcountCharts";
+
+/**
+ * How a chart-data row gets its values in the workbook: a Monthly P&L row
+ * (matched on its label), a Databook account row, a COUNTIFS over a raw list
+ * by month, the difference of other rows, a ratio of two rows, or a link to
+ * a fixed block on an analysis tab (tenure buckets).
+ */
+export type ChartSource =
+  | { kind: "monthly"; rowKey: string }
+  | { kind: "account"; account: string }
+  | { kind: "customers"; event: "new" | "lost"; reason?: "regrettable" | "non_regrettable" | "unclassified"; type?: string }
+  | { kind: "employees"; event: "hire" | "departure"; terminationType?: "resignation" | "termination" | "unclassified"; department?: string }
+  | { kind: "remainder"; total: string; less: string[] }
+  | { kind: "ratio"; numerator: string; denominator: string }
+  | { kind: "tenure" };
+
+export interface ChartSeriesData {
+  /** Row key inside the exhibit's chart-data block. */
+  key: string;
+  /** Series name: the B cell of its chart-data row. */
+  name: string;
+  /** Values in the chart's units, one per category; losses and departures negative. */
+  values: number[];
+  /** srgbClr hex from the 5.12 palette. */
+  color: string;
+  source: ChartSource;
+  /** False for rows the main chart does not draw: feeding rows (total revenue under a ratio or a mix) and the ratio panel's row. */
+  plotted?: boolean;
+}
+
+export interface ChartExhibit {
+  /** Catalogue ID, "MC-R1". */
+  id: string;
+  tab: ChartTab;
+  /** Caption stem in Title Case; the workbook appends the months and units. */
+  title: string;
+  /** "$000s", "$M" or "#": the caption's units and the data-label format. */
+  units: "$000s" | "$M" | "#";
+  form: "bar" | "stacked" | "diverging" | "stackedDiverging";
+  /** Months (first-of-month keys) for monthly exhibits, bucket labels otherwise. */
+  categories: string[];
+  monthly: boolean;
+  series: ChartSeriesData[];
+  /** The ratio panel under the bar chart (MC-E1-E4): series key of the ratio row. */
+  ratio?: string;
+  note: string;
 }
 
 // --- Checks (guide 5.7) --------------------------------------------------------------
@@ -397,6 +459,8 @@ export interface ModelOutput extends ModelResult {
   namedOutputs: NamedOutputs;
   /** Modules (guide 3.3 IDs) whose data trigger holds, and the ones that fail with the reason, for run-summary.md. */
   modules: { built: string[]; omitted: { id: string; reason: string }[] };
+  /** Chart exhibits for the chart tabs (guide 5.12), in catalogue order; absent without a monthly grid. */
+  charts?: ChartExhibit[];
 }
 
 /** Convenience: the column of a kind, or undefined when the layout omits it. */

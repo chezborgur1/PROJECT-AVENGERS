@@ -18,15 +18,16 @@ import ExcelJS from "exceljs";
 import { SOURCE_LABELS, type FinancialDataset } from "../domain/financials.ts";
 import type { RequestRow } from "../requests/schema.ts";
 import type { Assumptions } from "./assumptions.ts";
-import type { ModelResult } from "./engine.ts";
-import { resolveTokens, type CellSpec, type SheetPlan } from "./sheet.ts";
-import { COLOR, FONT, MARGINS, ROLE_COLOR, STYLES, argb, type FontSpec } from "./styles.ts";
+import { dropEmptyNotesColumn, finalizeNotes, fitLabelColumn, resolveTokens, type CellSpec, type SheetPlan } from "./sheet.ts";
+import { COLOR, FONT, MARGINS, ROLE_COLOR, ROW_HEIGHT, STYLES, argb, type FontSpec } from "./styles.ts";
 import type { ModelOutput } from "./types.ts";
-import { A, planAssumptions, type TabContext } from "./workbook/assumptionsTab.ts";
+import { planAssumptions, type TabContext } from "./workbook/assumptionsTab.ts";
 import { checkFormulas, planChecks } from "./workbook/checksTab.ts";
-import { planDatabook, planDivider, planMapping, planMonthly, planRawBank, planRawBs, planRawCustomers, planRawPayroll, planRawPnl } from "./workbook/data.ts";
+import { injectCharts } from "./charts.ts";
+import { planChartTab } from "./workbook/chartTabs.ts";
+import { customerYears, planDatabook, planDivider, planMapping, planMonthly, planRawBank, planRawBs, planRawCustomers, planRawPayroll, planRawPnl } from "./workbook/data.ts";
 import { masterToggleRef, planContents, planCover, planSummary } from "./workbook/front.ts";
-import { SHEET, type SheetKey } from "./workbook/layout.ts";
+import { type SheetKey } from "./workbook/layout.ts";
 import { planAdjustments, planLadder, planPnlSummary } from "./workbook/statements.ts";
 import { planExpenseDetail, planRevenueDetail } from "./workbook/detail.ts";
 import { planCohorts, planConcentration, planCustomerOverview, planRetention } from "./workbook/customersTabs.ts";
@@ -35,13 +36,11 @@ import { planBalanceSheet, planCashFlow, planDebtLike, planNwc, planProofOfCash 
 import { planProjections } from "./workbook/projections.ts";
 import { planDealStructure, planOpportunities, planSensitivities, planValuation } from "./workbook/valuationTabs.ts";
 
-export { SHEET };
-
 export interface WorkbookContext {
   row: RequestRow;
   dataset: FinancialDataset;
   assumptions: Assumptions;
-  model: ModelResult;
+  model: ModelOutput;
   firmName: string;
   preparedOn: string;
   version?: string;
@@ -64,8 +63,8 @@ export interface WorkbookPlan {
 
 /** The order of guide 5.1; tabs whose data is absent are left out. */
 const TAB_ORDER: SheetKey[] = [
-  "cover", "contents", "summary", "assumptions", "pnl", "ladder", "adjustments", "revenue", "expense",
-  "customers", "retention", "concentration", "cohorts", "headcount",
+  "cover", "contents", "summary", "assumptions", "pnl", "ladder", "adjustments", "revenue", "revenueCharts", "expense", "expenseCharts",
+  "customers", "retention", "retentionCharts", "concentration", "cohorts", "headcount", "headcountCharts",
   "bs", "nwc", "debtLike", "cashFlow", "proofOfCash", "projections", "opportunities",
   "valuation", "deal", "sensitivities", "checks", "divider", "monthly", "databook", "mapping",
   "rawPnl", "rawBs", "rawBank", "rawCustomers", "rawPayroll",
@@ -80,6 +79,7 @@ function asOfLabel(model: ModelOutput): string {
 export function planWorkbook(model: ModelOutput, opts: PlanOptions): WorkbookPlan {
   if (!model.assumptions) throw new Error("planWorkbook needs the engine's ModelOutput (with assumptions)");
   const ds = opts.dataset;
+  const fiscalYears = model.columns.filter((c) => c.ref.kind === "fiscal_year" && !c.projected).map((c) => c.fiscalYear!);
   const ctx: TabContext = {
     model,
     a: model.assumptions,
@@ -89,6 +89,8 @@ export function planWorkbook(model: ModelOutput, opts: PlanOptions): WorkbookPla
     masterToggle: masterToggleRef(),
     customers: ds?.customers?.customers.map((c) => ({ id: c.id, startDate: c.startDate, endDate: c.endDate, revenueByFiscalYear: c.revenueByFiscalYear })) ?? [],
     employees: ds?.payroll?.employees.map((e) => ({ id: e.id, department: e.department, hireDate: e.hireDate, terminationDate: e.terminationDate, isOwner: e.isOwner })) ?? [],
+    kpis: ds?.kpis ?? [],
+    customerYears: customerYears(fiscalYears, ds?.customers),
   };
   const preparedLine = `Prepared by AMB Advisory Services LLC for ${opts.businessName} | ${longDate(opts.preparedOn)} | Confidential`;
   const version = opts.version ?? "v01";
@@ -101,12 +103,16 @@ export function planWorkbook(model: ModelOutput, opts: PlanOptions): WorkbookPla
     ladder: () => planLadder(ctx),
     adjustments: () => planAdjustments(ctx),
     revenue: () => planRevenueDetail(ctx),
+    revenueCharts: () => planChartTab(ctx, "revenueCharts"),
     expense: () => planExpenseDetail(ctx),
+    expenseCharts: () => planChartTab(ctx, "expenseCharts"),
     customers: () => planCustomerOverview(ctx),
     retention: () => planRetention(ctx),
+    retentionCharts: () => planChartTab(ctx, "retentionCharts"),
     concentration: () => planConcentration(ctx),
     cohorts: () => planCohorts(ctx),
     headcount: () => planHeadcount(ctx),
+    headcountCharts: () => planChartTab(ctx, "headcountCharts"),
     bs: () => planBalanceSheet(ctx),
     nwc: () => planNwc(ctx),
     debtLike: () => planDebtLike(ctx),
@@ -119,13 +125,13 @@ export function planWorkbook(model: ModelOutput, opts: PlanOptions): WorkbookPla
     sensitivities: () => planSensitivities(ctx),
     divider: () => planDivider(),
     monthly: () => planMonthly(ctx),
-    databook: () => planDatabook(ctx, ds),
+    databook: () => planDatabook(ctx),
     mapping: () => planMapping(ctx),
     rawPnl: () => planRawPnl(model),
     rawBs: () => planRawBs(model),
     rawBank: () => (ds ? planRawBank(ds) : undefined),
-    rawCustomers: () => (ds ? planRawCustomers(ds) : undefined),
-    rawPayroll: () => (ds ? planRawPayroll(ds) : undefined),
+    rawCustomers: () => (ds ? planRawCustomers(ds, ctx.customerYears) : undefined),
+    rawPayroll: () => (ds ? planRawPayroll(ds, fiscalYears) : undefined),
   };
   const byKey: Partial<Record<SheetKey, SheetPlan>> = {};
   for (const key of TAB_ORDER) {
@@ -138,15 +144,18 @@ export function planWorkbook(model: ModelOutput, opts: PlanOptions): WorkbookPla
   builtKeys.add("contents");
   builtKeys.add("checks");
   const order = TAB_ORDER.filter((k) => builtKeys.has(k));
-  const sources = ds ? ds.provenance.map((p) => `FY${p.year}: P&L from ${SOURCE_LABELS[p.pnl]}${p.balanceSheet ? `; balance sheet from ${SOURCE_LABELS[p.balanceSheet]}` : ""}`) : [];
-  byKey.checks = planChecks(ctx, builtKeys, checkFormulas(model, builtKeys)).plan;
-  byKey.contents = planContents(ctx, ds, order, opts.firmName, version, sources).plan;
+  const sources = (ds?.provenance ?? []).map((p) => ({
+    label: `Source, FY${p.year}`,
+    value: p.balanceSheet === p.pnl ? `P&L and balance sheet: ${SOURCE_LABELS[p.pnl]}` : `P&L: ${SOURCE_LABELS[p.pnl]}${p.balanceSheet ? `; balance sheet: ${SOURCE_LABELS[p.balanceSheet]}` : ""}`,
+  }));
+  byKey.checks = planChecks(ctx, builtKeys, checkFormulas(model, byKey)).plan;
+  byKey.contents = planContents(ctx, order, { preparedBy: opts.firmName, preparedOn: opts.preparedOn, version, sources }).plan;
 
   const plans = order.map((k) => byKey[k]!);
   for (const p of plans) {
-    let last = 0;
-    for (const k of p.cells.keys()) last = Math.max(last, Number(k.split(":")[0]));
-    p.rows.errorScanLast ??= last;
+    dropEmptyNotesColumn(p);
+    fitLabelColumn(p);
+    finalizeNotes(p);
   }
   resolveTokens(plans);
   return { plans, byKey };
@@ -163,10 +172,16 @@ export function defaultLogo(repoRoot: string): string | undefined {
   return fs.existsSync(file) ? file : undefined;
 }
 
-export async function writeWorkbook(ctx: WorkbookContext, file: string): Promise<void> {
-  const model = ctx.model as ModelOutput;
+/** Plan options each written model used, so `verifyWorkbook(file, model)` rebuilds the same plan without the caller repeating them. */
+const writtenWith = new WeakMap<ModelOutput, PlanOptions>();
+
+export function planOptionsUsedFor(model: ModelOutput): PlanOptions | undefined {
+  return writtenWith.get(model);
+}
+
+export function planOptionsFor(ctx: WorkbookContext): PlanOptions {
   const repoRoot = path.resolve(import.meta.dirname, "..", "..");
-  const plan = planWorkbook(model, {
+  return {
     dataset: ctx.dataset,
     codeName: ctx.row.code_name,
     businessName: ctx.row.business_name,
@@ -174,8 +189,15 @@ export async function writeWorkbook(ctx: WorkbookContext, file: string): Promise
     preparedOn: ctx.preparedOn,
     version: ctx.version,
     logoFile: defaultLogo(repoRoot),
-  });
+  };
+}
+
+export async function writeWorkbook(ctx: WorkbookContext, file: string): Promise<WorkbookPlan> {
+  const opts = planOptionsFor(ctx);
+  const plan = planWorkbook(ctx.model, opts);
   await renderWorkbook(plan, file, { creator: ctx.firmName });
+  writtenWith.set(ctx.model, opts);
+  return plan;
 }
 
 // --- Rendering --------------------------------------------------------------------------------
@@ -188,8 +210,7 @@ export async function renderWorkbook(plan: WorkbookPlan, file: string, opts: { c
   const imageIds = new Map<string, number>();
 
   for (const p of plan.plans) {
-    const ws = wb.addWorksheet(p.name, { properties: { tabColor: p.tabColor ? { argb: argb(p.tabColor) } : undefined, defaultRowHeight: 12.75, outlineProperties: { summaryBelow: false, summaryRight: false } } });
-    ws.properties.defaultRowHeight = 12.75;
+    const ws = wb.addWorksheet(p.name, { properties: { tabColor: p.tabColor ? { argb: argb(p.tabColor) } : undefined, defaultRowHeight: ROW_HEIGHT.body, outlineProperties: { summaryBelow: false, summaryRight: false } } });
     ws.views = [
       p.freeze
         ? { state: "frozen", xSplit: p.freeze.col - 1, ySplit: p.freeze.row - 1, topLeftCell: `${colName(p.freeze.col)}${p.freeze.row}`, showGridLines: p.gridlines, zoomScale: 100 }
@@ -204,6 +225,7 @@ export async function renderWorkbook(plan: WorkbookPlan, file: string, opts: { c
       const [r, c] = key.split(":").map(Number) as [number, number];
       renderCell(ws.getCell(r, c), spec);
     }
+    for (const m of p.merges) ws.mergeCells(m);
     // Check-row rules first so they outrank the Print-mode rule (guide 5.9).
     let priority = 1;
     for (const rule of p.cf) {
@@ -222,11 +244,10 @@ export async function renderWorkbook(plan: WorkbookPlan, file: string, opts: { c
     if (p.print.areas.length) {
       ws.pageSetup = {
         orientation: p.print.landscape ? "landscape" : "portrait",
-        paperSize: 1,
-        fitToPage: true,
-        fitToWidth: p.print.fitToWidth,
-        fitToHeight: p.print.fitToHeight,
-        printArea: p.print.areas.join("&&"),
+        paperSize: LETTER,
+        ...(p.print.scale ? { fitToPage: false, scale: p.print.scale } : { fitToPage: true, fitToWidth: p.print.fitToWidth, fitToHeight: p.print.fitToHeight }),
+        // ExcelJS prefixes "$" to each side's column only; writing "B$2" makes the whole reference absolute.
+        printArea: p.print.areas.map((a) => a.replace(/([A-Z]+)(\d+)/g, "$1$$$2")).join("&&"),
         printTitlesRow: p.print.titlesRow,
         printTitlesColumn: p.print.titlesCol,
         margins: { ...MARGINS },
@@ -248,8 +269,11 @@ export async function renderWorkbook(plan: WorkbookPlan, file: string, opts: { c
   }
   wb.views = [{ x: 0, y: 0, width: 24000, height: 14000, firstSheet: 0, activeTab: 0, visibility: "visible" }];
   await wb.xlsx.writeFile(file);
-  await injectColumnBreaks(file, plan);
+  await finishPackage(file, plan);
 }
+
+/** ExcelJS declares PaperSize as a const enum, which erasable-syntax TypeScript cannot import; 1 is Letter. */
+const LETTER = 1 as ExcelJS.PageSetup["paperSize"];
 
 function renderCell(cell: ExcelJS.Cell, spec: CellSpec): void {
   const style = spec.style ? STYLES[spec.style] : undefined;
@@ -271,7 +295,7 @@ function renderCell(cell: ExcelJS.Cell, spec: CellSpec): void {
     cell.alignment = { horizontal: align.horizontal, vertical: align.vertical, indent: align.indent, wrapText: align.wrap };
   }
   if (spec.border) {
-    const side = (s?: string) => (s ? { style: s as ExcelJS.BorderStyle, color: { argb: argb(COLOR.black) } } : undefined);
+    const side = (s?: string) => (s ? { style: s as ExcelJS.BorderStyle, color: { argb: argb(spec.borderColor ?? COLOR.black) } } : undefined);
     cell.border = { top: side(spec.border.top), bottom: side(spec.border.bottom), left: side(spec.border.left), right: side(spec.border.right) };
   }
 }
@@ -293,19 +317,21 @@ function colName(n: number): string {
 }
 
 /**
- * ExcelJS writes row breaks but not column breaks. The monthly grids print
- * one fiscal year per page (guide 5.2), so their `<colBreaks>` element is
- * added to the sheet XML after the file is written.
+ * Three things ExcelJS cannot write, patched into the package after it is
+ * saved: the monthly grids' column breaks (one fiscal year per printed page,
+ * guide 5.2), the chart tabs' native charts (5.12), and the Normal style's font. ExcelJS always writes Calibri 11
+ * there; it becomes Arial 10, whose digit width is the same seven pixels, so
+ * column widths are unchanged and Arial is the file's only font name (5.8).
  */
-async function injectColumnBreaks(file: string, plan: WorkbookPlan): Promise<void> {
-  const withBreaks = plan.plans.map((p, i) => ({ p, i })).filter(({ p }) => p.print.colBreaks.length);
-  if (!withBreaks.length) return;
+async function finishPackage(file: string, plan: WorkbookPlan): Promise<void> {
   const JSZip = (await import("jszip")).default;
   const zip = await JSZip.loadAsync(fs.readFileSync(file));
-  for (const { p, i } of withBreaks) {
+  const styles = await zip.file("xl/styles.xml")!.async("string");
+  zip.file("xl/styles.xml", styles.replace(/<font>(?:(?!<\/font>)[\s\S])*?<name val="Calibri"\/>(?:(?!<\/font>)[\s\S])*?<\/font>/, '<font><sz val="10"/><name val="Arial"/><family val="2"/></font>'));
+  for (const [i, p] of plan.plans.entries()) {
+    if (!p.print.colBreaks.length) continue;
     const partName = `xl/worksheets/sheet${i + 1}.xml`;
-    const xml = await zip.file(partName)?.async("string");
-    if (!xml) continue;
+    const xml = await zip.file(partName)!.async("string");
     const breaks = p.print.colBreaks.map((c) => `<brk id="${c}" max="1048575" man="1"/>`).join("");
     const element = `<colBreaks count="${p.print.colBreaks.length}" manualBreakCount="${p.print.colBreaks.length}">${breaks}</colBreaks>`;
     // Schema order: rowBreaks, colBreaks, customProperties, ..., drawing.
@@ -316,7 +342,6 @@ async function injectColumnBreaks(file: string, plan: WorkbookPlan): Promise<voi
     else out = xml.replace(/<\/worksheet>/, `${element}</worksheet>`);
     zip.file(partName, out);
   }
+  await injectCharts(zip, plan.plans.map((p, i) => ({ part: `xl/worksheets/sheet${i + 1}.xml`, placements: p.charts })));
   fs.writeFileSync(file, await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }));
 }
-
-export { A };

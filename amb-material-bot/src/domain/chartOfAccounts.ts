@@ -182,8 +182,15 @@ const BS_DETAIL_RULES: { test: RegExp; line: BsDetailLine; side: "asset" | "liab
   { test: /accrued|payroll liabilit|wages payable|sales tax payable|401\s?k payable|garnishment/i, line: "accrued_liabilities", side: "liability" },
 ];
 
-/** The guide 5.6 detail line a balance-sheet account belongs to, if any. */
-export function bsDetailLine(account: string, section: string): BsDetailLine | undefined {
+/**
+ * The guide 5.6 detail line a balance-sheet account belongs to, if any. The
+ * lines NWC adjusts for must sit where the adjustment assumes: a related-party
+ * balance is a receivable in other current assets or a payable in other
+ * current liabilities (a shareholder loan in long-term debt is neither), and
+ * accrued interest and income taxes count only inside other current
+ * liabilities. `category` is the line's mapped category, when known.
+ */
+export function bsDetailLine(account: string, section: string, category?: BsCategory): BsDetailLine | undefined {
   const name = normaliseAccount(account);
   const liability = /liabilit/i.test(section);
   const asset = /asset/i.test(section);
@@ -191,6 +198,11 @@ export function bsDetailLine(account: string, section: string): BsDetailLine | u
     if (!r.test.test(name)) continue;
     if (r.side === "liability" && asset) continue;
     if (r.side === "asset" && liability) continue;
+    if (r.line === "related_party_balances") {
+      if (asset) return category === undefined || category === "other_current_assets" ? "related_party_receivable" : undefined;
+      return category === undefined || category === "other_current_liabilities" ? "related_party_balances" : undefined;
+    }
+    if ((r.line === "accrued_interest" || r.line === "income_tax_payable") && category !== undefined && category !== "other_current_liabilities") return undefined;
     return r.line;
   }
   return undefined;
@@ -217,7 +229,7 @@ export function debtLikeTreatment(account: string, category: BsCategory, section
     return { treatment: "debt", revolving, note: revolving ? "Repaid at or before closing" : undefined };
   }
   if (category !== "other_current_liabilities") return undefined;
-  const detail = bsDetailLine(account, section);
+  const detail = bsDetailLine(account, section, category);
   if (detail === "deferred_revenue" || detail === "customer_deposits") return { treatment: "nwc", revolving: false, note: "In NWC (AMB default)" };
   if (detail === "accrued_interest" || detail === "income_tax_payable" || detail === "related_party_balances") return { treatment: "debt_like", revolving: false };
   if (/bonus|unpaid payroll tax|payroll tax(es)? payable/i.test(name)) return { treatment: "debt_like", revolving: false };

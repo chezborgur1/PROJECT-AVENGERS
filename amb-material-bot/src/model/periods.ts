@@ -12,13 +12,12 @@ import {
   emptyPnl,
   fiscalYearOf,
   ltmWindow,
-  monthEndDate,
-  monthLabel,
   monthPeriod,
   monthRange,
   numberAdjustments,
   parseMonthKey,
   periodKey,
+  pfColumnAmount,
   periodLabel,
   sumMonths,
   ytdWindow,
@@ -199,12 +198,11 @@ export function categoryTotals(ds: FinancialDataset, c: PeriodColumn): Record<Is
 export function scheduleFor(ds: FinancialDataset, a: Assumptions): Adjustment[] {
   const rows = ds.adjustments ? ds.adjustments.map((r) => ({ ...r })) : deriveSchedule(ds, a);
   const fye = a.fiscalYearEndMonth;
-  const monthsOfYear = (fy: number) => fiscalYearMonths(fy, fye);
-  const flat = (perYear: number): Record<MonthKey, number> => {
-    const out: Record<MonthKey, number> = {};
-    for (const fy of ds.years) for (const m of monthsOfYear(fy)) out[m] = perYear / 12;
-    return out;
-  };
+  // Every month a window can reach: the full fiscal years and every grid month, including a
+  // partial current year (the YTD stub) that `years` leaves out. The workbook's month cells
+  // carry the same amount in every grid month.
+  const months = [...new Set([...ds.years.flatMap((fy) => fiscalYearMonths(fy, fye)), ...(ds.monthly?.months.map((m) => m.key) ?? [])])].sort();
+  const flat = (perYear: number): Record<MonthKey, number> => Object.fromEntries(months.map((m) => [m, perYear / 12]));
   const replacementCost = a.recast.replacementSalary * (1 + a.recast.burdenPct);
   const reserve = a.recast.mainStreetMode ? a.recast.capitalReserve : 0;
   for (const r of rows) {
@@ -356,10 +354,7 @@ function deriveSchedule(ds: FinancialDataset, a: Assumptions): Adjustment[] {
 export function scheduleAmount(row: Adjustment, c: PeriodColumn, fye: number, latestFy: number): number | null {
   if (c.projected) return null;
   const isPf = row.tier === "pro_forma";
-  if (c.ref.kind === "pf") {
-    if (!isPf) return adjustmentInWindow(row, windowMonths(c), fye);
-    return row.byMonth ? adjustmentInWindow(row, windowMonths(c), fye) : (row.byFiscalYear[latestFy] ?? 0);
-  }
+  if (c.ref.kind === "pf") return pfColumnAmount(row, windowMonths(c), latestFy, fye);
   if (isPf) return null;
   if (c.ref.kind === "fiscal_year") return row.byFiscalYear[c.ref.fiscalYear] ?? 0;
   return adjustmentInWindow(row, windowMonths(c), fye);
@@ -519,5 +514,3 @@ export function chartWindow(months: MonthPeriod[]): { start: MonthKey; end: Mont
 export function ltmEqualsFiscalYear(asOfMonth: MonthKey, fye: number): boolean {
   return monthPeriod(asOfMonth, fye).fiscalMonth === 12;
 }
-
-export { monthEndDate, monthLabel, fiscalYearOf };

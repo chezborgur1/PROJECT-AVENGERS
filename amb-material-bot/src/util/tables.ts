@@ -44,12 +44,20 @@ export function periodColumns(keys: string[], fyEndMonth: number, exclude: RegEx
   return { months, years };
 }
 
-/** "Vehicle Loans" → "Vehicle loans"; acronyms and bracketed codes keep their case. */
-export function sentenceCase(s: string): string {
-  return s
+/**
+ * A client-grade label from an exported account name: sentence case
+ * ("Vehicle Loans" → "Vehicle loans"; acronyms and bracketed codes keep their
+ * case), and a name built with spaced dashes ("Service Revenue - Residential")
+ * takes its qualifier in parentheses ("Service revenue (residential)"),
+ * because a spaced dash reads as punctuation in the CIM (guide 4.4).
+ */
+export function clientLabel(s: string): string {
+  const cased = s
     .split(" ")
     .map((w, i) => (i > 0 && /^[A-Z][a-z]+$/.test(w) ? w.toLowerCase() : w))
     .join(" ");
+  const [head, ...qualifiers] = cased.split(/\s+[-–—]\s+/);
+  return qualifiers.length ? `${head} (${qualifiers.join(", ")})` : cased;
 }
 
 /** First non-blank value among the column aliases, trimmed. */

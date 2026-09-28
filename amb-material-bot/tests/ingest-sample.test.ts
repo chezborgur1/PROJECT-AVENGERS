@@ -32,6 +32,7 @@ describe("the sample folder reproduces the fixture", () => {
     expect(used["payroll.csv"]).toBe("Payroll register (29 people)");
     expect(used["kpis.csv"]).toBe("Operating metrics (10)");
     expect(used["intake.json"]).toBe("Structured intake facts");
+    expect(used["cim-copy.fixture.json"]).toBe("CIM copy fixture (used when no API key is set)");
     expect(bundle.intakeFacts).toBe("intake.json");
     expect(Object.values(used).some((u) => /^(Skipped|Error)/.test(u))).toBe(false);
     expect(ds().warnings).toHaveLength(3);

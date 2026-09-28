@@ -3,7 +3,7 @@
 // Assumptions cell map, and the formulas that derive period windows and
 // labels from AsOfDate and FYEMonth so nothing is typed twice.
 
-import { addMonths, monthEndDate, type MonthKey } from "../../domain/financials.ts";
+import { monthEndDate, monthLabel, type MonthKey } from "../../domain/financials.ts";
 import { excelSerial, firstDayOf, fiscalYearEndKey, latestFullFiscalYear } from "../periods.ts";
 import { addr, colLetter, q, rowOf, type CellSpec, type SheetBuilder } from "../sheet.ts";
 import { COLOR, FMT, WIDTH } from "../styles.ts";
@@ -18,12 +18,16 @@ export const SHEET = {
   ladder: "Adj. EBITDA",
   adjustments: "Adjustments",
   revenue: "Revenue Detail",
+  revenueCharts: "Revenue Charts",
   expense: "Expense Detail",
+  expenseCharts: "Expense Charts",
   customers: "Customer Overview",
   retention: "Customer Retention",
+  retentionCharts: "Retention Charts",
   concentration: "Concentration",
   cohorts: "Cohorts",
   headcount: "Headcount",
+  headcountCharts: "Headcount Charts",
   bs: "Balance Sheet",
   nwc: "NWC",
   debtLike: "Debt-Like Items",
@@ -172,7 +176,7 @@ export function windowFormulas(c: PeriodColumn, model: ModelOutput): { start: st
       return { start: `EOMONTH(${end},-12)+1`, end };
     }
     case "ytd":
-      return c.priorYear ? { start: `EOMONTH(${ytdStart},-12)+1`, end: `EOMONTH(${ASOF},-12)` } : { start: ytdStart, end: `EOMONTH(${ASOF},0)` };
+      return c.priorYear ? { start: `EOMONTH(${ytdStart},-13)+1`, end: `EOMONTH(${ASOF},-12)` } : { start: ytdStart, end: `EOMONTH(${ASOF},0)` };
     case "ltm":
       return c.priorYear ? { start: `EOMONTH(${ASOF},-24)+1`, end: `EOMONTH(${ASOF},-12)` } : { start: `EOMONTH(${ASOF},-12)+1`, end: `EOMONTH(${ASOF},0)` };
     case "pf":
@@ -182,20 +186,25 @@ export function windowFormulas(c: PeriodColumn, model: ModelOutput): { start: st
   }
 }
 
+/** Window formulas of fiscal year `fy`, including a year the model has no column for (the partial current year). */
+export function fiscalYearWindow(fy: number, model: ModelOutput): { start: string; end: string } {
+  const end = fiscalYearEndKey(fy, model.fiscalYearEndMonth);
+  return windowFormulas({ key: `FY${fy}`, ref: { kind: "fiscal_year", fiscalYear: fy }, group: "Full Year", label: `FY${fy}`, start: end, end, months: 12, priorYear: false, projected: false, fiscalYear: fy }, model);
+}
+
+/**
+ * The row-6 label of a column (guide 5.2): the fiscal year ("FY2025") under
+ * Full Year, the end month ("Dec-25") under YTD, LTM and PF, whose group row
+ * 5 already names. The column's full label ("LTM Dec-25") is for the CIM.
+ */
+export function headerLabel(c: PeriodColumn): string {
+  return c.ref.kind === "fiscal_year" ? c.label : monthLabel(c.end);
+}
+
 /** The label formula of row 6 and the value it must produce (check C16). */
 export function labelFormula(c: PeriodColumn, endCell: string): { f: string; expect: string } {
-  switch (c.ref.kind) {
-    case "fiscal_year":
-      return { f: `"FY"&YEAR(${endCell})`, expect: c.label };
-    case "ytd":
-      return { f: `"YTD "&TEXT(${endCell},"mmm-yy")`, expect: c.label };
-    case "ltm":
-      return { f: `"LTM "&TEXT(${endCell},"mmm-yy")`, expect: c.label };
-    case "pf":
-      return { f: `"PF "&TEXT(${endCell},"mmm-yy")`, expect: c.label };
-    default:
-      throw new Error(`No label for column kind ${c.ref.kind}`);
-  }
+  if (c.ref.kind === "fiscal_year") return { f: `"FY"&YEAR(${endCell})`, expect: headerLabel(c) };
+  return { f: `TEXT(${endCell},"mmm-yy")`, expect: headerLabel(c) };
 }
 
 export const serialOfMonthStart = (m: MonthKey) => excelSerial(firstDayOf(m));
@@ -282,7 +291,5 @@ export const ADJ_CATEGORY_COL = 5;
 export const ADJ_BASIS_COL = 6;
 export const ADJ_STATUS_COL = 9;
 export const ADJ_PNL_LINE_COL = 11;
-
-export { addMonths, colLetter, addr };
 
 export type { CellSpec };

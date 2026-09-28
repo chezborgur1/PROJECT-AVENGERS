@@ -2,14 +2,14 @@
 // AMB's, the contents index is hyperlinked with the master Print switch and
 // the master check, the summary is one page of linked tables.
 
-import path from "node:path";
-import { SOURCE_LABELS, type FinancialDataset } from "../../domain/financials.ts";
+import { SOURCE_LABELS, parsePeriodKey, periodLabel, type KpiSeries } from "../../domain/financials.ts";
 import { ltmEqualsFiscalYear } from "../periods.ts";
 import { addr, colLetter, rowOf, SheetBuilder } from "../sheet.ts";
 import { COLOR, FMT, WIDTH } from "../styles.ts";
-import type { ModelOutput } from "../types.ts";
+import type { ModelOutput, PeriodColumn } from "../types.ts";
 import { A, type TabContext } from "./assumptionsTab.ts";
-import { periodLayout, S, SHEET, type SheetKey } from "./layout.ts";
+import { nwcLayout } from "./balance.ts";
+import { headerLabel, periodLayout, S, SHEET, type SheetKey } from "./layout.ts";
 
 export const CONTENTS_PRINT_COL = 9;
 export const masterToggleRef = (): string => `${S("contents")}$${colLetter(CONTENTS_PRINT_COL)}$${rowOf("contents", "printMode")}`;
@@ -17,33 +17,37 @@ export const masterToggleRef = (): string => `${S("contents")}$${colLetter(CONTE
 /** Purpose and units for the index, per tab (guide 5.1). */
 const TAB_INFO: Record<SheetKey, { purpose: string; units: string }> = {
   cover: { purpose: "Cover", units: "" },
-  contents: { purpose: "Index, model information, print switch, master check, version log", units: "" },
-  summary: { purpose: "One page of tables: key lines, condensed ladder, KPIs, valuation range", units: "$000s" },
+  contents: { purpose: "Index, model information, Print switch, master check, log", units: "" },
+  summary: { purpose: "Key lines, condensed ladder, KPIs and valuation range", units: "$000s" },
   assumptions: { purpose: "Every input, blue, with its source", units: "$" },
   pnl: { purpose: "Historical P&L by period with KPI block", units: "$000s" },
-  ladder: { purpose: "Reported EBITDA to SDE, Adj. EBITDA and PF Adj. EBITDA, with refs", units: "$000s" },
-  adjustments: { purpose: "The adjustments schedule: tier, category, basis, evidence, status, amounts", units: "$000s" },
+  ladder: { purpose: "Reported EBITDA to SDE, Adj. and PF Adj. EBITDA, with refs", units: "$000s" },
+  adjustments: { purpose: "The schedule: tier, category, basis, evidence, status", units: "$000s" },
   revenue: { purpose: "Revenue by line: $, % growth, % of total; LTM strip", units: "$000s" },
-  expense: { purpose: "Cost of revenue and expense buckets: $, % of revenue, growth; LTM strip", units: "$000s" },
+  revenueCharts: { purpose: "Monthly revenue and revenue by line (MC-R1, MC-R2)", units: "#, $000s" },
+  expense: { purpose: "Cost and expense buckets: $, % of revenue, growth; strip", units: "$000s" },
+  expenseCharts: { purpose: "Monthly payroll and largest expense, with % of revenue", units: "#, $000s" },
   customers: { purpose: "Mix by type: count, revenue, average revenue", units: "#, $" },
   retention: { purpose: "Count and dollar roll-forwards, churn, GDR, NDR; monthly strip", units: "#, $" },
+  retentionCharts: { purpose: "Monthly wins and losses, by churn type and by segment", units: "#, $000s" },
   concentration: { purpose: "Top 20 customers, coded, cumulative share, tenure", units: "$" },
   cohorts: { purpose: "Count and revenue cohort triangles", units: "#, $" },
-  headcount: { purpose: "By department: count, comp, % revenue, tenure; roll-forward; tenure at departure", units: "#, $" },
+  headcount: { purpose: "By department; roll-forward; tenure at departure", units: "#, $" },
+  headcountCharts: { purpose: "Monthly hires and departures; tenure at departure", units: "#, $000s" },
   bs: { purpose: "Condensed balance sheet at every statement date", units: "$000s" },
   nwc: { purpose: "Net working capital by date, peg basis, ratios, transfers", units: "$000s" },
-  debtLike: { purpose: "Debt and debt-like items at the latest date with treatment and status", units: "$000s" },
+  debtLike: { purpose: "Debt and debt-like items: treatment and status", units: "$000s" },
   cashFlow: { purpose: "Historical indirect cash flow, capex, free cash flow", units: "$000s" },
   proofOfCash: { purpose: "Monthly revenue vs bank deposits", units: "$000s" },
-  projections: { purpose: "Five-year driver-based income statement, balance sheet and cash flow", units: "$000s" },
+  projections: { purpose: "Five-year driver-based income statement, BS and cash flow", units: "$000s" },
   opportunities: { purpose: "One sizing grid per growth lever", units: "$000s" },
-  valuation: { purpose: "Valuation range, implied multiples, financing and DSCR (internal)", units: "$000s" },
-  deal: { purpose: "Structure 1: terms, sources and uses, seller proceeds, debt service", units: "$000s" },
+  valuation: { purpose: "Valuation range, multiples, financing, DSCR (internal)", units: "$000s" },
+  deal: { purpose: "Terms, sources and uses, seller proceeds, debt service", units: "$000s" },
   sensitivities: { purpose: "Two-way grids centred on the base case", units: "$000s" },
   checks: { purpose: "Every check with difference, tolerance and status", units: "" },
   divider: { purpose: "Data tabs follow", units: "" },
   monthly: { purpose: "Category × month grid every period column reads", units: "$000s" },
-  databook: { purpose: "Account × period with mapping columns and the tie to the raw export", units: "$" },
+  databook: { purpose: "Account × period with mapping and the tie to raw exports", units: "$" },
   mapping: { purpose: "Account to AMB category and summary line", units: "" },
   rawPnl: { purpose: "P&L as exported", units: "$" },
   rawBs: { purpose: "Balance sheet as exported", units: "$" },
@@ -63,6 +67,8 @@ export function planCover(ctx: TabContext, logoFile: string | undefined, prepare
   };
   bar(2);
   b.height(2, 13.5);
+  // The open band above the title (the seller's logo area) is kept short enough that B2:Q39 fits a Letter page at 100%.
+  for (let r = 5; r <= 22; r++) b.height(r, 11.25);
   for (let c = 2; c <= 17; c++) b.cell(4, c, { border: { top: "medium" } });
   b.height(4, 6);
   for (let c = 5; c <= 14; c++) {
@@ -84,39 +90,41 @@ export function planCover(ctx: TabContext, logoFile: string | undefined, prepare
   for (let c = 3; c <= 17; c++) b.cell(32, c, { align: { horizontal: "centerContinuous" } });
   for (let c = 2; c <= 17; c++) b.cell(38, c, { border: { top: "medium" } });
   bar(39);
-  if (logoFile) b.image(logoFile, { col: 13.1, row: 32.2 }, { width: 202, height: 202 * LOGO_ASPECT });
+  // About 2.1 in wide, bottom right inside the frame (guide 5.13: N33:Q37), its right edge on column Q's.
+  if (logoFile) b.image(logoFile, { col: 17 - LOGO_WIDTH_PX / COVER_COL_PX, row: 32.3 }, { width: LOGO_WIDTH_PX, height: LOGO_WIDTH_PX * LOGO_ASPECT });
   b.print({ area: "B2:Q39", landscape: true, fitToWidth: 1, fitToHeight: 1 });
   b.plan.gridlines = false;
   return b;
 }
 
 /** Height ÷ width of brand/amb-logo-maroon-2048.png. */
-export const LOGO_ASPECT = 0.34;
+export const LOGO_ASPECT = 0.3408;
+const LOGO_WIDTH_PX = 202;
+/** Pixel width of a cover column at width 6.3 (Excel: width × 7 + 5 at the default font). */
+const COVER_COL_PX = 49;
 
 // --- Contents -----------------------------------------------------------------------------------
 
-export function planContents(ctx: TabContext, ds: FinancialDataset | undefined, built: SheetKey[], preparedBy: string, version: string, sourcesPerYear: string[]): SheetBuilder {
+export function planContents(ctx: TabContext, built: SheetKey[], opts: { preparedBy: string; preparedOn: string; version: string; sources: { label: string; value: string }[] }): SheetBuilder {
   const { model } = ctx;
   const b = new SheetBuilder("contents", SHEET.contents, { output: false });
+  const infoLabel = 8;
+  const infoValue = CONTENTS_PRINT_COL;
   b.width(1, WIDTH.gutter);
-  b.width(2, 4);
-  b.width(3, 20);
-  b.width(4, 62);
-  b.width(5, 9);
-  b.width(6, 9);
+  [4, 20, 50, 8, 8].forEach((w, i) => b.width(2 + i, w));
   b.spacerCol(7);
-  b.width(8, 24);
-  b.width(9, 34);
+  b.width(infoLabel, 24);
+  b.width(infoValue, 54);
   b.height(2, 16.5);
-  b.formula(2, 2, "Cover!B24", { style: "title", role: "link" });
+  b.formula(2, 2, "Cover!B24", { style: "title", role: "text" });
   b.text(3, 2, "Contents", { style: "subtitle" });
-  for (let c = 2; c <= 9; c++) b.cell(3, c, { border: { bottom: "thin" } });
+  for (let c = 2; c <= infoValue; c++) if (c !== 7) b.cell(3, c, { border: { bottom: "thin" } });
   ["#", "Tab", "Purpose", "Units", "Check"].forEach((h, i) => b.cell(5, 2 + i, { style: "header", v: h, role: "text", align: { horizontal: i === 2 || i === 1 ? "left" : "center" } }));
   let r = 6;
   built.forEach((key, i) => {
     const name = SHEET[key];
     b.num(r, 2, i + 1, { role: "text", fmt: FMT.term, align: { horizontal: "center" } });
-    b.formula(r, 3, `HYPERLINK("#'${name.replace(/'/g, "''")}'!A1","${name}")`, { role: "text", font: { color: COLOR.input, underline: true }, expect: name, label: `link ${name}` });
+    b.formula(r, 3, `HYPERLINK("#'${name.replace(/'/g, "''")}'!A1","${name}")`, { role: "text", font: { underline: true }, expect: name, label: `link ${name}` });
     b.text(r, 4, TAB_INFO[key].purpose);
     b.text(r, 5, TAB_INFO[key].units, { align: { horizontal: "center" } });
     const hasChecks = model.checks.some((c) => c.tab === name);
@@ -127,46 +135,49 @@ export function planContents(ctx: TabContext, ds: FinancialDataset | undefined, 
     r++;
   });
   const indexLast = r - 1;
-  // Model information block.
-  let ir = 5;
+  b.cf({ ref: `F6:F${indexLast}`, formula: `F6="CHECK"`, font: { color: COLOR.pending, bold: true } });
+
+  // Model information block to the right of the index.
+  b.cell(5, infoLabel, { style: "header", v: "Model information", role: "text", align: { horizontal: "left" } });
+  b.cell(5, infoValue, { style: "header", v: null, role: "text" });
+  let ir = 6;
   const info = (key: string | undefined, label: string, spec: { v?: string | number; f?: string; expect?: string | number; fmt?: string; role?: "input" | "link" | "text" | "calc" }) => {
     if (key) b.row(key, ir);
-    b.text(ir, 8, label, { font: { bold: true } });
-    if (spec.f) b.formula(ir, 9, spec.f, { role: spec.role ?? "link", fmt: spec.fmt, expect: spec.expect, label });
-    else b.cell(ir, 9, { v: spec.v ?? null, role: spec.role ?? "text", fmt: spec.fmt, align: { horizontal: "left" } });
+    b.text(ir, infoLabel, label, { font: { bold: true } });
+    if (spec.f) b.formula(ir, infoValue, spec.f, { role: spec.role ?? "link", fmt: spec.fmt, expect: spec.expect, label, align: { horizontal: "left" } });
+    else b.cell(ir, infoValue, { v: spec.v ?? null, role: spec.role ?? "text", fmt: spec.fmt, align: { horizontal: "left" } });
     ir++;
   };
-  b.cell(5, 8, { style: "header", v: "Model information", role: "text", align: { horizontal: "left" } });
-  b.cell(5, 9, { style: "header", v: null, role: "text" });
-  ir = 6;
+  const ltm = model.columns.find((c) => c.ref.kind === "ltm" && !c.priorYear);
+  const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
   info(undefined, "Business name", { v: ctx.businessName });
   info(undefined, "Code name", { v: ctx.codeName });
-  info(undefined, "Prepared by", { v: preparedBy });
+  info(undefined, "Prepared by", { v: opts.preparedBy });
   info("asOfDate", "As-of date", { f: A("asOfDate"), fmt: FMT.date, expect: excelSerialOfDate(model.asOfDate) });
-  const ltm = model.columns.find((c) => c.ref.kind === "ltm" && !c.priorYear);
   info(undefined, "LTM period", { v: ltm ? `${ltm.label}${ltmEqualsFiscalYear(model.assumptions!.asOfMonth, model.fiscalYearEndMonth) ? ` (equals FY${ltm.end.slice(0, 4)})` : ""}` : "Full fiscal years only" });
-  info(undefined, "Fiscal year-end", { v: ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][model.fiscalYearEndMonth - 1]! });
-  info(undefined, "Mode", { v: `${model.mode.mode === "mainStreet" ? "Main Street" : "Lower middle market"} (${model.mode.measureLabel} PF Adj. EBITDA before reserve $${Math.round(model.mode.measure).toLocaleString("en-US")})` });
+  info(undefined, "Fiscal year-end", { v: months[model.fiscalYearEndMonth - 1]! });
+  info(undefined, "Mode", { v: `${model.mode.mode === "mainStreet" ? "Main Street" : "Lower middle market"}: PF Adj. EBITDA before the reserve $${Math.round(model.mode.measure / 1000).toLocaleString("en-US")}K vs. $1.0M` });
   info(undefined, "Deal form", { v: model.dealForm === "asset_purchase" ? "Asset purchase" : "Equity purchase" });
-  for (const s of sourcesPerYear) info(undefined, "Source", { v: s });
-  info(undefined, "Version", { v: version });
+  for (const src of opts.sources) info(undefined, src.label, { v: src.value });
+  info(undefined, "Version", { v: opts.version });
   info("printMode", "Print mode (1 = black fonts)", { v: 0, role: "input", fmt: FMT.toggle });
-  b.cell(b.r("printMode"), 9, { style: "printToggle", border: { top: "thin", bottom: "thin", left: "thin", right: "thin" }, align: { horizontal: "center" } });
+  b.cell(b.r("printMode"), infoValue, { style: "printToggle", border: { top: "thin", bottom: "thin", left: "thin", right: "thin" }, align: { horizontal: "center" } });
   info("masterCheck", "Master check", { f: `IF(COUNTIF(${S("checks")}$G:$G,"CHECK")=0,"All checks OK",COUNTIF(${S("checks")}$G:$G,"CHECK")&" checks failing")`, role: "calc", expect: model.masterCheck });
-  b.cell(b.r("masterCheck"), 9, { font: { bold: true } });
-  b.defineName("PrintMode", `$${colLetter(CONTENTS_PRINT_COL)}$${b.r("printMode")}`);
-  b.defineName("MasterCheck", `$${colLetter(CONTENTS_PRINT_COL)}$${b.r("masterCheck")}`);
-  // Version log.
+  b.cell(b.r("masterCheck"), infoValue, { font: { bold: true } });
+  b.cf({ ref: addr(b.r("masterCheck"), infoValue), formula: `${addr(b.r("masterCheck"), infoValue)}<>"All checks OK"`, font: { color: COLOR.pending, bold: true } });
+  b.defineName("PrintMode", `$${colLetter(infoValue)}$${b.r("printMode")}`);
+  b.defineName("MasterCheck", `$${colLetter(infoValue)}$${b.r("masterCheck")}`);
+
+  // Version log (guide 5.13): Version | Change | Date across the index columns, Prepared by under the information block.
   r = Math.max(indexLast, ir) + 2;
-  ["Version", "Date", "Prepared by", "Change"].forEach((h, i) => b.cell(r, [2, 3, 4, 5][i]!, { style: "header", v: h, role: "text", align: { horizontal: "left" } }));
-  b.cell(r, 6, { style: "header", v: null, role: "text" });
+  const logHeader: [number, string | null][] = [[2, "Version"], [3, null], [4, "Change"], [5, "Date"], [6, null], [infoLabel, "Prepared by"], [infoValue, null]];
+  for (const [c, v] of logHeader) b.cell(r, c, { style: "header", v, role: "text", align: { horizontal: "left" } });
   r++;
-  b.text(r, 2, version);
-  b.text(r, 3, ctx.asOfLabel === "" ? "" : new Date().toISOString().slice(0, 10));
-  b.text(r, 4, preparedBy);
-  b.text(r, 5, "First draft generated by the AMB material bot from the sources listed above");
-  void ds;
-  b.print({ area: `B2:${addr(r, 9)}`, landscape: false, fitToWidth: 1, fitToHeight: 0 });
+  b.text(r, 2, opts.version);
+  b.text(r, 4, "First draft generated by the AMB material bot from the sources listed above");
+  b.cell(r, 5, { v: excelSerialOfDate(opts.preparedOn), role: "text", fmt: FMT.date, align: { horizontal: "left" } });
+  b.text(r, infoLabel, opts.preparedBy);
+  b.print({ area: `B2:${addr(r, infoValue)}`, landscape: true, fitToWidth: 1, fitToHeight: 0 });
   b.furniture(ctx.codeName, ctx.asOfLabel);
   return b;
 }
@@ -178,111 +189,193 @@ function excelSerialOfDate(date: string): number {
 
 // --- Summary ---------------------------------------------------------------------------------------
 
+const K = 1000;
+const NOTES_WIDTH = 48;
+
+/** Number format for a stated operating metric by its unit. */
+const KPI_FMT: Record<KpiSeries["unit"], string> = {
+  count: FMT.body,
+  currency: FMT.currency,
+  percent: FMT.pct,
+  ratio: FMT.oneDp,
+  hours: FMT.body,
+  rating: FMT.oneDp,
+  sq_ft: FMT.body,
+  miles: FMT.body,
+};
+
 export function planSummary(ctx: TabContext): SheetBuilder {
   const { model } = ctx;
   const b = new SheetBuilder("summary", SHEET.summary);
-  const K = 1000;
-  const cols = model.columns.filter((c) => !c.projected && (c.ref.kind === "fiscal_year" || (c.ref.kind === "ltm" && !c.priorYear) || c.ref.kind === "pf"));
   const pnlL = periodLayout(model, 3);
-  const firstCol = 3;
-  const lastCol = firstCol + cols.length - 1;
-  const notesCol = lastCol + 2;
+  // The key columns of the standard block (FY | LTM CY, PF), spacers between groups as on every period tab.
+  const picked = pnlL.cols.filter(({ column: c }) => c.ref.kind === "fiscal_year" || (c.ref.kind === "ltm" && !c.priorYear) || c.ref.kind === "pf");
+  const cols: { column: PeriodColumn; col: number }[] = [];
+  const groups: { from: number; to: number; label: string }[] = [];
+  const spacers: number[] = [];
+  let col = 3;
+  // Full Year, then LTM and PF side by side (their own tier-1 groups, no spacer between, as in guide 5.2).
+  for (const block of [["Full Year"], ["LTM", "PF"]] as const) {
+    const members = picked.filter(({ column: c }) => (block as readonly string[]).includes(c.group));
+    if (!members.length) continue;
+    for (const group of block) {
+      const inGroup = members.filter(({ column: c }) => c.group === group);
+      if (!inGroup.length) continue;
+      const from = col;
+      for (const m of inGroup) cols.push({ column: m.column, col: col++ });
+      groups.push({ from, to: col - 1, label: group === "Full Year" ? pnlL.groups[0]!.label : group });
+    }
+    spacers.push(col++);
+  }
+  const lastValue = col - 2;
+  const notesCol = col;
+  const latest = cols.find(({ column: c }) => c.ref.kind === "ltm") ?? cols.filter(({ column: c }) => c.ref.kind === "fiscal_year").at(-1)!;
   b.width(1, WIDTH.gutter);
   b.width(2, WIDTH.label);
-  b.widths(firstCol, lastCol, WIDTH.value);
-  b.spacerCol(lastCol + 1);
-  b.width(notesCol, 44);
-  b.anatomy({ subtitle: "Summary ($000s)", lastCol: notesCol, toggleCol: lastCol, masterToggle: ctx.masterToggle });
-  b.text(3, lastCol - 1, "Print", { align: { horizontal: "right" } });
-  const fyCount = cols.filter((c) => c.ref.kind === "fiscal_year").length;
-  const groups: { from: number; to: number; label: string }[] = [];
-  if (fyCount) groups.push({ from: firstCol, to: firstCol + fyCount - 1, label: "Full Year" });
-  const ltmIdx = cols.findIndex((c) => c.ref.kind === "ltm");
-  if (ltmIdx >= 0) groups.push({ from: firstCol + ltmIdx, to: firstCol + ltmIdx, label: "LTM" });
-  const pfIdx = cols.findIndex((c) => c.ref.kind === "pf");
-  if (pfIdx >= 0) groups.push({ from: firstCol + pfIdx, to: firstCol + pfIdx, label: "PF" });
+  for (const { col: c } of cols) b.width(c, WIDTH.value);
+  for (const s of spacers) b.spacerCol(s);
+  b.width(notesCol, NOTES_WIDTH);
+  b.anatomy({ subtitle: "Summary ($000s)", lastCol: notesCol, toggleCol: lastValue, masterToggle: ctx.masterToggle });
+  b.text(3, lastValue - 1, "Print", { align: { horizontal: "right" } });
   b.tier1(5, [...groups, { from: notesCol, to: notesCol, label: "Notes" }]);
-  b.tier2(6, { from: firstCol, to: lastCol }, cols.map((c, i) => ({ col: firstCol + i, f: `${S("pnl")}${colLetter(pnlL.byKey[c.key]!)}6`, expect: c.label, role: "text" as const })), "Key lines");
+  b.tier2(6, { from: 3, to: lastValue }, cols.map(({ column: c, col: cc }) => ({ col: cc, f: `${S("pnl")}${colLetter(pnlL.byKey[c.key]!)}6`, expect: headerLabel(c), role: "text" as const })), "Key figures");
   b.cell(6, notesCol, { style: "header", v: null, role: "text" });
   const spans: [number, number][] = groups.map((g) => [g.from, g.to]);
 
   let r = 8;
-  const link = (sheet: "pnl" | "ladder", key: string, c: (typeof cols)[number]) => `${S(sheet)}${colLetter(pnlL.byKey[c.key]!)}${rowOf(sheet, key)}`;
-  const line = (label: string, sheet: "pnl" | "ladder", key: string, value: (p: ModelOutput["periods"][string]) => number, kind: "lineFirst" | "line" | "keyTotal" | "margin", marginFollows = false) => {
-    const style = kind;
-    b.text(r, 2, label, { style: kind === "margin" ? "margin" : kind, align: kind === "margin" ? { horizontal: "left", indent: 1 } : undefined });
-    if (kind === "keyTotal") b.keyTotalBox([r, marginFollows ? r + 1 : r], spans);
-    cols.forEach((c, i) => {
-      const pv = model.periods[c.key]!;
-      const isMargin = kind === "margin";
-      b.formula(r, firstCol + i, link(sheet, key, c), { style, fmt: isMargin ? FMT.pct1 : kind === "line" ? FMT.body : FMT.currency, expect: isMargin ? (pv.pnl.revenue ? value(pv) : "n.m.") : value(pv) / K, label: `${key} ${c.label}` });
-    });
+  const link = (sheet: "pnl" | "ladder", key: string, c: PeriodColumn) => `${S(sheet)}${colLetter(pnlL.byKey[c.key]!)}${rowOf(sheet, key)}`;
+  type Kind = "lineFirst" | "line" | "keyTotal" | "margin" | "ratio";
+  /** One linked row across the key columns; a key total boxes its % Margin row with it. */
+  const line = (label: string, sheet: "pnl" | "ladder", key: string, value: (p: ModelOutput["periods"][string]) => number | string, kind: Kind, withMargin = false) => {
+    b.text(r, 2, label, { style: kind, align: kind === "margin" || kind === "ratio" ? { horizontal: "left", indent: 1 } : undefined });
+    if (kind === "keyTotal") b.keyTotalBox([r, withMargin ? r + 1 : r], spans);
+    const ratio = kind === "margin" || kind === "ratio";
+    for (const { column: c, col: cc } of cols) {
+      const v = value(model.periods[c.key]!);
+      b.formula(r, cc, link(sheet, key, c), { style: kind, fmt: kind === "margin" ? FMT.pct1 : kind === "ratio" ? FMT.pct : kind === "line" ? FMT.body : FMT.currency, expect: typeof v === "number" && !ratio ? v / K : v, label: `${key} ${c.label}` });
+    }
     r++;
   };
+  const margin = (p: ModelOutput["periods"][string], v: number) => (p.pnl.revenue ? v / p.pnl.revenue : "n.m.");
+
   b.section(r++, "Income statement", spans);
   line("Total Revenue", "pnl", "revenue", (p) => p.pnl.revenue, "lineFirst");
-  line("Gross Profit", "pnl", "gross_profit", (p) => p.pnl.grossProfit, "line");
-  line("% Margin", "pnl", "gross_margin", (p) => (p.pnl.revenue ? p.pnl.grossProfit / p.pnl.revenue : 0), "margin");
+  line("% Growth", "pnl", "revenue_growth", (p) => growthOf(model, p), "ratio");
+  line("Gross Profit", "pnl", "gross_profit", (p) => p.pnl.grossProfit, "keyTotal", true);
+  line("% Margin", "pnl", "gross_margin", (p) => margin(p, p.pnl.grossProfit), "margin");
   line("Reported EBITDA", "pnl", "reported_ebitda", (p) => p.pnl.ebitda, "keyTotal", true);
-  line("% Margin", "pnl", "ebitda_margin", (p) => (p.pnl.revenue ? p.pnl.ebitda / p.pnl.revenue : 0), "margin");
+  line("% Margin", "pnl", "ebitda_margin", (p) => margin(p, p.pnl.ebitda), "margin");
   line("Net Income", "pnl", "net_income", (p) => p.pnl.netIncome, "line");
   b.spacerRow(r++);
   b.section(r++, "Adjusted EBITDA ladder (condensed)", spans);
   line("Reported EBITDA", "ladder", "reported_ebitda", (p) => p.ladder.reportedEbitda, "lineFirst");
   line("(+) / (-) Normalization Adjustments", "ladder", "total_normalization", (p) => p.ladder.totalNormalization, "line");
-  line("(+) Owner Compensation", "ladder", "s1", (p) => p.ladder.ownerCompAsPaid, "line");
+  line("(+) Owner Compensation [S1]", "ladder", "s1", (p) => p.ladder.ownerCompAsPaid, "line");
   line("Seller's Discretionary Earnings (SDE)", "ladder", "sde", (p) => p.ladder.sde, "keyTotal", true);
-  line("% Margin", "ladder", "sde_margin", (p) => p.ladder.sdeMargin, "margin");
-  line("(-) Market Replacement Compensation", "ladder", "s2", (p) => p.ladder.marketReplacement, "line");
-  line("(-) Capital Reserve", "ladder", "s3", (p) => p.ladder.capitalReserve, "line");
+  line("% Margin", "ladder", "sde_margin", (p) => margin(p, p.ladder.sde), "margin");
+  line("(-) Market Replacement Compensation [S2]", "ladder", "s2", (p) => p.ladder.marketReplacement, "line");
+  line("(-) Capital Reserve [S3]", "ladder", "s3", (p) => p.ladder.capitalReserve, "line");
   line("Adj. EBITDA", "ladder", "adj_ebitda", (p) => p.ladder.adjEbitda, "keyTotal", true);
-  line("% Margin", "ladder", "adj_margin", (p) => p.ladder.adjMargin, "margin");
+  line("% Margin", "ladder", "adj_margin", (p) => margin(p, p.ladder.adjEbitda), "margin");
   line("(+) / (-) Pro Forma Adjustments", "ladder", "total_pro_forma", (p) => p.ladder.totalProForma, "line");
-  line("PF Adj. EBITDA", "ladder", "pf_adj_ebitda", (p) => p.ladder.pfAdjEbitda, "keyTotal");
+  line("PF Adj. EBITDA", "ladder", "pf_adj_ebitda", (p) => p.ladder.pfAdjEbitda, "keyTotal", true);
+  line("% Margin", "ladder", "pf_margin", (p) => margin(p, p.ladder.pfAdjEbitda), "margin");
   b.spacerRow(r++);
 
-  // KPIs and balance-sheet facts on the latest column.
-  b.section(r++, "Key facts at the as-of date", spans);
-  const fact = (label: string, f: string | undefined, expect: number | string | null | undefined, fmt: string, note?: string) => {
-    b.text(r, 2, label, { style: "line" });
-    if (f && expect !== null && expect !== undefined) b.formula(r, lastCol, f, { style: "line", fmt, expect, label });
-    else b.na(r, lastCol, "n.a.", { style: "line" });
-    if (note) b.note(r, notesCol, note, { align: { wrap: false } });
-    r++;
-  };
+  // Engine KPIs per period, linked to the P&L Summary's KPI block.
+  type KpiLink = { key: string; label: string; value: (p: ModelOutput["periods"][string]) => number | undefined; fmt: string; kind: Kind };
+  const kpiLinks: KpiLink[] = [
+    { key: "kpi_customers", label: `${model.customers?.term ?? "Customer"}s, active at period end (#)`, value: (p) => p.kpis.customers, fmt: FMT.body, kind: "line" },
+    { key: "kpi_employees", label: "Employees, non-owner FTE at period end (#)", value: (p) => p.kpis.employees, fmt: FMT.oneDp, kind: "line" },
+    { key: "kpi_revenue_per_employee", label: "Revenue per employee ($)", value: (p) => p.kpis.revenue_per_employee, fmt: FMT.currency, kind: "line" },
+    { key: "kpi_labor_cost", label: "Labor cost, % of revenue (excludes owner)", value: (p) => p.kpis.labor_cost_pct_revenue, fmt: FMT.pct1, kind: "ratio" },
+    { key: "kpi_recurring", label: "Recurring revenue, % of total", value: (p) => p.kpis.recurring_revenue_pct, fmt: FMT.pct1, kind: "ratio" },
+  ];
+  const kpis = kpiLinks.filter((k) => cols.some(({ column: c }) => k.value(model.periods[c.key]!) !== undefined));
+  if (kpis.length) {
+    b.section(r++, "Key performance indicators", spans);
+    for (const k of kpis) {
+      b.text(r, 2, k.label, { style: "line" });
+      for (const { column: c, col: cc } of cols) {
+        const v = k.value(model.periods[c.key]!);
+        const partYearRatio = k.key === "kpi_revenue_per_employee" && c.months !== 12;
+        if (partYearRatio) b.na(r, cc, "n.a.", { style: "line" });
+        else b.formula(r, cc, `${S("pnl")}${colLetter(pnlL.byKey[c.key]!)}${rowOf("pnl", k.key)}`, { style: k.kind, fmt: k.fmt, expect: v ?? "n.a.", label: `${k.key} ${c.label}` });
+      }
+      r++;
+    }
+    b.spacerRow(r++);
+  }
+
+  // Balance sheet and deal facts at the as-of date, in the latest window's column.
   const n = model.namedOutputs;
-  const mainStreet = model.mode.mode === "mainStreet";
-  fact("Mode", `IF(${A("mainStreetMode")}=1,"Main Street","Lower middle market")`, mainStreet ? "Main Street" : "Lower middle market", FMT.body, `Rule: PF Adj. EBITDA before the reserve $${Math.round(model.mode.measure).toLocaleString("en-US")} vs $1,000,000`);
-  if (model.customers) fact("Customers, active (#)", `${S("customers")}${colLetter(3)}${rowOf("customers", "latestCount")}`, n.Customers_Latest, FMT.body);
-  if (model.customers) fact("Top 10 customers, % of revenue", `${S("concentration")}${colLetter(4)}${rowOf("concentration", "top10")}`, n.Top10Share_LTM, FMT.pct1);
-  if (model.headcount) fact("Employees, non-owner (#)", `${S("headcount")}${colLetter(3)}${rowOf("headcount", "total")}`, n.Headcount_Latest, FMT.body);
-  if (model.nwc) fact("Adjusted NWC, latest ($000s)", `${S("nwc")}${colLetter(rowOf("nwc", "latestCol") as unknown as number)}${rowOf("nwc", "adjustedNwc")}`, (n.NWC_Latest ?? 0) / K, FMT.currency, `Peg basis: ${model.nwc.pegBasis}`);
-  if (model.debtLike) fact("Funded debt, latest ($000s)", `${S("debtLike")}${colLetter(3)}${rowOf("debtLike", "fundedDebt")}`, model.debtLike.fundedDebt / K, FMT.currency);
+  const facts: { label: string; f: string; expect: number | string; fmt: string; note?: string }[] = [];
+  if (model.customers) facts.push({ label: `Top 10 ${model.customers.term.toLowerCase()}s, % of revenue`, f: `${S("concentration")}$D$${rowOf("concentration", "top10")}`, expect: n.Top10Share_LTM!, fmt: FMT.pct1 });
+  if (model.nwc) facts.push({ label: "Adjusted NWC, latest", f: `${S("nwc")}${colLetter(nwcLayout(model).latestCol)}${rowOf("nwc", "adjustedNwc")}`, expect: (n.NWC_Latest ?? 0) / K, fmt: FMT.currency, note: model.nwc.pegBasis === "n.a." ? "No peg: year-end balance sheets only" : `Peg basis: ${model.nwc.pegBasis}` });
+  if (model.debtLike) facts.push({ label: "Funded debt, latest", f: `${S("debtLike")}$C$${rowOf("debtLike", "fundedDebt")}`, expect: model.debtLike.fundedDebt / K, fmt: FMT.currency, note: model.dealForm === "asset_purchase" ? "Retained by the Seller; paid from proceeds at close" : "Repaid at or before closing" });
+  facts.push({ label: "Mode", f: `IF(${A("mainStreetMode")}=1,"Main Street","Lower middle market")`, expect: model.mode.mode === "mainStreet" ? "Main Street" : "Lower middle market", fmt: FMT.body, note: `PF Adj. EBITDA before the reserve $${Math.round(model.mode.measure / K).toLocaleString("en-US")}K vs. the $1.0M threshold` });
+  facts.push({ label: "Deal form", f: A("dealForm"), expect: model.dealForm === "asset_purchase" ? "Asset purchase" : "Equity purchase", fmt: FMT.body });
+  b.section(r++, `At the as-of date (${ctx.asOfLabel})`, spans);
+  for (const fct of facts) {
+    b.text(r, 2, fct.label, { style: "line" });
+    b.formula(r, latest.col, fct.f, { style: "line", fmt: fct.fmt, expect: fct.expect, label: fct.label, align: { horizontal: "right" } });
+    if (fct.note) b.note(r, notesCol, fct.note);
+    r++;
+  }
+
+  // Operating facts the seller states, each with its own date; never a period column (guide 4.6).
+  if (ctx.kpis.length) {
+    b.spacerRow(r++);
+    b.section(r++, "Operating facts per management (1)", spans);
+    for (const k of ctx.kpis) {
+      const [key, value] = Object.entries(k.values).at(-1)!;
+      const ref = parsePeriodKey(key);
+      b.text(r, 2, k.label, { style: "line" });
+      b.num(r, latest.col, value, { fmt: KPI_FMT[k.unit], align: { horizontal: "right" } });
+      b.note(r, notesCol, `${ref.kind === "point" ? `As of ${periodLabel(ref)}` : periodLabel(ref)}${k.definition ? `. ${k.definition}` : ""}`);
+      r++;
+    }
+  }
+
+  // Valuation range (internal).
   b.spacerRow(r++);
-  b.section(r++, "Indicative valuation range (internal; never in the CIM)", spans);
   const vd = model.valuationDetail!;
   const cases = ["low", "mid", "high"] as const;
-  b.text(r, 2, "Case", { style: "line" });
-  cases.forEach((c, i) => b.text(r, firstCol + i, c === "low" ? "Low" : c === "mid" ? "Mid" : "High", { font: { bold: true }, align: { horizontal: "right" } }));
+  const caseCols = [3, 4, 5];
+  b.section(r++, "Indicative valuation range (internal; never in the CIM)", spans);
+  b.cell(r, 2, { style: "header", v: model.mode.mode === "mainStreet" ? "SDE × multiple" : "Adj. EBITDA × multiple", role: "text", align: { horizontal: "left" } });
+  cases.forEach((c, i) => b.cell(r, caseCols[i]!, { style: "header", v: c === "low" ? "Low" : c === "mid" ? "Mid" : "High", role: "text" }));
   r++;
-  b.text(r, 2, `Total investment (${mainStreet ? "SDE" : "Adj. EBITDA"} × multiple)`, { style: "lineFirst" });
-  cases.forEach((c, i) => b.formula(r, firstCol + i, `${S("valuation")}${colLetter(3 + i)}${rowOf("valuation", "totalInvestment")}`, { style: "lineFirst", fmt: FMT.currency, expect: vd.cases[c].totalInvestment / K, label: `TI ${c}` }));
+  const vrow = (label: string, key: string, value: (c: (typeof cases)[number]) => number, fmt: string, style: Kind) => {
+    b.text(r, 2, label, { style });
+    cases.forEach((c, i) => b.formula(r, caseCols[i]!, `${S("valuation")}${colLetter(3 + i)}${rowOf("valuation", key)}`, { style, fmt, expect: value(c), label: `${key} ${c}` }));
+    r++;
+  };
+  vrow("Total Investment", "totalInvestment", (c) => vd.cases[c].totalInvestment / K, FMT.currency, "lineFirst");
+  vrow("Implied SDE Multiple (x)", "impliedSde", (c) => vd.cases[c].impliedSdeMultiple, FMT.multiple, "line");
+  vrow("Implied Adj. EBITDA Multiple (x)", "impliedAdj", (c) => vd.cases[c].impliedAdjEbitdaMultiple, FMT.multiple, "line");
+  vrow("DSCR (x)", "dscr", (c) => vd.cases[c].financing.dscr, FMT.multiple2, "line");
   r++;
-  b.text(r, 2, "Implied multiple of SDE (x)", { style: "line" });
-  cases.forEach((c, i) => b.formula(r, firstCol + i, `${S("valuation")}${colLetter(3 + i)}${rowOf("valuation", "impliedSde")}`, { style: "line", fmt: FMT.multiple, expect: vd.cases[c].impliedSdeMultiple, label: `x SDE ${c}` }));
-  r++;
-  b.text(r, 2, "Implied multiple of Adj. EBITDA (x)", { style: "line" });
-  cases.forEach((c, i) => b.formula(r, firstCol + i, `${S("valuation")}${colLetter(3 + i)}${rowOf("valuation", "impliedAdj")}`, { style: "line", fmt: FMT.multiple, expect: vd.cases[c].impliedAdjEbitdaMultiple, label: `x Adj ${c}` }));
-  r++;
-  r++;
-  const notes = [
-    model.granularity === "annual" ? `Full fiscal years only; source: ${model.databook?.pnl[0] ? SOURCE_LABELS[model.databook.pnl[0].source] : "annual P&L"}.` : ltmEqualsFiscalYear(model.assumptions!.asOfMonth, model.fiscalYearEndMonth) ? `LTM ${model.columns.find((c) => c.ref.kind === "ltm" && !c.priorYear)?.label.replace("LTM ", "")} equals FY${model.columns.filter((c) => c.ref.kind === "fiscal_year" && !c.projected).at(-1)?.fiscalYear}; YTD equals the full year.` : "",
-    `Reported EBITDA is net income plus interest, taxes and D&A, so it carries other income; a normalization row removes what is non-operating.`,
-  ].filter(Boolean);
-  b.note(r, 2, `Note: ${notes.join(" ")}`);
-  b.print({ area: `B2:${addr(r, notesCol)}`, landscape: false, fitToWidth: 1, fitToHeight: 1, titlesRow: "5:6" });
+  const ltmNote = model.granularity === "annual"
+    ? `Full fiscal years only; source: ${model.databook?.pnl[0] ? SOURCE_LABELS[model.databook.pnl[0].source] : "annual P&L"}.`
+    : ltmEqualsFiscalYear(model.assumptions!.asOfMonth, model.fiscalYearEndMonth)
+      ? `LTM ${latest.column.label.replace("LTM ", "")} equals ${cols.filter(({ column: c }) => c.ref.kind === "fiscal_year").at(-1)!.column.label}.`
+      : "";
+  b.note(r, 2, `Note: ${ltmNote ? `${ltmNote} ` : ""}Reported EBITDA is net income plus interest, taxes and D&A, so it carries other income; a normalization row removes what is non-operating.${ctx.kpis.length ? " (1) Per management; not independently verified." : ""}`);
+  b.print({ area: `B2:${addr(r, notesCol)}`, landscape: false, fitToWidth: 1, fitToHeight: 0, titlesRow: "5:6" });
   b.furniture(ctx.codeName, ctx.asOfLabel);
   return b;
 }
 
-export { path };
+/** Year-over-year revenue growth of a period against its prior-year twin, "n.a." without one. */
+function growthOf(model: ModelOutput, p: ModelOutput["periods"][string]): number | string {
+  const c = p.column;
+  const prior =
+    c.ref.kind === "fiscal_year"
+      ? model.columns.find((x) => x.ref.kind === "fiscal_year" && !x.projected && x.fiscalYear === c.fiscalYear! - 1)
+      : c.ref.kind === "ltm" || c.ref.kind === "ytd"
+        ? model.columns.find((x) => x.ref.kind === c.ref.kind && x.priorYear)
+        : undefined;
+  const prev = prior && !c.priorYear ? model.periods[prior.key]!.pnl.revenue : 0;
+  return prev ? p.pnl.revenue / prev - 1 : "n.a.";
+}

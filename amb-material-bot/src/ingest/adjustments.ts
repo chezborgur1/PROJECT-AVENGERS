@@ -17,8 +17,10 @@ import {
   decideMode,
   ltmWindow,
   monthKey,
+  monthLabel,
   numberAdjustments,
   periodLabel,
+  pfColumnAmount,
   sumMonths,
   type Addback,
   type Adjustment,
@@ -37,7 +39,7 @@ import {
   type SuggestedAddback,
 } from "../domain/financials.ts";
 import { normaliseAccount } from "../domain/chartOfAccounts.ts";
-import { parseAmount, readRecords, sentenceCase } from "../util/tables.ts";
+import { clientLabel, parseAmount, readRecords } from "../util/tables.ts";
 
 export const DEFAULT_REPLACEMENT_SALARY = 85_000;
 export const DEFAULT_BURDEN_PCT = 0.15;
@@ -54,6 +56,8 @@ export interface ScheduleRow {
   byFiscalYear: Record<number, number>;
   /** P&L account the amount comes out of, so months can be tied to it. */
   account?: string;
+  /** The advisor's amount for the partial current fiscal year (YTD), when the file gives one. */
+  stubAmount?: number;
   pnlLine?: IsCategory;
   pfMethod?: PfMethod;
   origin: Adjustment["origin"];
@@ -192,14 +196,28 @@ export async function loadAdjustmentsCsv(file: string): Promise<{ rows: Schedule
   return { rows, warnings };
 }
 
-/** Restrict file rows to the model's fiscal years: missing years are zero, amounts for other years are reported and dropped. */
-export function fitRowsToYears(rows: ScheduleRow[], years: number[]): { rows: ScheduleRow[]; warnings: string[] } {
+/**
+ * Restrict file rows to the model's fiscal years: missing years are zero.
+ * The partial current year's column (`stubFy`, when the grid ends mid-year)
+ * is the row's YTD amount, spread over the stub months; for a pro forma row,
+ * an annual run-rate, it stands in for a blank latest year. Amounts for any
+ * other year are reported and dropped.
+ */
+export function fitRowsToYears(rows: ScheduleRow[], years: number[], stubFy?: number): { rows: ScheduleRow[]; warnings: string[] } {
   const warnings: string[] = [];
+  const latest = years[years.length - 1];
   const fitted = rows.map((r) => {
     for (const [y, amount] of Object.entries(r.byFiscalYear)) {
-      if (!years.includes(Number(y)) && amount) warnings.push(`${r.sourceFile} ("${r.description}"): FY${y} is not in the model; that amount is ignored.`);
+      if (!years.includes(Number(y)) && Number(y) !== stubFy && amount) warnings.push(`${r.sourceFile} ("${r.description}"): FY${y} is not in the model; that amount is ignored.`);
     }
-    return { ...r, byFiscalYear: Object.fromEntries(years.map((y) => [y, r.byFiscalYear[y] ?? 0])) };
+    const byFiscalYear = Object.fromEntries(years.map((y) => [y, r.byFiscalYear[y] ?? 0]));
+    const stub = stubFy !== undefined ? r.byFiscalYear[stubFy] : undefined;
+    if (stub === undefined) return { ...r, byFiscalYear };
+    if (r.tier === "pro_forma") {
+      if (latest !== undefined && !byFiscalYear[latest]) byFiscalYear[latest] = stub;
+      return { ...r, byFiscalYear };
+    }
+    return { ...r, byFiscalYear, stubAmount: stub };
   });
   return { rows: fitted, warnings };
 }
@@ -209,10 +227,10 @@ export function fitRowsToYears(rows: ScheduleRow[], years: number[]): { rows: Sc
  * list was applied as-is before the schedule existed; the status column of
  * adjustments.csv is the way to hold a row back).
  */
-export function legacyAddbacksToRows(addbacks: Addback[], years: number[]): ScheduleRow[] {
+export function legacyAddbacksToRows(addbacks: Addback[], years: number[], stubFy?: number): ScheduleRow[] {
   const byDescription = new Map<string, ScheduleRow>();
   for (const a of addbacks) {
-    if (!years.includes(a.year)) continue;
+    if (!years.includes(a.year) && a.year !== stubFy) continue;
     const key = a.description.trim().toLowerCase();
     let row = byDescription.get(key);
     if (!row) {
@@ -230,7 +248,9 @@ export function legacyAddbacksToRows(addbacks: Addback[], years: number[]): Sche
       };
       byDescription.set(key, row);
     }
-    row.byFiscalYear[a.year] = (row.byFiscalYear[a.year] ?? 0) + a.amount;
+    // The partial current year's add-back is a YTD amount (see fitRowsToYears).
+    if (a.year === stubFy) row.stubAmount = (row.stubAmount ?? 0) + a.amount;
+    else row.byFiscalYear[a.year] = (row.byFiscalYear[a.year] ?? 0) + a.amount;
   }
   return [...byDescription.values()];
 }
@@ -270,23 +290,15 @@ function zeros(years: number[]): Record<number, number> {
   return Object.fromEntries(years.map((y) => [y, 0]));
 }
 
-/** Split an amount over months in proportion to weights, to the cent, the residual on the largest weight. */
+/**
+ * Split an amount over months in proportion to weights, unrounded: month =
+ * total × weight ÷ Σ weights, the formula the Adjustments tab writes, so the
+ * workbook reproduces every month exactly. Zero total weight spreads evenly.
+ */
 export function splitByWeights(total: number, weights: Record<MonthKey, number>): Record<MonthKey, number> {
   const keys = Object.keys(weights).sort();
-  const out: Record<MonthKey, number> = {};
-  const wsum = keys.reduce((s, k) => s + Math.abs(weights[k]!), 0);
-  if (!keys.length) return out;
-  let allocated = 0;
-  let largest = keys[0]!;
-  for (const k of keys) {
-    const w = Math.abs(weights[k]!);
-    const v = wsum ? Math.round((total * w) / wsum * 100) / 100 : Math.round((total / keys.length) * 100) / 100;
-    out[k] = v;
-    allocated += v;
-    if (w > Math.abs(weights[largest]!)) largest = k;
-  }
-  out[largest] = Math.round((out[largest]! + (total - allocated)) * 100) / 100;
-  return out;
+  const wsum = keys.reduce((s, k) => s + weights[k]!, 0);
+  return Object.fromEntries(keys.map((k) => [k, wsum ? (weights[k]! * total) / wsum : total / keys.length]));
 }
 
 /** Months of one fiscal year in the grid. */
@@ -300,38 +312,57 @@ function categoryMonths(monthly: MonthlyPnl, category: IsCategory, sign = 1): Re
   return out;
 }
 
-function accountMonths(monthly: MonthlyPnl, account: string, sign = 1): Record<MonthKey, number> | undefined {
+/** The grid lines an adjustment names (exact account, or its leaf after " : "). */
+function matchedLines(monthly: MonthlyPnl, account: string): MonthlyPnl["lines"] {
   const key = normaliseAccount(account);
-  const lines = monthly.lines.filter((l) => normaliseAccount(l.account) === key || normaliseAccount(l.account.split(" : ").pop()!) === key);
+  return monthly.lines.filter((l) => normaliseAccount(l.account) === key || normaliseAccount(l.account.split(" : ").pop()!) === key);
+}
+
+function accountMonths(monthly: MonthlyPnl, account: string, sign = 1): Record<MonthKey, number> | undefined {
+  const lines = matchedLines(monthly, account);
   if (!lines.length) return undefined;
   const out: Record<MonthKey, number> = {};
   for (const m of monthly.months) out[m.key] = sign * lines.reduce((s, l) => s + (l.amounts[m.key] ?? 0), 0);
   return out;
 }
 
-/** Tie a row's fiscal-year amounts to the months of the account it comes out of, year by year. */
-function monthsForRow(monthly: MonthlyPnl, years: number[], byFiscalYear: Record<number, number>, weights: Record<MonthKey, number>): Record<MonthKey, number> {
+/** Categories whose amount recurs month after month, so a partial year may be run-rated from the latest full year. */
+const RECURRING: AdjustmentCategory[] = ["personal_discretionary", "related_party_rent", "owner_compensation", "replacement_cost", "capital_reserve"];
+
+/** How a row fills the months of the partial current year (the YTD stub) that no full fiscal year covers. */
+export type StubRule = { kind: "amount"; amount: number } | { kind: "runRate" } | { kind: "zero" };
+
+export function stubRuleFor(r: { category: AdjustmentCategory; stubAmount?: number }): StubRule {
+  if (r.stubAmount !== undefined) return { kind: "amount", amount: r.stubAmount };
+  return RECURRING.includes(r.category) ? { kind: "runRate" } : { kind: "zero" };
+}
+
+/**
+ * A row's months: each full fiscal year split by the weights (the account's
+ * own months, or flat), and the stub months by the stub rule: the advisor's
+ * YTD amount split the same way, a run-rate at the latest full year's
+ * proportion, or zero for a one-time item.
+ */
+function monthsForRow(monthly: MonthlyPnl, years: number[], byFiscalYear: Record<number, number>, weights: Record<MonthKey, number>, stub: StubRule): Record<MonthKey, number> {
   const out: Record<MonthKey, number> = {};
+  const pick = (months: MonthKey[]) => Object.fromEntries(months.map((m) => [m, weights[m] ?? 0]));
   for (const fy of years) {
     const months = fiscalYearMonths(monthly, fy);
-    if (months.length < 12) continue;
-    const w: Record<MonthKey, number> = {};
-    for (const m of months) w[m] = weights[m] ?? 0;
-    Object.assign(out, splitByWeights(byFiscalYear[fy] ?? 0, w));
+    if (months.length >= 12) Object.assign(out, splitByWeights(byFiscalYear[fy] ?? 0, pick(months)));
   }
-  // Months outside the full years (a YTD stub) keep the account's own proportion of the latest year's amount.
+  const stubMonths = monthly.months.map((m) => m.key).filter((m) => !(m in out));
+  if (!stubMonths.length) return out;
+  if (stub.kind === "amount") return { ...out, ...splitByWeights(stub.amount, pick(stubMonths)) };
   const latest = years[years.length - 1];
-  if (latest !== undefined) {
-    const ref = fiscalYearMonths(monthly, latest);
-    const refWeight = ref.reduce((s, m) => s + Math.abs(weights[m] ?? 0), 0);
-    const refAmount = byFiscalYear[latest] ?? 0;
-    for (const m of monthly.months) {
-      if (m.key in out) continue;
-      out[m.key] = refWeight ? Math.round(((refAmount * Math.abs(weights[m.key] ?? 0)) / refWeight) * 100) / 100 : 0;
-    }
-  }
+  const ref = latest !== undefined ? fiscalYearMonths(monthly, latest) : [];
+  const refWeight = ref.reduce((s, m) => s + (weights[m] ?? 0), 0);
+  const refAmount = latest !== undefined ? (byFiscalYear[latest] ?? 0) : 0;
+  for (const m of stubMonths) out[m] = stub.kind === "zero" ? 0 : refWeight ? (refAmount * (weights[m] ?? 0)) / refWeight : refAmount / 12;
   return out;
 }
+
+/** The month fields a schedule row carries (`Adjustment.byMonth`, `accounts`, `stub`). */
+type RowMonths = Pick<Adjustment, "byMonth" | "accounts" | "stub">;
 
 function flatMonths(monthly: MonthlyPnl, perYear: number): Record<MonthKey, number> {
   const out: Record<MonthKey, number> = {};
@@ -405,7 +436,7 @@ export function buildSchedule(ctx: ScheduleContext): ScheduleResult {
     else if (r.tier === "memo") memoRows.push(r);
     else nRows.push(r);
   }
-  const toAdjustment = (r: ScheduleRow, defaults: { basis: string; sourceDocument: string }, byMonth?: Record<MonthKey, number>): Omit<Adjustment, "ref"> => ({
+  const toAdjustment = (r: ScheduleRow, defaults: { basis: string; sourceDocument: string }, months?: RowMonths): Omit<Adjustment, "ref"> => ({
     tier: r.tier,
     description: r.description,
     category: r.category,
@@ -414,17 +445,35 @@ export function buildSchedule(ctx: ScheduleContext): ScheduleResult {
     evidence: r.evidence,
     status: r.status,
     byFiscalYear: r.byFiscalYear,
-    byMonth,
+    ...(months ?? {}),
     pnlLine: r.pnlLine,
     pfMethod: r.pfMethod,
     origin: r.origin,
     sourceFile: r.sourceFile,
   });
-  const fileRowMonths = (r: ScheduleRow): Record<MonthKey, number> | undefined => {
+  // Months of the partial current year no full fiscal year covers (the YTD stub), if any.
+  const stubMonths = monthly ? monthly.months.filter((m) => !years.includes(m.fiscalYear)) : [];
+  const stubLabel = stubMonths.length ? `${monthLabel(stubMonths[0]!.key)}–${monthLabel(stubMonths[stubMonths.length - 1]!.key)}` : "";
+  const stubFy = stubMonths[0]?.fiscalYear;
+  /**
+   * Every file row gets months when there is a grid, with or without an
+   * account, so YTD and LTM never prorate a fiscal year the window does not
+   * cover. The stub months follow the row's stub rule; each extrapolated or
+   * zeroed stub amount is listed for the advisor.
+   */
+  const fileRowMonths = (r: ScheduleRow): RowMonths | undefined => {
     if (!monthly) return undefined;
-    const weights = r.account ? accountMonths(monthly, r.account) : undefined;
-    if (r.account && !weights) warnings.push(`Adjustment "${r.description}" names account "${r.account}", which is not on the monthly P&L; YTD and LTM amounts are prorated instead.`);
-    return weights ? monthsForRow(monthly, years, r.byFiscalYear, weights) : undefined;
+    const lines = r.account ? matchedLines(monthly, r.account) : [];
+    if (r.account && !lines.length) warnings.push(`Adjustment "${r.description}" names account "${r.account}", which is not on the monthly P&L; its months are spread evenly.`);
+    const weights = lines.length ? accountMonths(monthly, r.account!)! : flatMonths(monthly, 1);
+    const rule = stubRuleFor(r);
+    const byMonth = monthsForRow(monthly, years, r.byFiscalYear, weights, rule);
+    if (stubMonths.length) {
+      const stubTotal = stubMonths.reduce((s, m) => s + (byMonth[m.key] ?? 0), 0);
+      if (rule.kind === "runRate" && stubTotal) warnings.push(`Adjustment "${r.description}": no FY${stubFy} (YTD) amount in ${r.sourceFile}, so ${stubLabel} carry a run-rate of FY${years[years.length - 1]} (${money(stubTotal)}). Enter the YTD amount under FY${stubFy} to replace it.`);
+      if (rule.kind === "zero" && Object.values(r.byFiscalYear).some(Boolean)) warnings.push(`Adjustment "${r.description}" (${ADJUSTMENT_CATEGORY_LABELS[r.category].toLowerCase()}) is zero in ${stubLabel}; enter a YTD amount under FY${stubFy} in ${r.sourceFile} if it recurred.`);
+    }
+    return { byMonth, ...(lines.length ? { accounts: [...new Set(lines.map((l) => l.account))] } : {}), ...(stubMonths.length ? { stub: rule.kind === "amount" ? "amount" : rule.kind === "runRate" ? "run_rate" : "zero" } : {}) };
   };
   for (const r of nRows) {
     const y = firstNonZeroYear(r.byFiscalYear, years);
@@ -454,9 +503,9 @@ export function buildSchedule(ctx: ScheduleContext): ScheduleResult {
       const leaf = account.split(" : ").pop()!;
       rows.push({
         tier: "normalization",
-        description: `${sentenceCase(leaf)} (non-operating)`,
+        description: `${clientLabel(leaf)} (non-operating)`,
         category: "non_operating",
-        basis: `${sign < 0 ? "Removes" : "Adds back"} ${leaf.toLowerCase()}, ${money(byFiscalYear[latest] ?? 0)} in FY${latest}, which is non-operating ${label}, per the P&L ${account} account.`,
+        basis: `${sign < 0 ? "Removes" : "Adds back"} ${clientLabel(leaf).toLowerCase()}, ${money(byFiscalYear[latest] ?? 0)} in FY${latest}, which is non-operating ${label}, per the P&L ${account} account.`,
         sourceDocument: `P&L, account ${account}`,
         evidence: "documented",
         status: "accepted",
@@ -506,78 +555,89 @@ export function buildSchedule(ctx: ScheduleContext): ScheduleResult {
     evidence: s1Override?.evidence ?? "documented",
     status: s1Override?.status ?? "accepted",
     byFiscalYear: s1Amounts,
-    byMonth: monthly ? (s1TiesToPnl ? categoryMonths(monthly, "owner_comp") : monthsForRow(monthly, years, s1Amounts, categoryMonths(monthly, "owner_comp"))) : undefined,
+    byMonth: monthly ? (s1TiesToPnl ? categoryMonths(monthly, "owner_comp") : monthsForRow(monthly, years, s1Amounts, categoryMonths(monthly, "owner_comp"), stubRuleFor(s1Override!))) : undefined,
     origin: "owner_comp",
     sourceFile: s1Override?.sourceFile ?? pnlFile,
   });
 
-  const replacementCost = ctx.replacementSalary.amount * (1 + ctx.burden.pct);
-  const s2Amounts = s2Override?.byFiscalYear ?? Object.fromEntries(years.map((y) => [y, -replacementCost]));
-  if (s2Override) warnings.push(`[S2] market replacement compensation comes from ${s2Override.sourceFile} rather than the request row salary × (1 + burden); Assumptions must carry the same figure.`);
+  // [S2] is one Assumptions input (salary × (1 + burden)) applied to every year, so an advisor's [S2] row sets that input
+  // from its latest year and the schedule carries the same flat amount the engine recomputes.
+  const s2Latest = s2Override ? Math.abs(s2Override.byFiscalYear[firstNonZeroYear(s2Override.byFiscalYear, years)] ?? 0) : undefined;
+  const replacementSalary = s2Latest !== undefined ? { amount: s2Latest / (1 + ctx.burden.pct), source: `${s2Override!.sourceFile} [S2] row (${money(s2Latest)} a year including the ${Math.round(ctx.burden.pct * 100)}% burden)` } : ctx.replacementSalary;
+  const replacementCost = replacementSalary.amount * (1 + ctx.burden.pct);
+  if (s2Override && years.some((y) => Math.abs(Math.abs(s2Override!.byFiscalYear[y] ?? 0) - s2Latest!) >= 1)) {
+    warnings.push(`[S2] in ${s2Override.sourceFile} varies by year; the model applies ${money(replacementCost)} (its latest year) to every year, because the replacement salary is one Assumptions input.`);
+  }
   rows.push({
     tier: "owner_compensation",
     description: "Market replacement compensation",
     category: "replacement_cost",
-    basis: s2Override?.basis ?? `Deducts a general manager at the $${ctx.replacementSalary.amount.toLocaleString("en-US")} market salary, plus payroll taxes and benefits of ${Math.round(ctx.burden.pct * 100)}% (AMB default), $${Math.round(replacementCost).toLocaleString("en-US")} a year.`,
-    sourceDocument: s2Override?.sourceDocument ?? `${ctx.replacementSalary.source}; ${ctx.burden.source}`,
+    basis: s2Override?.basis ?? `Deducts a general manager at the $${Math.round(replacementSalary.amount).toLocaleString("en-US")} market salary, plus payroll taxes and benefits at ${Math.round(ctx.burden.pct * 100)}% of salary, $${Math.round(replacementCost).toLocaleString("en-US")} a year.`,
+    sourceDocument: s2Override?.sourceDocument ?? `${replacementSalary.source}; ${ctx.burden.source}`,
     evidence: s2Override?.evidence ?? "management_representation",
     status: s2Override?.status ?? "accepted",
-    byFiscalYear: s2Amounts,
-    byMonth: monthly ? (s2Override ? monthsForRow(monthly, years, s2Amounts, flatMonths(monthly, 1)) : flatMonths(monthly, -replacementCost)) : undefined,
+    byFiscalYear: Object.fromEntries(years.map((y) => [y, -replacementCost])),
+    byMonth: monthly ? flatMonths(monthly, -replacementCost) : undefined,
     origin: "replacement_salary",
     sourceFile: s2Override?.sourceFile,
   });
 
-  // Pro forma rows.
+  // Pro forma rows: annual run-rate amounts, applied in full to the PF column (never spread over months).
   for (const r of pfRows) {
-    rows.push(toAdjustment(r, { basis: `${r.pfMethod ?? "Run-rate"}: ${r.description}.`, sourceDocument: `Adjustments schedule (${r.sourceFile})` }, fileRowMonths(r)));
+    rows.push(toAdjustment(r, { basis: `${r.pfMethod ?? "Run-rate"}: ${r.description}.`, sourceDocument: `Adjustments schedule (${r.sourceFile})` }));
   }
 
-  // Main Street mode: PF Adj. EBITDA before the capital reserve, on the latest full window (guide Q7).
+  // Main Street mode: PF Adj. EBITDA before the capital reserve (guide Q7), by the engine's own PF-column rule
+  // (pfColumnAmount), so the mode, run-summary and the headline read one number.
   const windowMonths = monthly ? ltmWindow(monthly, monthly.months[monthly.months.length - 1]!.key) : undefined;
   const windowPnl = windowMonths && monthly ? sumMonths(monthly, windowMonths) : pnl[latest]!;
   const reported = windowPnl.revenue - windowPnl.cogs - windowPnl.payroll - windowPnl.owner_comp - windowPnl.rent - windowPnl.marketing - windowPnl.other_opex + windowPnl.other_income - windowPnl.other_expense;
-  const inWindow = (a: Omit<Adjustment, "ref">): number => {
-    if (!windowMonths) return a.byFiscalYear[latest] ?? 0;
-    if (a.byMonth) return windowMonths.reduce((s, m) => s + (a.byMonth![m] ?? 0), 0);
-    // Rows without months: prorate by fiscal year, the same rule the engine applies.
-    let total = 0;
-    for (const m of windowMonths) {
-      const fy = monthly!.months.find((p) => p.key === m)!.fiscalYear;
-      total += (a.byFiscalYear[fy] ?? 0) / 12;
-    }
-    return total;
-  };
-  const acceptedIn = (tier: AdjustmentTier) => rows.filter((a) => a.tier === tier && a.status === "accepted").reduce((s, a) => s + inWindow(a), 0);
-  const measure = reported + acceptedIn("normalization") + acceptedIn("owner_compensation") + acceptedIn("pro_forma");
+  const firstMonth = monthly?.months[0];
+  const fye = firstMonth ? (firstMonth.month - firstMonth.fiscalMonth + 12) % 12 || 12 : 12;
+  const measured = rows.filter((a) => a.status === "accepted" && a.tier !== "definitional" && a.tier !== "memo");
+  const measure = reported + measured.reduce((s, a) => s + (pfColumnAmount(a, windowMonths, latest, fye) ?? 0), 0);
+  if (!windowMonths && measured.some((a) => a.tier === "pro_forma" && a.byFiscalYear[latest])) {
+    warnings.push("Accepted pro forma rows are not applied in annual-only mode (there is no PF column; the Low / Mid / High scenarios restate the lines instead), so they do not count toward the Main Street test.");
+  }
   const measureLabel = windowMonths ? periodLabel({ kind: "pf", end: windowMonths[windowMonths.length - 1]! }) : `FY${latest}`;
   const mode = decideMode(measure, measureLabel);
 
   // Capital reserve: Form 4562 equipment when a return gave it, else the three-year average of D&A as a proxy.
   const equipmentYears = years.filter((y) => ctx.equipmentPlacedInService?.[y] !== undefined);
   const daYears = years.filter((y) => (pnl[y]?.depreciation_amortization ?? 0) > 0);
+  const daSpan = daYears.length ? `FY${daYears[0]}–FY${daYears[daYears.length - 1]}` : "";
   const capitalReserve: RecastInputs["capitalReserve"] = s3Override
-    ? { amount: Math.abs(s3Override.byFiscalYear[latest] ?? 0), basis: "advisor", source: `${s3Override.sourceFile}: ${s3Override.sourceDocument ?? s3Override.description}` }
+    ? { amount: Math.abs(s3Override.byFiscalYear[firstNonZeroYear(s3Override.byFiscalYear, years)] ?? 0), basis: "advisor", source: `${s3Override.sourceFile}: ${s3Override.sourceDocument ?? s3Override.description}` }
     : equipmentYears.length
       ? { amount: equipmentYears.reduce((s, y) => s + ctx.equipmentPlacedInService![y]!, 0) / equipmentYears.length, basis: "form_4562", source: `Form 4562, FY${equipmentYears[0]}–FY${equipmentYears[equipmentYears.length - 1]}` }
-      : { amount: daYears.length ? daYears.reduce((s, y) => s + pnl[y]!.depreciation_amortization, 0) / daYears.length : 0, basis: "da_proxy", source: `${daYears.length ? `${daYears.length}-year` : "No"} average of depreciation expense${daYears.length ? ` FY${daYears[0]}–FY${daYears[daYears.length - 1]}` : ""}; proxy because no Form 4562 is in the sources` };
-  if (mode.mode === "mainStreet") {
-    if (capitalReserve.basis === "da_proxy") warnings.push(`[S3] capital reserve is a proxy: ${capitalReserve.source}. Request Form 4562 to replace it.`);
-    const s3Amounts = s3Override?.byFiscalYear ?? Object.fromEntries(years.map((y) => [y, -capitalReserve.amount]));
-    rows.push({
-      tier: "owner_compensation",
-      description: "Capital reserve (maintenance capex)",
-      category: "capital_reserve",
-      basis: s3Override?.basis ?? `Deducts a reserve for equipment replacement of $${Math.round(capitalReserve.amount).toLocaleString("en-US")} a year, ${capitalReserve.basis === "form_4562" ? "the three-year average equipment cost placed in service per Form 4562" : "the three-year average of depreciation expense used as a proxy because no Form 4562 is in the sources"}.`,
-      sourceDocument: s3Override?.sourceDocument ?? (capitalReserve.basis === "form_4562" ? capitalReserve.source : `P&L, account ${accountName("depreciation_amortization")} FY${years[0]}–FY${latest} (proxy; Form 4562 requested)`),
-      evidence: s3Override?.evidence ?? "documented",
-      status: s3Override?.status ?? "accepted",
-      byFiscalYear: s3Amounts,
-      byMonth: monthly ? (s3Override ? monthsForRow(monthly, years, s3Amounts, flatMonths(monthly, 1)) : flatMonths(monthly, -capitalReserve.amount)) : undefined,
-      origin: "capital_reserve",
-      sourceFile: s3Override?.sourceFile,
-    });
+      : { amount: daYears.length ? daYears.reduce((s, y) => s + pnl[y]!.depreciation_amortization, 0) / daYears.length : 0, basis: "da_proxy", source: daYears.length ? `${daYears.length === 3 ? "Three" : daYears.length === 2 ? "Two" : "One"}-year average of depreciation expense, ${daSpan}` : "No depreciation expense in the sources" };
+  // [S3] is always on the schedule so the ladder and the workbook keep one row per rung; outside Main Street mode it is zero,
+  // and the Assumptions MainStreetMode switch turns the reserve back on without a new row.
+  const mainStreet = mode.mode === "mainStreet";
+  if (mainStreet && capitalReserve.basis === "da_proxy") warnings.push(`[S3] capital reserve is a proxy (${capitalReserve.source}) because no Form 4562 is in the sources. Request Form 4562 to replace it.`);
+  const reserve = mainStreet ? capitalReserve.amount : 0;
+  // Like [S2], the reserve is one Assumptions input applied to every year.
+  if (mainStreet && s3Override && years.some((y) => Math.abs(Math.abs(s3Override!.byFiscalYear[y] ?? 0) - reserve) >= 1)) {
+    warnings.push(`[S3] in ${s3Override.sourceFile} varies by year; the model applies ${money(reserve)} (its latest year) to every year, because the capital reserve is one Assumptions input.`);
   }
+  const s3PerYear = reserve ? -reserve : 0;
+  const s3Amounts = Object.fromEntries(years.map((y) => [y, s3PerYear]));
+  rows.push({
+    tier: "owner_compensation",
+    description: "Capital reserve (maintenance capex)",
+    category: "capital_reserve",
+    basis: !mainStreet
+      ? "Zero outside Main Street mode: a lower-middle-market buyer underwrites capital expenditure separately (set MainStreetMode on Assumptions to apply it)."
+      : (s3Override?.basis ??
+        `Deducts a reserve for equipment replacement of $${Math.round(capitalReserve.amount).toLocaleString("en-US")} a year, equal to the ${capitalReserve.basis === "form_4562" ? "three-year average equipment cost placed in service per Form 4562" : `${capitalReserve.source.charAt(0).toLowerCase()}${capitalReserve.source.slice(1)}`}.`),
+    sourceDocument: s3Override?.sourceDocument ?? (capitalReserve.basis === "form_4562" ? capitalReserve.source : `P&L, account ${accountName("depreciation_amortization")}${daSpan ? `, ${daSpan}` : ""}`),
+    evidence: s3Override?.evidence ?? "documented",
+    status: s3Override?.status ?? "accepted",
+    byFiscalYear: s3Amounts,
+    byMonth: monthly ? flatMonths(monthly, s3PerYear) : undefined,
+    origin: "capital_reserve",
+    sourceFile: s3Override?.sourceFile,
+  });
 
   // Memo rows: listed, never added.
   for (const r of memoRows) {
@@ -598,8 +658,8 @@ export function buildSchedule(ctx: ScheduleContext): ScheduleResult {
   return {
     adjustments: numberAdjustments(ordered),
     recastInputs: {
-      replacementSalary: ctx.replacementSalary.amount,
-      replacementSalarySource: ctx.replacementSalary.source,
+      replacementSalary: replacementSalary.amount,
+      replacementSalarySource: replacementSalary.source,
       burdenPct: ctx.burden.pct,
       burdenSource: ctx.burden.source,
       capitalReserve,

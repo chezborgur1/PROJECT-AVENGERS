@@ -422,6 +422,8 @@ export const BS_DETAIL_LINES = [
   "related_party_balances",
   "accrued_interest",
   "income_tax_payable",
+  /** Due from a shareholder or related party, inside other current assets (removed from NWC, which lowers it). */
+  "related_party_receivable",
 ] as const;
 export type BsDetailLine = (typeof BS_DETAIL_LINES)[number];
 
@@ -434,6 +436,8 @@ export interface BalanceSheetPeriod {
   values: Record<BsCategory, number>;
   /** Sub-lines carved out of `values` where the source shows them; each is included in its parent category. */
   detail?: Partial<Record<BsDetailLine, number>>;
+  /** The mapped accounts of this sheet, so the Databook carries every dated sheet, not only the year-ends in `lines`. */
+  lines?: MappedLine[];
   source: SourceKind;
   file: string;
 }
@@ -546,6 +550,14 @@ export interface Adjustment {
   origin: AdjustmentOrigin;
   /** File the row was built from, when there is one. */
   sourceFile?: string;
+  /** P&L accounts (as exported) whose months the row's `byMonth` follows, so the workbook can write each month as a proportion of them. */
+  accounts?: string[];
+  /**
+   * How `byMonth` fills the partial current year no full fiscal year covers:
+   * the advisor's YTD amount, a run-rate of the latest full year, or zero
+   * (a one-time item). Absent when there is no such stub.
+   */
+  stub?: "amount" | "run_rate" | "zero";
 }
 
 export interface RecastInputs {
@@ -904,6 +916,19 @@ export function adjustmentInWindow(a: Adjustment, months: MonthKey[], fyEndMonth
   let total = 0;
   for (const [fy, n] of perYear) total += ((a.byFiscalYear[fy] ?? 0) * n) / 12;
   return total;
+}
+
+/**
+ * A schedule row's amount in the PF column (window = the LTM months) or, in
+ * annual-only mode (no window), in the latest fiscal year. Pro forma rows are
+ * annual run-rates applied in full to the PF column and have no meaning in a
+ * fiscal-year column (`null`). The engine's PF column and the data layer's
+ * Main Street test both use this, so the mode and the headline read one number.
+ */
+export function pfColumnAmount(a: Pick<Adjustment, "tier" | "byFiscalYear" | "byMonth">, window: MonthKey[] | undefined, latestFy: number, fyEndMonth: number): number | null {
+  if (!window) return a.tier === "pro_forma" ? null : (a.byFiscalYear[latestFy] ?? 0);
+  if (a.tier === "pro_forma" && !a.byMonth) return a.byFiscalYear[latestFy] ?? 0;
+  return adjustmentInWindow(a as Adjustment, window, fyEndMonth);
 }
 
 /** Sum of P&L categories over a window of the monthly grid. Months missing from the grid contribute nothing. */

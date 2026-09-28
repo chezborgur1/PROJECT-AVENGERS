@@ -8,16 +8,23 @@ import { BS_DETAIL_LINES, addMonths, monthRange, type BsCategory, type BsDetailL
 import { fiscalYearEndKey } from "../periods.ts";
 import { addr, colLetter, rowOf, SheetBuilder } from "../sheet.ts";
 import { FMT, WIDTH } from "../styles.ts";
-import type { ModelOutput } from "../types.ts";
-import { A, type TabContext } from "./assumptionsTab.ts";
-import { MONTH_START } from "./data.ts";
-import { FYE, gridMonths, LATEST_FY, S, SHEET, serialOfMonthEnd, serialOfMonthStart } from "./layout.ts";
+import type { ModelOutput, NwcLines } from "../types.ts";
+import { type TabContext } from "./assumptionsTab.ts";
+import { DATABOOK_COL, MONTH_START } from "./data.ts";
+import { gridMonths, S, SHEET, serialOfMonthEnd, serialOfMonthStart } from "./layout.ts";
 
 const K = 1000;
 
 /** Statement dates the Databook's balance-sheet block carries, ascending. */
 export function bsDates(model: ModelOutput): MonthKey[] {
   return [...new Set((model.databook?.bs ?? []).flatMap((r) => Object.keys(r.byMonth)))].sort();
+}
+
+/** Column of statement date `m` on the Balance Sheet tab; a date the tab lacks is a planning bug, never column B. */
+export function bsColumn(dates: MonthKey[], m: MonthKey): number {
+  const i = dates.indexOf(m);
+  if (i < 0) throw new Error(`The Balance Sheet tab has no column for ${m}`);
+  return 3 + i;
 }
 
 /** Category totals per statement date from the Databook rows (dollars). */
@@ -59,9 +66,10 @@ const DETAIL_LABELS: Record<BsDetailLine, string> = {
   customer_deposits: "Customer deposits (in accrued and other)",
   credit_cards: "Credit-card balances (in debt)",
   current_portion_debt: "Current portion of debt (in debt)",
-  related_party_balances: "Related-party balances (in accrued and other)",
+  related_party_balances: "Related-party payables (in accrued and other)",
   accrued_interest: "Accrued interest (in accrued and other)",
   income_tax_payable: "Income taxes payable (in accrued and other)",
+  related_party_receivable: "Related-party receivables (in other current assets)",
 };
 
 export function planBalanceSheet(ctx: TabContext): SheetBuilder | undefined {
@@ -83,7 +91,7 @@ export function planBalanceSheet(ctx: TabContext): SheetBuilder | undefined {
   b.tier1(5, [{ from: 3, to: lastValue, label: "At statement date" }, { from: notesCol, to: notesCol, label: "Notes" }]);
   b.tier2(6, { from: 3, to: lastValue }, [], "Balance Sheet");
   b.cell(6, notesCol, { style: "header", v: null, role: "text" });
-  const dbHeader = (i: number) => `${S("databook")}${colLetter(9 + i)}$${rowOf("databook", "bsHeader")}`;
+  const dbHeader = (i: number) => `${S("databook")}${colLetter(DATABOOK_COL.periodStart + i)}$${rowOf("databook", "bsHeader")}`;
   dates.forEach((m, i) => b.formula(6, 3 + i, `EOMONTH(${dbHeader(i)},0)`, { style: "header", fmt: FMT.date, role: "text", expect: serialOfMonthEnd(m), label: `bs date ${m}` }));
   const dbRange = (c: number) => `${S("databook")}$${colLetter(c)}$${rowOf("databook", "bsFirst")}:$${colLetter(c)}$${rowOf("databook", "bsLast")}`;
   let r = 8;
@@ -115,13 +123,13 @@ export function planBalanceSheet(ctx: TabContext): SheetBuilder | undefined {
       const c = 3 + i;
       const at = (k: string) => addr(b.r(k), c);
       const v = totals[m]!;
-      const f = spec.category ? `SUMIFS(${dbRange(9 + i)},${dbRange(5)},"${spec.category}")/${K}` : spec.calc!(at);
+      const f = spec.category ? `SUMIFS(${dbRange(DATABOOK_COL.periodStart + i)},${dbRange(DATABOOK_COL.category)},"${spec.category}")/${K}` : spec.calc!(at);
       const expect = spec.category ? v[spec.category] / K : spec.value!(v) / K;
       b.formula(rr, c, f, { style: spec.kind, fmt, expect, tol: spec.kind === "check" ? 1e-6 : undefined, label: `${spec.key} ${m}` });
     });
     if (spec.kind === "check") b.checkCf(rr, 3, lastValue);
   }
-  b.section(b.r("sec_detail"), "Detail lines carved out of the categories above ($000s; n.a. where the source does not show them)", spans);
+  b.section(b.r("sec_detail"), "Detail within the categories above ($000s)", spans);
   for (const d of BS_DETAIL_LINES) {
     const rr = b.r(`detail_${d}`);
     b.text(rr, 2, DETAIL_LABELS[d], { style: "line" });
@@ -141,19 +149,43 @@ export function planBalanceSheet(ctx: TabContext): SheetBuilder | undefined {
 
 // --- NWC ----------------------------------------------------------------------------------------
 
+/** NWC rows that carry dollars, and the engine field each reads (the peg, latest and vs-peg columns apply to these). */
+const DOLLAR_FIELDS: Record<string, keyof NwcLines> = {
+  ar: "ar",
+  unbilled: "unbilled",
+  inventory: "inventory",
+  prepaidOther: "prepaidOther",
+  tca: "totalCurrentAssetsExCash",
+  ap: "ap",
+  accrued: "accrued",
+  deferredRevenue: "deferredRevenue",
+  customerDeposits: "customerDeposits",
+  tcl: "totalCurrentLiabExDebt",
+  reportedNwc: "reportedNwc",
+  adjustments: "adjustments",
+  adjustedNwc: "adjustedNwc",
+};
+
+/** Rows that exist only when the source carves out the detail line; otherwise they print n.a. */
+const DETAIL_OF: Record<string, BsDetailLine> = { unbilled: "unbilled", deferredRevenue: "deferred_revenue", customerDeposits: "customer_deposits" };
+
+/** Column geometry of the NWC tab: one column per statement date, then Peg | Latest | Latest vs. Peg, then Transfers on an asset purchase. */
+export function nwcLayout(model: ModelOutput): { n: number; pegCol: number; latestCol: number; vsCol: number; transfersCol?: number; notesCol: number } {
+  const n = model.nwc?.periods.length ?? 0;
+  const pegCol = 3 + n + 1;
+  const vsCol = pegCol + 2;
+  const transfersCol = model.dealForm === "asset_purchase" ? vsCol + 2 : undefined;
+  return { n, pegCol, latestCol: pegCol + 1, vsCol, transfersCol, notesCol: (transfersCol ?? vsCol) + 2 };
+}
+
 export function planNwc(ctx: TabContext): SheetBuilder | undefined {
   const { model } = ctx;
   const nwc = model.nwc;
   if (!nwc) return undefined;
   const dates = bsDates(model);
   const b = new SheetBuilder("nwc", SHEET.nwc);
-  const n = nwc.periods.length;
-  const pegCol = 3 + n + 1;
-  const latestCol = pegCol + 1;
-  const vsCol = pegCol + 2;
+  const { n, pegCol, latestCol, vsCol, transfersCol, notesCol } = nwcLayout(model);
   const asset = model.dealForm === "asset_purchase";
-  const transfersCol = asset ? vsCol + 2 : undefined;
-  const notesCol = (transfersCol ?? vsCol) + 2;
   b.width(1, WIDTH.gutter);
   b.width(2, WIDTH.label);
   b.widths(3, 3 + n - 1, WIDTH.value);
@@ -175,7 +207,7 @@ export function planNwc(ctx: TabContext): SheetBuilder | undefined {
   ];
   b.tier1(5, groups);
   b.tier2(6, { from: 3, to: vsCol }, [], "NWC");
-  nwc.periods.forEach((p, i) => b.formula(6, 3 + i, `${S("bs")}${colLetter(3 + dates.indexOf(p.month))}6`, { style: "header", fmt: FMT.date, role: "text", expect: serialOfMonthEnd(p.month), label: `nwc date ${p.month}` }));
+  nwc.periods.forEach((p, i) => b.formula(6, 3 + i, `${S("bs")}${colLetter(bsColumn(dates, p.month))}6`, { style: "header", fmt: FMT.date, role: "text", expect: serialOfMonthEnd(p.month), label: `nwc date ${p.month}` }));
   b.cell(6, pegCol, { style: "header", v: `Peg (${nwc.pegBasis === "n.a." ? "n.a." : nwc.pegBasis === "T12M average" ? "T12M avg." : "T4Q avg."})`, role: "text" });
   b.cell(6, latestCol, { style: "header", v: "Latest", role: "text" });
   b.cell(6, vsCol, { style: "header", v: "Latest vs. Peg", role: "text" });
@@ -216,7 +248,7 @@ export function planNwc(ctx: TabContext): SheetBuilder | undefined {
   }
   const lastPrinted = r + 1;
   const spans: [number, number][] = [[3, 3 + n - 1], [pegCol, vsCol]];
-  const bsCol = (m: MonthKey) => colLetter(3 + dates.indexOf(m));
+  const bsCol = (m: MonthKey) => colLetter(bsColumn(dates, m));
   const bsCell = (m: MonthKey, key: string) => `${S("bs")}${bsCol(m)}${rowOf("bs", key)}`;
   const detail = (m: MonthKey, d: BsDetailLine) => `${S("bs")}${bsCol(m)}${rowOf("bs", `detail_${d}`)}`;
   const num = (ref: string) => `IF(ISNUMBER(${ref}),${ref},0)`;
@@ -237,9 +269,10 @@ export function planNwc(ctx: TabContext): SheetBuilder | undefined {
       const at = (k: string) => addr(b.r(k), c);
       const l = p.lines;
       const avail = (d: BsDetailLine) => p.detail?.[d] !== undefined;
+      const t = (month: MonthKey) => trailing(model, month);
       let f: string | undefined;
       let expect: number | string = 0;
-      let fmt = row.kind === "lineFirst" || row.kind === "subtotal" || row.kind === "keyTotal" ? FMT.currency : FMT.body;
+      let fmt: string = row.kind === "lineFirst" || row.kind === "subtotal" || row.kind === "keyTotal" ? FMT.currency : FMT.body;
       switch (row.key) {
         case "ar":
           f = bsCell(m, "ar");
@@ -298,7 +331,7 @@ export function planNwc(ctx: TabContext): SheetBuilder | undefined {
           expect = l.reportedNwc / K;
           break;
         case "adjustments":
-          f = `${num(detail(m, "related_party_balances"))}+${num(detail(m, "accrued_interest"))}+${num(detail(m, "income_tax_payable"))}`;
+          f = `${num(detail(m, "related_party_balances"))}+${num(detail(m, "accrued_interest"))}+${num(detail(m, "income_tax_payable"))}-${num(detail(m, "related_party_receivable"))}`;
           expect = l.adjustments / K;
           break;
         case "adjustedNwc":
@@ -311,8 +344,9 @@ export function planNwc(ctx: TabContext): SheetBuilder | undefined {
           fmt = FMT.pct1;
           break;
         case "deferredRevenuePct":
-          f = `IFERROR(${num(at("deferredRevenue"))}/${at("ltmRevenue")},"n.a.")`;
-          expect = l.deferredRevenuePctRevenue;
+          // n.a. where the line itself is n.a., never a dash that reads as zero.
+          f = `IF(ISNUMBER(${at("deferredRevenue")}),IFERROR(${at("deferredRevenue")}/${at("ltmRevenue")},"n.a."),"n.a.")`;
+          expect = avail("deferred_revenue") && t(p.month).revenue ? l.deferredRevenuePctRevenue : "n.a.";
           fmt = FMT.pct1;
           break;
         case "dso":
@@ -334,24 +368,25 @@ export function planNwc(ctx: TabContext): SheetBuilder | undefined {
       if (f) b.formula(rr, c, f, { style, fmt, expect, label: `${row.key} ${m}` });
     });
     // Peg, latest, latest vs peg (dollar rows only).
-    const isDollar = ["ar", "unbilled", "inventory", "prepaidOther", "tca", "ap", "accrued", "deferredRevenue", "customerDeposits", "tcl", "reportedNwc", "adjustments", "adjustedNwc"].includes(row.key);
-    if (isDollar) {
+    const field = DOLLAR_FIELDS[row.key];
+    if (field) {
       const fmt = row.kind === "lineFirst" || row.kind === "subtotal" || row.kind === "keyTotal" ? FMT.currency : FMT.body;
       const last = 3 + n - 1;
       const count = nwc.pegBasis === "T12M average" ? 12 : nwc.pegBasis === "T4Q average" ? 4 : 0;
-      const lastLine = nwc.periods[n - 1]!.lines;
-      const latestValue = (lastLine as unknown as Record<string, number>)[row.key];
-      if (count) {
-        const pegValue = nwc.periods.slice(-count).reduce((s, p) => s + ((p.lines as unknown as Record<string, number>)[row.key] ?? 0), 0) / count;
+      const latestValue = nwc.periods[n - 1]!.lines[field];
+      const detailLine = DETAIL_OF[row.key];
+      // A carved-out line the sheets do not all show has no average: its peg is n.a., like the line.
+      const pegNa = !!detailLine && nwc.periods.slice(-count).some((p) => p.detail?.[detailLine] === undefined);
+      if (count && !pegNa) {
+        const pegValue = nwc.periods.slice(-count).reduce((s, p) => s + p.lines[field], 0) / count;
         b.formula(rr, pegCol, `AVERAGE(${addr(rr, last - count + 1)}:${addr(rr, last)})`, { style, fmt, expect: pegValue / K, label: `${row.key} peg` });
-        b.formula(rr, vsCol, `${addr(rr, latestCol)}-${addr(rr, pegCol)}`, { style, fmt, expect: ((latestValue ?? 0) - pegValue) / K, label: `${row.key} vs peg` });
+        b.formula(rr, vsCol, `${addr(rr, latestCol)}-${addr(rr, pegCol)}`, { style, fmt, expect: (latestValue - pegValue) / K, label: `${row.key} vs peg` });
       } else {
         b.na(rr, pegCol, "n.a.", { style });
         b.na(rr, vsCol, "n.a.", { style });
       }
-      const latestIsNa = ["unbilled", "deferredRevenue", "customerDeposits"].includes(row.key) && nwc.periods[n - 1]!.detail?.[row.key === "unbilled" ? "unbilled" : row.key === "deferredRevenue" ? "deferred_revenue" : "customer_deposits"] === undefined;
-      if (latestIsNa) b.na(rr, latestCol, "n.a.", { style });
-      else b.formula(rr, latestCol, addr(rr, last), { style, fmt, expect: (latestValue ?? 0) / K, label: `${row.key} latest` });
+      if (detailLine && nwc.periods[n - 1]!.detail?.[detailLine] === undefined) b.na(rr, latestCol, "n.a.", { style });
+      else b.formula(rr, latestCol, addr(rr, last), { style, fmt, expect: latestValue / K, label: `${row.key} latest` });
     }
     if (transfersCol && row.transfer) b.text(rr, transfersCol, row.transfer, { align: { horizontal: "center" } });
   }
@@ -364,17 +399,23 @@ export function planNwc(ctx: TabContext): SheetBuilder | undefined {
     const c = 3 + i;
     const dateCell = addr(6, c, { row: true });
     const t = trailing(model, p.month);
-    if (monthly) {
+    const fyCol = pnlFyColumn(model, p.month);
+    if (!t.covered && !fyCol) {
+      // Neither twelve grid months nor a fiscal-year P&L end at this date: the ratios are n.a., never a partial year.
+      b.na(lr, c, "n.a.", { style: "helper" });
+      b.na(lc, c, "n.a.", { style: "helper" });
+      return;
+    }
+    if (monthly && t.covered) {
       b.formula(lr, c, `SUMIFS(${monthlyRow("revenue")},${monthlyHeader},">="&(EOMONTH(${dateCell},-12)+1),${monthlyHeader},"<="&${dateCell})`, { style: "helper", role: "helper", fmt: FMT.body, expect: t.revenue / K, label: `ltm revenue ${p.month}` });
       b.formula(lc, c, `SUMIFS(${monthlyRow("cogs")},${monthlyHeader},">="&(EOMONTH(${dateCell},-12)+1),${monthlyHeader},"<="&${dateCell})`, { style: "helper", role: "helper", fmt: FMT.body, expect: t.cogs / K, label: `ltm cogs ${p.month}` });
     } else {
-      const fyCol = pnlFyColumn(model, p.month);
-      b.formula(lr, c, fyCol ? `${S("pnl")}${fyCol}${rowOf("pnl", "revenue")}` : "0", { style: "helper", role: "helper", fmt: FMT.body, expect: t.revenue / K, label: `fy revenue ${p.month}` });
-      b.formula(lc, c, fyCol ? `${S("pnl")}${fyCol}${rowOf("pnl", "cogs")}` : "0", { style: "helper", role: "helper", fmt: FMT.body, expect: t.cogs / K, label: `fy cogs ${p.month}` });
+      b.formula(lr, c, `${S("pnl")}${fyCol}${rowOf("pnl", "revenue")}`, { style: "helper", role: "helper", fmt: FMT.body, expect: t.revenue / K, label: `fy revenue ${p.month}` });
+      b.formula(lc, c, `${S("pnl")}${fyCol}${rowOf("pnl", "cogs")}`, { style: "helper", role: "helper", fmt: FMT.body, expect: t.cogs / K, label: `fy cogs ${p.month}` });
     }
   });
   const cr = b.r("check");
-  b.text(cr, 2, "Check: NWC lines less Balance Sheet (current assets ex cash; current liabilities ex debt)", { style: "check" });
+  b.text(cr, 2, "Check: NWC lines less Balance Sheet (C08)", { style: "check" });
   nwc.periods.forEach((p, i) => {
     const c = 3 + i;
     const at = (k: string) => addr(b.r(k), c);
@@ -399,20 +440,20 @@ export function planNwc(ctx: TabContext): SheetBuilder | undefined {
   b.defineName("NWC_Peg", `$${colLetter(pegCol)}$${b.r("adjustedNwc")}`);
   b.defineName("NWC_vsPeg", `$${colLetter(vsCol)}$${b.r("adjustedNwc")}`);
   b.defineName("DefRev_Latest", `$${colLetter(latestCol)}$${b.r("deferredRevenue")}`);
-  b.row("latestCol", latestCol);
   return b;
 }
 
-function trailing(model: ModelOutput, m: MonthKey): { revenue: number; cogs: number } {
+/** Revenue and COGS of the twelve months ending at `m`: the grid when it covers them, else the fiscal year ending there. */
+function trailing(model: ModelOutput, m: MonthKey): { revenue: number; cogs: number; covered: boolean } {
   const grid = model.monthly;
   if (grid) {
     const keys = grid.months.map((x) => x.key);
     const twelve = monthRange(addMonths(m, -11), m);
-    if (twelve.every((k) => keys.includes(k))) return twelve.reduce((s, k) => ({ revenue: s.revenue + grid.series.revenue![keys.indexOf(k)]!, cogs: s.cogs + grid.series.cogs![keys.indexOf(k)]! }), { revenue: 0, cogs: 0 });
+    if (twelve.every((k) => keys.includes(k))) return twelve.reduce((s, k) => ({ revenue: s.revenue + grid.series.revenue![keys.indexOf(k)]!, cogs: s.cogs + grid.series.cogs![keys.indexOf(k)]!, covered: true }), { revenue: 0, cogs: 0, covered: true });
   }
   const fy = model.columns.find((c) => c.ref.kind === "fiscal_year" && !c.projected && c.end === m);
   const p = fy ? model.periods[fy.key] : undefined;
-  return p ? { revenue: p.pnl.revenue, cogs: p.pnl.cogs } : { revenue: 0, cogs: 0 };
+  return p ? { revenue: p.pnl.revenue, cogs: p.pnl.cogs, covered: false } : { revenue: 0, cogs: 0, covered: false };
 }
 
 function pnlFyColumn(model: ModelOutput, m: MonthKey): string | undefined {
@@ -447,7 +488,8 @@ export function planDebtLike(ctx: TabContext): SheetBuilder | undefined {
     b.cell(r, 4, { v: treatment[item.treatment], role: "input", align: { horizontal: "center" } });
     b.text(r, 5, "Balance sheet");
     b.cell(r, 6, { v: item.status.replace(/^\w/, (c) => c.toUpperCase()), role: "input", align: { horizontal: "center" } });
-    b.text(r, 7, asset ? (item.payoffLetter ? item.payoffLetter.replace(/^\w/, (c) => c.toUpperCase()) : "n.a.") : "n.a.", { align: { horizontal: "center" } });
+    const letter = item.payoffLetter && item.payoffLetter !== "n/a" ? item.payoffLetter.replace(/^\w/, (c) => c.toUpperCase()) : "n.a.";
+    b.text(r, 7, asset ? letter : "n.a.", { align: { horizontal: "center" } });
     b.text(r, 8, item.note ?? (item.treatment === "nwc" ? "In NWC (AMB default)" : asset ? "Retained by Seller; paid from proceeds at close" : "Repaid at or before closing"));
     r++;
   }
@@ -493,7 +535,7 @@ export function planCashFlow(ctx: TabContext): SheetBuilder | undefined {
   b.cell(6, notesCol, { style: "header", v: null, role: "text" });
   const hist = model.columns.filter((c) => !c.projected);
   const pnlColOf = (fy: number) => colLetter(3 + hist.findIndex((c) => c.ref.kind === "fiscal_year" && c.fiscalYear === fy));
-  const bsColOf = (fy: number) => colLetter(3 + dates.indexOf(fiscalYearEndKey(fy, model.fiscalYearEndMonth)));
+  const bsColOf = (fy: number) => colLetter(bsColumn(dates, fiscalYearEndKey(fy, model.fiscalYearEndMonth)));
   cf.forEach((y, i) => b.formula(6, 3 + i, `${S("pnl")}${pnlColOf(y.fiscalYear)}6`, { style: "header", role: "text", expect: `FY${y.fiscalYear}`, label: `cf label ${y.fiscalYear}` }));
   type Row = { key: string; label: string; kind: "lineFirst" | "line" | "subtotal" | "keyTotal" | "ratio" | "check" };
   const rows: Row[] = [
@@ -535,7 +577,7 @@ export function planCashFlow(ctx: TabContext): SheetBuilder | undefined {
       const pnl = (k: string) => `${S("pnl")}${pnlColOf(y.fiscalYear)}${rowOf("pnl", k)}`;
       let f: string;
       let expect: number | string;
-      let fmt = row.kind === "line" ? FMT.body : FMT.currency;
+      let fmt: string = row.kind === "line" ? FMT.body : FMT.currency;
       switch (row.key) {
         case "netIncome": f = pnl("net_income"); expect = y.netIncome / K; break;
         case "da": f = pnl("da"); expect = y.da / K; break;
@@ -583,7 +625,7 @@ export function planProofOfCash(ctx: TabContext, ds: FinancialDataset | undefine
   [14, 14, 12, 11].forEach((w, i) => b.width(3 + i, w));
   b.spacerCol(7);
   b.width(8, WIDTH.notes);
-  b.anatomy({ subtitle: "Proof of Cash: monthly P&L revenue vs. operating bank deposits ($000s)", lastCol: 8, toggleCol: 6, masterToggle: ctx.masterToggle });
+  b.anatomy({ subtitle: "Proof of Cash: P&L revenue vs. bank deposits ($000s)", lastCol: 8, toggleCol: 6, masterToggle: ctx.masterToggle });
   b.text(3, 5, "Print", { align: { horizontal: "right" } });
   b.tier1(5, [{ from: 2, to: 6, label: "Proof of cash" }, { from: 8, to: 8, label: "Notes" }]);
   ["Month", "P&L Revenue", "Bank Deposits", "Variance ($)", "Variance (%)"].forEach((h, i) => b.cell(6, 2 + i, { style: "header", v: h, role: "text", align: { horizontal: i === 0 ? "left" : "center" } }));
@@ -616,13 +658,12 @@ export function planProofOfCash(ctx: TabContext, ds: FinancialDataset | undefine
   r += 2;
   b.row("variancePct", r);
   b.text(r, 2, "Check: deposits less revenue, % (flag above 5%)", { style: "check" });
-  b.formula(r, 3, `IFERROR(${addr(totalRow, 5)}/${addr(totalRow, 3)},0)`, { style: "check", fmt: FMT.pct1, expect: totalRev ? (totalDep - totalRev) / totalRev : 0, tol: 1e-6, label: "C14" });
-  b.cf({ ref: addr(r, 3), formula: `ABS(${addr(r, 3)})>0.05`, font: { color: "FF0000" } });
+  // The check sits under Variance (%) so its label has the width of the table.
+  b.formula(r, 6, `IFERROR(${addr(totalRow, 5)}/${addr(totalRow, 3)},0)`, { style: "check", fmt: FMT.pct1, expect: totalRev ? (totalDep - totalRev) / totalRev : 0, tol: 1e-6, label: "C14" });
+  b.cf({ ref: addr(r, 6), formula: `ABS(${addr(r, 6)})>0.05`, font: { color: "FF0000" } });
   r += 2;
   b.note(r, 2, "Note: operating deposits exclude transfers, loan proceeds and owner contributions (Raw - Bank). A variance inside 5% is consistent with timing of collections and sales tax; a larger one needs an explanation before the revenue figure is relied on.");
   b.print({ area: `B2:${addr(r, 8)}`, landscape: false, fitToWidth: 1, fitToHeight: 0, titlesRow: "5:6" });
   b.furniture(ctx.codeName, ctx.asOfLabel);
   return b;
 }
-
-export { A, FYE, LATEST_FY };

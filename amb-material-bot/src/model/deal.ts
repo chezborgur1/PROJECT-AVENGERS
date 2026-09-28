@@ -16,9 +16,16 @@ export function pmt(rate: number, nper: number, pv: number): number {
 
 export const annualDebtService = (rate: number, termYears: number, principal: number): number => -pmt(rate / 12, termYears * 12, principal) * 12;
 
+/**
+ * Excel's ROUND: half away from zero, on the value as Excel holds it (15
+ * significant digits), so 1,484,394.9999999998 rounds like 1,484,395. The
+ * verifier's ROUND uses the same function, so engine and workbook agree at
+ * the half.
+ */
 export const roundTo = (v: number, digits: number): number => {
-  const f = 10 ** digits;
-  return Math.round(v * f) / f;
+  const scaled = Number((digits >= 0 ? v * 10 ** digits : v / 10 ** -digits).toPrecision(15));
+  const r = Math.sign(scaled) * Math.round(Math.abs(scaled));
+  return digits >= 0 ? r / 10 ** digits : r * 10 ** -digits;
 };
 
 export interface ValuationInputs {

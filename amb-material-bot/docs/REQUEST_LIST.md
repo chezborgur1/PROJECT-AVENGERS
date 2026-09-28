@@ -20,17 +20,17 @@ Google Sheets and export as CSV. Keep the header row exactly as is.
 | `requested_by` | | Who asked | `Frank` |
 | `business_name` | yes | Legal / trading name, used in the CIM body | `Ridgeline Comfort Services LLC` |
 | `code_name` | yes | Project name for the cover, file names and folder | `Project Ridgeline` |
-| `industry` | | Plain description | `Residential HVAC and plumbing services` |
-| `location` | | City, state | `Columbus, OH` |
-| `entity_type` | yes | `S-Corp`, `C-Corp`, `LLC`, `Partnership` or `Sole Prop`. Drives the tax assumption | `S-Corp` |
-| `year_founded` | | Year | `2009` |
-| `employees` | | Full-time headcount | `24` |
+| `industry` | | Plain description, for the tracker. The CIM takes its description from the intake facts | `Residential HVAC and plumbing services` |
+| `location` | | City, state, for the tracker. The CIM takes locations from the intake facts | `Columbus, OH` |
+| `entity_type` | yes | `S-Corp`, `C-Corp`, `LLC`, `Partnership` or `Sole Prop`. Drives the tax assumption (pass-through entities carry no entity-level tax) | `S-Corp` |
+| `year_founded` | | Year, for the tracker. The CIM prints the founding year from the intake facts | `2009` |
+| `employees` | | Full-time headcount, for the tracker. The CIM counts people from the payroll register or the intake facts | `24` |
 | `fiscal_year_end` | yes | MM-DD | `12-31` |
 | `source_folder` | * | Folder holding the business's files, relative to the repo (see below) | `deals/project-ridgeline` |
 | `quickbooks_realm_id` | * | QuickBooks Online company ID, after `amb-bot qbo-connect` | `9130355123456789` |
-| `owner_replacement_salary` | | Market salary for a manager replacing the owner. Drives the recast. Default $85,000 | `95000` |
-| `asking_price` | | Not used in the CIM. For your reference | |
-| `notes` | | Anything useful. Claude sees it when drafting | |
+| `owner_replacement_salary` | | Market salary for a manager replacing the owner. Drives the `[S2]` adjustment (salary plus a 15% burden). Wins over a figure in the intake notes; default $85,000 | `95000` |
+| `asking_price` | | Never read by the bot. The CIM carries no price (guide D5), and the model's Valuation tab works from its own multiples | |
+| `notes` | | For the team. The bot does not read it; facts for the CIM go in the intake notes or `intake.json` | |
 | `output_folder`, `last_run`, `last_error` | | Written by the bot. Leave blank | |
 
 \* At least one of `source_folder` or `quickbooks_realm_id`.
@@ -55,13 +55,16 @@ Put everything you have for the business in one folder, ideally under
 | `payroll.csv` (or `payroll-*.csv`) | Payroll register: roles, departments, dates, wages by year |
 | `kpis.csv` (or `kpi-*.csv`) | Operating metrics the sources state (members, renewal rate, fleet, rating) |
 | `mapping-overrides.csv` with columns `account,category` | Force an account into a category (categories: see `src/domain/financials.ts`) |
+| `cim-copy.fixture.json` | Reviewed CIM copy for a sample deal, used only when no API key is set and only when it names the business. The Ridgeline sample ships one; a real deal does not need it |
 
 When several sources cover the same year, the bot trusts them in this order:
 QuickBooks Online API > QuickBooks export > tax return > PDF financial
 statements > bank statements. Between two QuickBooks exports, the one with
 monthly columns wins. It records which one it used, reconciles every other
-source line by line (revenue, COGS, total expenses, net income) and flags
-differences above 2% in `open-questions.md`.
+source line by line (revenue, COGS, total expenses, net income). Every
+difference above 2% is listed in `run-summary.md`, revenue and net-income
+differences also go to `open-questions.md`, and the CIM adds its
+reconciliation page (S7.4).
 
 Every file is checked against the P&L: customer revenue plus the residual
 row against total revenue (check C12), payroll wages plus employer costs
