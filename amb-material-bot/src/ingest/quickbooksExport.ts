@@ -1,5 +1,7 @@
 // QuickBooks "Profit and Loss" and "Balance Sheet" reports exported to CSV
-// or Excel (Online or Desktop). Annual, quarterly or monthly columns all work.
+// or Excel (Online or Desktop). Annual, quarterly or monthly columns all
+// work; monthly columns are kept month by month so the model can build
+// YTD, LTM and the monthly grid.
 //
 // Layout QuickBooks produces:
 //   Company name / report title / date range     (a few title rows)
@@ -8,9 +10,10 @@
 //   ,Service Revenue,"812,400.00","901,250.00",... (account, indented)
 //   Total Income,...                               (computed, skipped)
 
+import { monthLabel, monthKey, type BooksBasis } from "../domain/financials.ts";
 import { readTable, parseAmount, parsePeriodLabel, type Period } from "../util/tables.ts";
 import { reportToLines, type ReportKind, type ReportRow } from "./reportTable.ts";
-import type { SourceExtract } from "../domain/financials.ts";
+import type { IngestExtract } from "./extract.ts";
 
 const TOP_SECTIONS_PNL = /^(ordinary income\/expense|income|revenue|sales|cost of (goods sold|sales)|cogs|expenses?|operating expenses|other income|other expenses?|other income\/expense)$/i;
 const TOP_SECTIONS_BS = /^(assets|liabilities and equity|liabilities & equity|liabilities|equity)$/i;
@@ -28,6 +31,14 @@ export function detectReportKind(grid: string[][], fileName: string): ReportKind
   if (/profit (and|&) loss|income statement|statement of operations/.test(head) || /p&l|pnl|profit|income[-_ ]?statement/.test(name)) {
     return "pnl";
   }
+  return undefined;
+}
+
+/** QuickBooks prints "Accrual Basis" or "Cash Basis" under the report title. */
+export function detectReportBasis(grid: string[][]): BooksBasis | undefined {
+  const head = grid.slice(0, 8).map((r) => r.join(" ")).join(" ").toLowerCase();
+  if (/accrual basis/.test(head)) return "accrual";
+  if (/cash basis/.test(head)) return "cash";
   return undefined;
 }
 
@@ -111,21 +122,39 @@ function popTo(stack: { depth: number; label: string }[], depth: number, topSect
   }
 }
 
-export async function parseQuickbooksExport(file: string, fyEndMonth: number): Promise<SourceExtract> {
+/** How a partial fiscal year is carried: as a YTD window when the months are known, otherwise left out. */
+export function partialYearNote(p: { year: number; months: number }, file: string, monthly: boolean, lastMonth?: string): string {
+  const name = file.split("/").pop();
+  return monthly && lastMonth
+    ? `FY${p.year} covers ${p.months} months in ${name}; carried as YTD ${monthLabel(lastMonth)}, not as a full year.`
+    : `FY${p.year} covers ${p.months} months in ${name} and is excluded (full years only; a monthly export would give a YTD column).`;
+}
+
+export async function parseQuickbooksExport(file: string, fyEndMonth: number): Promise<IngestExtract> {
   const grid = await readTable(file);
   const kind = detectReportKind(grid, file);
   if (!kind) throw new Error(`Could not tell whether ${file} is a P&L or a balance sheet`);
   const { rows, periods } = gridToReport(grid, kind, fyEndMonth);
   const result = reportToLines(rows, periods, kind, fyEndMonth);
-  const notes = result.partialYears.map(
-    (p) => `FY${p.year} covers ${p.months} months in ${file.split("/").pop()} and is excluded (full years only).`,
-  );
-  return {
+  const lastMonth = result.monthly?.months[result.monthly.months.length - 1];
+  const notes = result.partialYears.map((p) => partialYearNote(p, file, Boolean(result.monthly), lastMonth));
+  const out: IngestExtract = {
     kind: "quickbooks_export",
     file,
     pnlLines: kind === "pnl" ? result.lines : [],
     bsLines: kind === "balance_sheet" ? result.lines : [],
     fullYears: result.fullYears,
+    partialYears: result.partialYears,
     notes,
   };
+  if (result.monthly) out.monthly = result.monthly;
+  if (result.balanceSheets) out.balanceSheets = result.balanceSheets;
+  const basis = detectReportBasis(grid);
+  if (basis) out.booksBasis = basis;
+  return out;
+}
+
+/** The month key of a period column, for callers that need to name it. */
+export function periodMonthKey(p: Period): string {
+  return monthKey(p.endYear, p.endMonth);
 }

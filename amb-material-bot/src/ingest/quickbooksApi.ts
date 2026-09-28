@@ -7,9 +7,10 @@
 // .qbo-tokens.json (git-ignored) after every refresh.
 
 import fs from "node:fs";
-import type { SourceExtract } from "../domain/financials.ts";
 import type { Period } from "../util/tables.ts";
 import { reportToLines, type ReportKind, type ReportRow } from "./reportTable.ts";
+import { partialYearNote } from "./quickbooksExport.ts";
+import type { IngestExtract } from "./extract.ts";
 
 const TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer";
 const AUTH_URL = "https://appcenter.intuit.com/connect/oauth2";
@@ -189,33 +190,43 @@ function iso(y: number, m: number, d: number): string {
 }
 
 /**
- * Pull the last `years` complete fiscal years. Monthly columns are requested
- * so non-December fiscal years aggregate correctly.
+ * Pull the last `years` complete fiscal years plus the months of the current
+ * one that have closed, so the model has YTD and LTM columns. Monthly columns
+ * are requested, which also makes non-December fiscal years aggregate
+ * correctly.
  */
-export async function pullQuickbooks(realmId: string, fyEndMonth: number, years = 3, today = new Date()): Promise<SourceExtract> {
+export async function pullQuickbooks(realmId: string, fyEndMonth: number, years = 3, today = new Date()): Promise<IngestExtract> {
   const y = today.getFullYear();
   const m = today.getMonth() + 1;
   // Last fiscal year that has fully closed (fiscal years are named for the year they end in).
   const lastFyEndYear = m > fyEndMonth ? y : y - 1;
-  const endDay = new Date(lastFyEndYear, fyEndMonth, 0).getDate();
-  const end = iso(lastFyEndYear, fyEndMonth, endDay);
   const startMonth = (fyEndMonth % 12) + 1;
   const startYear = lastFyEndYear - years + (startMonth === 1 ? 1 : 0);
   const start = iso(startYear, startMonth, 1);
+  // Through the end of last month: this month is still open.
+  const endYear = m === 1 ? y - 1 : y;
+  const endMonth = m === 1 ? 12 : m - 1;
+  const end = iso(endYear, endMonth, new Date(endYear, endMonth, 0).getDate());
 
   const kinds: [ReportKind, "ProfitAndLoss" | "BalanceSheet"][] = [
     ["pnl", "ProfitAndLoss"],
     ["balance_sheet", "BalanceSheet"],
   ];
-  const extract: SourceExtract = { kind: "quickbooks_api", file: `QuickBooks realm ${realmId}`, pnlLines: [], bsLines: [], fullYears: [] };
+  const file = `QuickBooks realm ${realmId}`;
+  const extract: IngestExtract = { kind: "quickbooks_api", file, pnlLines: [], bsLines: [], fullYears: [], notes: [] };
   for (const [kind, name] of kinds) {
     const report = await fetchReport(realmId, name, start, end);
     const result = reportToLines(qboRowsToReport(report), qboPeriods(report, fyEndMonth), kind, fyEndMonth);
     if (kind === "pnl") {
       extract.pnlLines = result.lines;
       extract.fullYears = result.fullYears;
+      extract.partialYears = result.partialYears;
+      if (result.monthly) extract.monthly = result.monthly;
+      const lastMonth = result.monthly?.months[result.monthly.months.length - 1];
+      extract.notes!.push(...result.partialYears.map((p) => partialYearNote(p, file, Boolean(result.monthly), lastMonth)));
     } else {
       extract.bsLines = result.lines;
+      if (result.balanceSheets) extract.balanceSheets = result.balanceSheets;
     }
   }
   return extract;

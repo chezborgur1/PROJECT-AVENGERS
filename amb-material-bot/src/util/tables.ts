@@ -40,6 +40,20 @@ function cellText(v: ExcelJS.CellValue): string {
   return String(v);
 }
 
+/**
+ * Read a CSV with a header row as records keyed by the lower-cased,
+ * underscore-joined header ("Start Date" -> "start_date"), so the intake
+ * files accept either spelling. Cells are trimmed; blank lines skipped.
+ */
+export function readCsvRecords(file: string): Record<string, string>[] {
+  const rows = parse(fs.readFileSync(file, "utf8"), { columns: (h: string[]) => h.map(headerKey), skip_empty_lines: true, trim: true, bom: true }) as Record<string, string>[];
+  return rows;
+}
+
+export function headerKey(header: string): string {
+  return header.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
 /** "$1,234.50" -> 1234.5, "(1,234)" -> -1234, "-" / "" -> undefined. */
 export function parseAmount(raw: string | undefined): number | undefined {
   if (raw === undefined) return undefined;
@@ -60,7 +74,61 @@ export function parseAmount(raw: string | undefined): number | undefined {
   return negative ? -n : n;
 }
 
+/** "82%" -> 0.82, "0.82" -> 0.82, "" -> undefined. A bare number above 1 with a percent unit is read as a percentage. */
+export function parsePercent(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const s = raw.trim();
+  if (!s) return undefined;
+  const n = parseAmount(s.replace(/%$/, ""));
+  if (n === undefined) return undefined;
+  return s.endsWith("%") || n > 1 ? n / 100 : n;
+}
+
+/** Yes / true / 1 / x -> true; blank or anything else -> false. */
+export function parseFlag(raw: string | undefined): boolean {
+  return /^(y|yes|true|1|x)$/i.test((raw ?? "").trim());
+}
+
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
+/**
+ * A date as "YYYY-MM-DD" from the forms exports use: ISO, US "M/D/YYYY",
+ * "Dec 31, 2025", "31 Dec 2025". A bare "YYYY-MM" or "Mon YYYY" is the
+ * last day of that month. Returns undefined for blanks and anything else.
+ */
+export function parseDateString(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  const t = raw.trim();
+  if (!t) return undefined;
+  let m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(t);
+  if (m) return iso(Number(m[1]), Number(m[2]), Number(m[3]));
+  m = /^(\d{4})-(\d{1,2})$/.exec(t);
+  if (m) return iso(Number(m[1]), Number(m[2]), 0);
+  m = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/.exec(t);
+  if (m) {
+    const y = Number(m[3]);
+    return iso(y < 100 ? 2000 + y : y, Number(m[1]), Number(m[2]));
+  }
+  const lower = t.toLowerCase();
+  const monthHit = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?/.exec(lower);
+  const yearHit = /(?<!\d)((?:19|20)\d{2})(?!\d)/.exec(lower);
+  if (monthHit && yearHit) {
+    // Whatever 1-2 digit number is left once the month and year are gone is the day.
+    const rest = lower.replace(yearHit[0], " ").replace(monthHit[0], " ");
+    const dayHit = /(?<!\d)(\d{1,2})(?!\d)/.exec(rest);
+    return iso(Number(yearHit[1]), MONTHS.indexOf(monthHit[1]!) + 1, dayHit ? Number(dayHit[1]) : 0);
+  }
+  return undefined;
+}
+
+/** Day 0 means the last day of the month. Invalid dates return undefined. */
+function iso(y: number, m: number, d: number): string | undefined {
+  if (m < 1 || m > 12) return undefined;
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const day = d === 0 ? last : d;
+  if (day < 1 || day > last) return undefined;
+  return `${y}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
 
 export interface Period {
   /** Fiscal year the period ends in. */

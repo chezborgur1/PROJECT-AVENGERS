@@ -6,7 +6,7 @@
 // the advisor can see what was guessed.
 
 import { isIsCategory as isIs } from "./financials.ts";
-import type { BsCategory, Category, IsCategory, RawLine } from "./financials.ts";
+import type { BsCategory, BsDetailLine, Category, DebtLikeTreatment, IsCategory, RawLine } from "./financials.ts";
 
 type Rule<C> = { test: RegExp; category: C };
 
@@ -163,4 +163,75 @@ export function mapBsLine(line: RawLine, overrides: MappingOverrides): MapResult
 
 export function addbackHint(account: string): string | undefined {
   return ADDBACK_HINTS.find((h) => h.test.test(account))?.reason;
+}
+
+// --- Balance-sheet detail and debt-like items (guide 5.6) -------------------
+
+// Sub-lines the NWC and debt-like schedules read out of the ten categories.
+// Order matters: "Accrued interest" must win over the general accrued rule.
+const BS_DETAIL_RULES: { test: RegExp; line: BsDetailLine; side: "asset" | "liability" | "either" }[] = [
+  { test: /unbilled|work in progress|\bwip\b|contract asset/i, line: "unbilled", side: "asset" },
+  { test: /prepaid/i, line: "prepaid", side: "asset" },
+  { test: /due (to|from) (shareholder|owner|officer|member|partner|related)|shareholder loan|loan (to|from) (shareholder|owner|officer|member|partner)|related[- ]party/i, line: "related_party_balances", side: "either" },
+  { test: /accrued interest|interest payable/i, line: "accrued_interest", side: "liability" },
+  { test: /income tax(es)? payable|federal tax(es)? payable|state tax(es)? payable|franchise tax payable/i, line: "income_tax_payable", side: "liability" },
+  { test: /deferred revenue|unearned|deferred income|prepaid (memberships?|agreements?|contracts?)/i, line: "deferred_revenue", side: "liability" },
+  { test: /customer deposit|deposits? (received|from customers)|retainers? (received|held)/i, line: "customer_deposits", side: "liability" },
+  { test: /credit card|\bvisa\b|mastercard|\bamex\b|american express/i, line: "credit_cards", side: "liability" },
+  { test: /current portion|current maturit/i, line: "current_portion_debt", side: "liability" },
+  { test: /accrued|payroll liabilit|wages payable|sales tax payable|401\s?k payable|garnishment/i, line: "accrued_liabilities", side: "liability" },
+];
+
+/** The guide 5.6 detail line a balance-sheet account belongs to, if any. */
+export function bsDetailLine(account: string, section: string): BsDetailLine | undefined {
+  const name = normaliseAccount(account);
+  const liability = /liabilit/i.test(section);
+  const asset = /asset/i.test(section);
+  for (const r of BS_DETAIL_RULES) {
+    if (!r.test.test(name)) continue;
+    if (r.side === "liability" && asset) continue;
+    if (r.side === "asset" && liability) continue;
+    return r.line;
+  }
+  return undefined;
+}
+
+export interface DebtLikeClassification {
+  treatment: DebtLikeTreatment;
+  /** Revolving balances are repaid at close rather than paid off against a letter. */
+  revolving: boolean;
+  note?: string;
+}
+
+/**
+ * How a liability account is treated in the debt-like schedule. Funded debt
+ * and credit cards are debt; deferred revenue and customer deposits stay in
+ * NWC (the AMB default) and appear as memo rows; accrued interest, income
+ * taxes and related-party balances are debt-like. Everything else in
+ * accrued liabilities is ordinary working capital.
+ */
+export function debtLikeTreatment(account: string, category: BsCategory, section: string): DebtLikeClassification | undefined {
+  const name = normaliseAccount(account);
+  if (category === "debt") {
+    const revolving = /credit card|line of credit|\bloc\b|revolv|\bvisa\b|mastercard|\bamex\b/i.test(name);
+    return { treatment: "debt", revolving, note: revolving ? "Repaid at or before closing" : undefined };
+  }
+  if (category !== "other_current_liabilities") return undefined;
+  const detail = bsDetailLine(account, section);
+  if (detail === "deferred_revenue" || detail === "customer_deposits") return { treatment: "nwc", revolving: false, note: "In NWC (AMB default)" };
+  if (detail === "accrued_interest" || detail === "income_tax_payable" || detail === "related_party_balances") return { treatment: "debt_like", revolving: false };
+  if (/bonus|unpaid payroll tax|payroll tax(es)? payable/i.test(name)) return { treatment: "debt_like", revolving: false };
+  return { treatment: "nwc", revolving: false };
+}
+
+// --- Revenue lines ------------------------------------------------------------
+
+/** Revenue accounts whose name says the revenue recurs (agreements, memberships, subscriptions). */
+export function isRecurringRevenueName(account: string): boolean {
+  return /maintenance (agreement|plan|contract)|membership|subscription|recurring|retainer|service (agreement|plan|contract)|monitoring/i.test(account);
+}
+
+/** Contra-revenue accounts: netted into revenue, never shown as a service line. */
+export function isContraRevenueName(account: string): boolean {
+  return /discount|refund|return|allowance|credit memo|write[- ]?off/i.test(account);
 }

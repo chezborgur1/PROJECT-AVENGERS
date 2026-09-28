@@ -2,7 +2,7 @@
 // period columns: QuickBooks exports (CSV/XLSX) and the QuickBooks Online
 // Reports API both reduce to this shape.
 
-import type { RawLine } from "../domain/financials.ts";
+import { monthKey, type MonthKey, type RawLine } from "../domain/financials.ts";
 import type { Period } from "../util/tables.ts";
 
 export interface ReportRow {
@@ -19,17 +19,40 @@ export type ReportKind = "pnl" | "balance_sheet";
 const PNL_COMPUTED = /^(total\b|gross profit|net (operating )?income|net other income|net ordinary income|net profit|net loss|operating income)/i;
 const BS_COMPUTED = /^(total\b)/i;
 
+/** One account with its amount in each single-month column the report carried. */
+export interface MonthlyAccount {
+  account: string;
+  section?: string;
+  amounts: Record<MonthKey, number>;
+}
+
+/** A dated balance-sheet column (month-end), with its lines. */
+export interface DatedBalanceSheet {
+  key: MonthKey;
+  lines: RawLine[];
+}
+
 export interface ReportLines {
   lines: RawLine[];
   /** Fiscal years where the report covers all 12 months (P&L) or has a year-end date (BS). */
   fullYears: number[];
   partialYears: { year: number; months: number }[];
+  /**
+   * P&L only: the account × month detail when every period column is a
+   * single month. Absent for annual or quarterly columns, which cannot be
+   * split into months without inventing a spread.
+   */
+  monthly?: { months: MonthKey[]; accounts: MonthlyAccount[] };
+  /** Balance sheet only: every dated column, ascending, year-ends included. */
+  balanceSheets?: DatedBalanceSheet[];
 }
 
 /**
- * Collapse report rows into per-fiscal-year lines. Monthly or quarterly
- * columns are summed into their fiscal year (P&L). For a balance sheet the
- * column dated at fiscal year end wins.
+ * Reduce report rows to per-fiscal-year lines, keeping the monthly detail
+ * behind them. Monthly or quarterly P&L columns are summed into their
+ * fiscal year; single-month columns are also kept as a monthly series. A
+ * balance sheet keeps every dated column; the one at fiscal year end is
+ * the annual line.
  */
 export function reportToLines(
   rows: ReportRow[],
@@ -40,17 +63,24 @@ export function reportToLines(
   const computed = kind === "pnl" ? PNL_COMPUTED : BS_COMPUTED;
   const monthsByYear = new Map<number, number>();
   const bsColumnByYear = new Map<number, number>();
+  const bsColumns: { key: MonthKey; col: number }[] = [];
+  const valueColumns = periods.map((p, col) => ({ p, col })).filter((x) => x.p);
+  const allSingleMonths = kind === "pnl" && valueColumns.length > 0 && valueColumns.every((x) => x.p!.months === 1);
+  const monthColumns = allSingleMonths ? valueColumns.map((x) => ({ key: monthKey(x.p!.endYear, x.p!.endMonth), col: x.col })) : [];
 
   periods.forEach((p, col) => {
     if (!p) return;
     if (kind === "pnl") {
       monthsByYear.set(p.fiscalYear, (monthsByYear.get(p.fiscalYear) ?? 0) + p.months);
-    } else if (p.endMonth === fyEndMonth) {
-      bsColumnByYear.set(p.fiscalYear, col);
+    } else {
+      bsColumns.push({ key: monthKey(p.endYear, p.endMonth), col });
+      if (p.endMonth === fyEndMonth) bsColumnByYear.set(p.fiscalYear, col);
     }
   });
 
   const lines: RawLine[] = [];
+  const accounts: MonthlyAccount[] = [];
+  const balanceSheets: DatedBalanceSheet[] = bsColumns.map((c) => ({ key: c.key, lines: [] }));
   for (const row of rows) {
     if (computed.test(row.label.trim())) continue;
     if (row.values.every((v) => v === undefined)) continue;
@@ -68,11 +98,24 @@ export function reportToLines(
         byYear.set(p.fiscalYear, (byYear.get(p.fiscalYear) ?? 0) + v);
       });
       for (const [year, amount] of byYear) lines.push({ account, section, year, amount });
+      if (allSingleMonths) {
+        const amounts: Record<MonthKey, number> = {};
+        for (const { key, col } of monthColumns) {
+          const v = row.values[col];
+          if (v !== undefined) amounts[key] = (amounts[key] ?? 0) + v;
+        }
+        accounts.push({ account, section, amounts });
+      }
     } else {
+      const bsSection = path.join(" > ");
       for (const [year, col] of bsColumnByYear) {
         const v = row.values[col];
-        if (v !== undefined) lines.push({ account, section: path.join(" > "), year, amount: v });
+        if (v !== undefined) lines.push({ account, section: bsSection, year, amount: v });
       }
+      bsColumns.forEach(({ col }, i) => {
+        const v = row.values[col];
+        if (v !== undefined) balanceSheets[i]!.lines.push({ account, section: bsSection, year: periods[col]!.fiscalYear, amount: v });
+      });
     }
   }
 
@@ -81,9 +124,15 @@ export function reportToLines(
     const partialYears = [...monthsByYear]
       .filter(([, m]) => m < 12)
       .map(([year, months]) => ({ year, months }));
-    return { lines, fullYears: fullYears.sort(), partialYears };
+    const result: ReportLines = { lines, fullYears: fullYears.sort(), partialYears };
+    if (allSingleMonths) {
+      const months = [...new Set(monthColumns.map((c) => c.key))].sort();
+      result.monthly = { months, accounts };
+    }
+    return result;
   }
-  return { lines, fullYears: [...bsColumnByYear.keys()].sort(), partialYears: [] };
+  const dated = balanceSheets.filter((b) => b.lines.length > 0).sort((a, b) => a.key.localeCompare(b.key));
+  return { lines, fullYears: [...bsColumnByYear.keys()].sort(), partialYears: [], balanceSheets: dated };
 }
 
 /**

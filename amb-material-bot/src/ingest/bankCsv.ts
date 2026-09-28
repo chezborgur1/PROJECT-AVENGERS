@@ -1,12 +1,13 @@
 // Bank transaction exports (CSV/XLSX): Date, Description, Amount — or
 // separate Debit / Credit columns. Used to cross-check reported revenue
-// against cash actually deposited, and as a revenue proxy when nothing
-// better exists.
+// against cash actually deposited (by month against the monthly grid, by
+// year otherwise), and as a revenue proxy when nothing better exists.
 
-import type { SourceExtract } from "../domain/financials.ts";
-import { parseAmount, readTable } from "../util/tables.ts";
+import { fiscalYearOf, monthKey, parseMonthKey, type MonthKey } from "../domain/financials.ts";
+import { parseAmount, parseDateString, readTable } from "../util/tables.ts";
+import type { IngestExtract } from "./extract.ts";
 
-const NON_OPERATING = /transfer|xfer|trnsfr|from (sav|chk)|loan (proceeds|advance)|sba|ppp|owner (contribution|deposit)|capital contribution|reversal|returned item/i;
+export const NON_OPERATING_DEPOSIT = /transfer|xfer|trnsfr|from (sav|chk)|loan (proceeds|advance)|sba|ppp|owner (contribution|deposit)|capital contribution|reversal|returned item/i;
 
 interface Columns {
   date: number;
@@ -33,48 +34,41 @@ export function looksLikeBankExport(grid: string[][]): boolean {
   return grid.slice(0, 10).some((row) => findColumns(row) !== undefined);
 }
 
-function parseDate(s: string): { y: number; m: number } | undefined {
-  const t = s.trim();
-  let m = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (m) return { y: Number(m[1]), m: Number(m[2]) };
-  m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
-  if (m) {
-    const y = Number(m[3]);
-    return { y: y < 100 ? 2000 + y : y, m: Number(m[1]) };
+/** Deposits by fiscal year from the monthly series, the legacy shape. */
+export function depositsByFiscalYear(byMonth: Record<MonthKey, { amount: number; excluded: number }>, fyEndMonth: number): Record<number, { amount: number; months: number }> {
+  const out: Record<number, { amount: number; months: number }> = {};
+  for (const [key, d] of Object.entries(byMonth)) {
+    const { year, month } = parseMonthKey(key);
+    const fy = fiscalYearOf(year, month, fyEndMonth);
+    const cur = out[fy] ?? { amount: 0, months: 0 };
+    out[fy] = { amount: cur.amount + d.amount, months: cur.months + 1 };
   }
-  return undefined;
+  return out;
 }
 
-export async function parseBankCsv(file: string, fyEndMonth: number): Promise<SourceExtract> {
+export async function parseBankCsv(file: string, fyEndMonth: number): Promise<IngestExtract> {
   const grid = await readTable(file);
   const headerIdx = grid.findIndex((row) => findColumns(row) !== undefined);
   if (headerIdx < 0) throw new Error(`No Date/Description/Amount header in ${file}`);
   const cols = findColumns(grid[headerIdx]!)!;
 
-  const byMonth = new Map<string, number>();
+  const byMonth: Record<MonthKey, { amount: number; excluded: number }> = {};
   let excluded = 0;
   for (const row of grid.slice(headerIdx + 1)) {
-    const d = parseDate(row[cols.date] ?? "");
-    if (!d) continue;
-    const credit =
-      cols.amount !== undefined ? parseAmount(row[cols.amount]) : parseAmount(row[cols.credit!]);
+    const date = parseDateString(row[cols.date] ?? "");
+    if (!date) continue;
+    const credit = cols.amount !== undefined ? parseAmount(row[cols.amount]) : parseAmount(row[cols.credit!]);
     if (credit === undefined || credit <= 0) continue;
-    const key = `${d.y}-${String(d.m).padStart(2, "0")}`;
-    byMonth.set(key, byMonth.get(key) ?? 0);
-    if (NON_OPERATING.test(row[cols.description] ?? "")) {
+    const key = monthKey(Number(date.slice(0, 4)), Number(date.slice(5, 7)));
+    const cur = (byMonth[key] ??= { amount: 0, excluded: 0 });
+    if (NON_OPERATING_DEPOSIT.test(row[cols.description] ?? "")) {
+      cur.excluded += credit;
       excluded += credit;
-      continue;
+    } else {
+      cur.amount += credit;
     }
-    byMonth.set(key, byMonth.get(key)! + credit);
   }
 
-  const deposits: Record<number, { amount: number; months: number }> = {};
-  for (const [key, amount] of byMonth) {
-    const [y, m] = key.split("-").map(Number) as [number, number];
-    const fy = m <= fyEndMonth ? y : y + 1;
-    const cur = deposits[fy] ?? { amount: 0, months: 0 };
-    deposits[fy] = { amount: cur.amount + amount, months: cur.months + 1 };
-  }
   const name = file.split("/").pop();
   return {
     kind: "bank_statement",
@@ -82,7 +76,8 @@ export async function parseBankCsv(file: string, fyEndMonth: number): Promise<So
     pnlLines: [],
     bsLines: [],
     fullYears: [],
-    deposits,
+    deposits: depositsByFiscalYear(byMonth, fyEndMonth),
+    depositsByMonth: byMonth,
     notes: excluded
       ? [`${name}: $${Math.round(excluded).toLocaleString()} of transfers / loan proceeds / owner contributions excluded from deposits.`]
       : [],
