@@ -85,8 +85,10 @@ function seriesXml(p: ChartPlacement, s: ChartSeriesRef, i: number): string {
   }
   // Stacked mix segments are parted by a white hairline; single and diverging bars have no outline, so a zero segment is invisible.
   const outline = p.grouping === "stacked" && p.separators !== false ? line(CHART_COLOR.separator, 0.5) : noLine;
+  // Excel refuses outside-end labels on a stacked bar (it allows ctr, inEnd and inBase) and reports the file as corrupt.
+  const position = p.grouping === "stacked" ? "ctr" : "outEnd";
   const labels = p.labelFormat
-    ? `<c:dLbls><c:numFmt formatCode="${esc(p.labelFormat)}" sourceLinked="0"/><c:spPr><a:noFill/>${noLine}</c:spPr>${text(CHART_COLOR.label)}<c:dLblPos val="outEnd"/><c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbls>`
+    ? `<c:dLbls><c:numFmt formatCode="${esc(p.labelFormat)}" sourceLinked="0"/><c:spPr><a:noFill/>${noLine}</c:spPr>${text(CHART_COLOR.label)}<c:dLblPos val="${position}"/><c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbls>`
     : "";
   return `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${tx}<c:spPr>${solid(s.color)}${outline}</c:spPr><c:invertIfNegative val="0"/>${labels}${cat}${val}</c:ser>`;
 }

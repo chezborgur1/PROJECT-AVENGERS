@@ -11,3 +11,7 @@ deals/
 requests/live-*.csv
 
 *.log
+
+# Open XML SDK validator build output (tools/openxml-validate).
+tools/*/bin/
+tools/*/obj/

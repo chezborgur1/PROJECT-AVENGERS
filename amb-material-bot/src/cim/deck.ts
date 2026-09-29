@@ -12,6 +12,7 @@ import { placeholdersIn } from "./copy.ts";
 import { Deck, renderPage } from "./design.ts";
 import type { DeckPlan, PlanOptions } from "./planner.ts";
 import { planDeck } from "./planner.ts";
+import { officeDefects } from "./ooxml.ts";
 import { renderOutputs } from "./render.ts";
 
 export interface CimBuildOptions extends PlanOptions {
@@ -96,6 +97,9 @@ export async function buildCim(input: CimInput, pptxPath: string, opts: CimBuild
   const buf = await renderDeck(ctx, plan);
   const unresolved = await unresolvedText(buf);
   if (unresolved.length) throw new Error(`CIM not written: it prints unresolved values (${unresolved.slice(0, 3).join("; ")})`);
+  // LibreOffice opens markup PowerPoint refuses, so the PDF proves nothing here: the deck itself is checked.
+  const defects = await officeDefects(buf);
+  if (defects.length) throw new Error(`CIM not written: PowerPoint would offer to repair it (${defects.slice(0, 3).join("; ")})`);
   fs.mkdirSync(path.dirname(pptxPath), { recursive: true });
   fs.writeFileSync(pptxPath, buf);
   const rendered = await renderOutputs(pptxPath, { pdf: opts.pdf ?? false, png: opts.png ?? false });

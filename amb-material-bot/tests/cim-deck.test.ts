@@ -16,6 +16,7 @@ import { buildContext } from "../src/cim/context.ts";
 import { buildCim } from "../src/cim/deck.ts";
 import type { Block } from "../src/cim/design.ts";
 import { draftCimCopy } from "../src/cim/narrative.ts";
+import { officeDefects } from "../src/cim/ooxml.ts";
 import type { DeckPlan, PlanOptions } from "../src/cim/planner.ts";
 import { planDeck, TARGETS } from "../src/cim/planner.ts";
 import type { FinancialDataset } from "../src/domain/financials.ts";
@@ -217,6 +218,8 @@ describe("buildCim", () => {
     // Every placeholder the deck prints is listed for the advisor.
     expect(res.openQuestions.length).toBeGreaterThan(0);
     expect(res.openQuestions.every((q) => q.trim().length > 0)).toBe(true);
+    // Nothing PowerPoint would offer to repair (src/cim/ooxml.ts; tests/cim-office.test.ts holds each fault to it).
+    expect(await officeDefects(fs.readFileSync(res.pptx))).toEqual([]);
     if (fs.existsSync(VALIDATE)) {
       const result = execFileSync("python3", [VALIDATE, res.pptx], { encoding: "utf8" });
       expect(result).toMatch(/PASSED/);

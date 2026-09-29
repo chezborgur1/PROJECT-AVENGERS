@@ -24,6 +24,7 @@ import type { ModelOutput } from "./types.ts";
 import { planAssumptions, type TabContext } from "./workbook/assumptionsTab.ts";
 import { checkFormulas, planChecks } from "./workbook/checksTab.ts";
 import { injectCharts } from "./charts.ts";
+import { conformPackage } from "./ooxml.ts";
 import { planChartTab } from "./workbook/chartTabs.ts";
 import { customerYears, planDatabook, planDivider, planMapping, planMonthly, planRawBank, planRawBs, planRawCustomers, planRawPayroll, planRawPnl, planRawPnlAnnual } from "./workbook/data.ts";
 import { masterToggleRef, planContents, planCover, planSummary } from "./workbook/front.ts";
@@ -263,7 +264,7 @@ export async function renderWorkbook(plan: WorkbookPlan, file: string, opts: { c
         margins: { ...MARGINS },
         horizontalCentered: true,
       };
-      for (const r of p.print.rowBreaks) ws.getRow(r).addPageBreak();
+      for (const r of p.print.rowBreaks) ws.getRow(r).addPageBreak(0, LAST_COLUMN + 1);
     }
     if (p.header || p.footer) ws.headerFooter = { oddHeader: p.header ?? "", oddFooter: p.footer ?? "" };
     for (const img of p.images) {
@@ -272,7 +273,8 @@ export async function renderWorkbook(plan: WorkbookPlan, file: string, opts: { c
         id = wb.addImage({ filename: img.file, extension: "png" });
         imageIds.set(img.file, id);
       }
-      ws.addImage(id, { tl: img.tl, ext: img.ext, editAs: "oneCell" });
+      // tl + ext is a oneCellAnchor: it moves with its cell and keeps its size, so it takes no editAs.
+      ws.addImage(id, { tl: img.tl, ext: img.ext });
     }
     for (const n of p.names) wb.definedNames.add(`'${p.name}'!${n.ref}`, n.name);
     if (p.autoFilter) ws.autoFilter = p.autoFilter;
@@ -284,6 +286,12 @@ export async function renderWorkbook(plan: WorkbookPlan, file: string, opts: { c
 
 /** ExcelJS declares PaperSize as a const enum, which erasable-syntax TypeScript cannot import; 1 is Letter. */
 const LETTER = 1 as ExcelJS.PageSetup["paperSize"];
+
+/**
+ * A row break runs to the last column, index 16383 (XFD), as in Excel's own
+ * files. Left to its default, ExcelJS writes max="16838", a typo for it.
+ */
+const LAST_COLUMN = 16383;
 
 /**
  * The font colour a cell renders in: its own, its named style's, else its
@@ -418,6 +426,8 @@ function colName(n: number): string {
  * guide 5.2), the chart tabs' native charts (5.12), and the Normal style's font. ExcelJS always writes Calibri 11
  * there; it becomes Arial 10, whose digit width is the same seven pixels, so
  * column widths are unchanged and Arial is the file's only font name (5.8).
+ * Then the parts ExcelJS writes out of Excel's schema order are put back in
+ * order (`conformPackage`), without which Excel reports the file as corrupt.
  */
 async function finishPackage(file: string, plan: WorkbookPlan): Promise<void> {
   const JSZip = (await import("jszip")).default;
@@ -442,5 +452,7 @@ async function finishPackage(file: string, plan: WorkbookPlan): Promise<void> {
     zip.file(partName, out);
   }
   await injectCharts(zip, plan.plans.map((p, i) => ({ part: `xl/worksheets/sheet${i + 1}.xml`, placements: p.charts })));
+  // Last: put what ExcelJS writes out of Excel's order back in order, or Excel offers to repair the file (ooxml.ts).
+  await conformPackage(zip);
   fs.writeFileSync(file, await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }));
 }

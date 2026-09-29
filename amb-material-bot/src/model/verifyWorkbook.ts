@@ -23,6 +23,7 @@ import FormulaParser from "fast-formula-parser";
 import JSZip from "jszip";
 import { CHART_COLOR } from "./chartData.ts";
 import { readCharts } from "./charts.ts";
+import { packageIssues } from "./ooxml.ts";
 import { roundTo } from "./deal.ts";
 import { excelSerial } from "./periods.ts";
 import { clippedTexts, expectations, hiddenSpills } from "./sheet.ts";
@@ -515,6 +516,7 @@ export async function verifyWorkbook(file: string, model: ModelOutput, options?:
   lintTypedCopies(workbook, outputTabs, lint);
   await lintConditionalFormats(file, lint);
   await lintCharts(file, plan, { workbook, value }, lint);
+  await lintPackage(file, lint);
   return { formulas, compared, errors, mismatches, lint, ok: errors.length === 0 && mismatches.length === 0 && lint.length === 0 };
 }
 
@@ -557,6 +559,12 @@ function lintTypedCopies(workbook: ExcelJS.Workbook, outputTabs: Set<string>, li
       });
     });
   });
+}
+
+/** The package against the Excel repair triggers the ISO schemas and LibreOffice let through (ooxml.ts). */
+async function lintPackage(file: string, lint: VerifyResult["lint"]): Promise<void> {
+  const zip = await JSZip.loadAsync(fs.readFileSync(file));
+  for (const issue of await packageIssues(zip)) lint.push({ cell: "(package)", issue: `${issue}; Excel would report the file as corrupt` });
 }
 
 /** Every conditional format must carry a style: an empty dxf draws nothing (the sensitivity frontier once lost its box this way). */

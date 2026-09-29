@@ -16,6 +16,7 @@ import path from "node:path";
 import pptxgenModule from "pptxgenjs";
 import JSZip from "jszip";
 import { EN_DASH } from "../util/format.ts";
+import { normalizePackage } from "./ooxml.ts";
 
 // pptxgenjs ships CommonJS-style typings, so under NodeNext the default
 // import is typed as the module object. At runtime the ESM build's default
@@ -1118,13 +1119,14 @@ export class Deck {
     this.chartPatches.push(patch);
   }
 
+  /** The deck as PowerPoint opens it: charts patched, then the markup pptxgenjs writes and PowerPoint refuses rewritten (ooxml.ts). */
   async write(): Promise<Buffer> {
-    const buf = (await this.pptx.write({ outputType: "nodebuffer" })) as Buffer;
-    return this.patchCharts(buf);
+    const zip = await JSZip.loadAsync((await this.pptx.write({ outputType: "nodebuffer" })) as Buffer);
+    await this.patchCharts(zip);
+    return normalizePackage(zip);
   }
 
-  private async patchCharts(buf: Buffer): Promise<Buffer> {
-    const zip = await JSZip.loadAsync(buf);
+  private async patchCharts(zip: JSZip): Promise<void> {
     // pptxgenjs numbers chart files from a counter shared by every deck in the process, so a second deck's first chart is not
     // chart1.xml: the files are matched to the patches by rank.
     const chartNo = (f: string) => Number(/chart(\d+)\.xml$/.exec(f)![1]);
@@ -1168,7 +1170,6 @@ export class Deck {
       xml = xml.replace(/(<c:catAx>[\s\S]*?<c:txPr>\s*)<a:bodyPr\/>/, `$1<a:bodyPr rot="${cp.noWrap ? 600 : 0}" vert="horz"/>`);
       zip.file(f, xml);
     }
-    return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
   }
 }
 
@@ -1618,6 +1619,8 @@ export function chart(deck: Deck, slide: Slide, x: number, y: number, w: number,
         series: spec.series.map((_, i) => ({ labelColor: stacked ? labelOn(colors[i % colors.length]!) : C.ink, whiteOutline: stacked })),
       });
       const top = stacked ? undefined : (spec.maxVal ?? Math.ceil(maxOf(spec.series.flatMap((s) => s.values)) * 1.2));
+      // PowerPoint repairs a stacked bar whose labels sit outside the end (pptxgenjs lets it through): a stack takes them inside.
+      const pos = spec.labelPos ?? (stacked ? "ctr" : "outEnd");
       slide.addChart(
         "bar",
         spec.series.map((s) => ({ name: s.name, labels: nb(s.labels), values: s.values })),
@@ -1626,7 +1629,7 @@ export function chart(deck: Deck, slide: Slide, x: number, y: number, w: number,
           x, y, w, h,
           barGrouping: spec.grouping,
           chartColors: colors,
-          dataLabelPosition: spec.labelPos ?? (stacked ? "ctr" : "outEnd"),
+          dataLabelPosition: stacked && pos === "outEnd" ? "inEnd" : pos,
           dataLabelFormatCode: fmt,
           showLegend: legend,
           legendPos: "t",
@@ -1688,6 +1691,8 @@ export function chart(deck: Deck, slide: Slide, x: number, y: number, w: number,
     }
     case "diverging": {
       deck.noteChart({ legendFraction: legendFraction(["Wins", "Losses"], w, h), series: [{ labelColor: C.ink }, { labelColor: C.ink }] });
+      // Wins above the axis and losses below share one slot: a clustered pair overlapped in full draws as the stack would and
+      // may carry its figures outside the bar ends, which PowerPoint refuses on a stacked bar (it offers to repair the file).
       slide.addChart(
         "bar",
         [
@@ -1697,7 +1702,8 @@ export function chart(deck: Deck, slide: Slide, x: number, y: number, w: number,
         {
           ...chartBase,
           x, y, w, h,
-          barGrouping: "stacked",
+          barGrouping: "clustered",
+          barOverlapPct: 100,
           chartColors: [C.maroon, C.slate],
           dataLabelPosition: "outEnd",
           dataLabelFormatCode: '#,##0;#,##0;""',
