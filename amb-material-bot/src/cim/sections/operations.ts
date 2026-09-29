@@ -192,7 +192,7 @@ function fallback51(ctx: CimContext): NonNullable<CimCopy["s5_1"]> {
     const role = m ? i!.workforce.composition.find((c) => c.role.toLowerCase() === m.role.toLowerCase())?.role : undefined;
     return {
       observations: [
-        { row: "org.total", lead: "{{staff.total}} employees besides the owner {{fn.mgmt}},", body: `with payroll excluding the owner at {{payrollPct.latest}} of revenue in ${ctx.latest.label}.` },
+        { row: "org.total", lead: "The Company employs {{staff.total}} people besides the owner {{fn.mgmt}},", body: `with payroll excluding the owner at {{payrollPct.latest}} of revenue in ${ctx.latest.label}.` },
         ...(m && role
           ? [{ row: `org.${role}`, lead: `${m.name}, ${m.role.toLowerCase()}${m.since ? ` with the Company since ${m.since.slice(0, 4)}` : ""},`, body: `runs ${m.responsibilities.join(" and ").toLowerCase()}${m.postCloseIntent === "stays" ? " and is expected to stay after closing" : ""} (1).` }]
           : []),
@@ -201,7 +201,7 @@ function fallback51(ctx: CimContext): NonNullable<CimCopy["s5_1"]> {
   }
   return {
     observations: [
-      { row: "org.total", lead: `{{hc.total}} employees besides the owner`, body: `at ${monthLabel(ctx.latest.end)}, {{hc.field}} of them in field roles.` },
+      { row: "org.total", lead: `The Company employs {{hc.total}} people besides the owner`, body: `at ${monthLabel(ctx.latest.end)}, {{hc.field}} of them in field roles.` },
       { row: "dept.total", lead: `Payroll excluding the owner was {{payrollPct.latest}} of revenue`, body: `in ${ctx.latest.label}; compensation by department is in the table.` },
     ],
   };
@@ -272,7 +272,7 @@ function fallback53(ctx: CimContext): NonNullable<CimCopy["s5_2"]> {
   const fl = ctx.fy[ctx.fy.length - 1]!;
   return {
     observations: [
-      { row: "hr.departures", lead: `{{hc.departures.${fl.key}}} departures in ${fl.label}`, body: `against {{hc.hires.${fl.key}}} hires; ${ctx.brief.t("hc.departedOver2Years")} of all departures came after more than two years.` },
+      { row: "hr.departures", lead: `In ${fl.label}, {{hc.departures.${fl.key}}} departures`, body: `against {{hc.hires.${fl.key}}} hires; of all departures, ${ctx.brief.t("hc.departedOver2Years")} came after more than two years.` },
       { row: "hr.end", lead: `Year-end headcount of {{hc.end.${fl.key}}}`, body: `excludes the owner; the register's hire dates give each employee's tenure.` },
     ],
   };

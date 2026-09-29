@@ -4,14 +4,15 @@
 
 import { ADJUSTMENT_CATEGORY_LABELS, ADJUSTMENT_TIER_LABELS, IS_LABELS, monthPeriod, monthRange, type Adjustment, type IsCategory } from "../../domain/financials.ts";
 import { activeCount } from "./customersTabs.ts";
-import { addr, colLetter, rowOf, SheetBuilder, wrappedLines } from "../sheet.ts";
-import { COLOR, FMT, WIDTH } from "../styles.ts";
+import { addr, colLetter, mergedUnits, rowOf, SheetBuilder, wrappedLines } from "../sheet.ts";
+import { COLOR, FMT, ROW_HEIGHT, WIDTH } from "../styles.ts";
 import type { Ladder, ModelOutput, PeriodValues } from "../types.ts";
 import { A, type TabContext } from "./assumptionsTab.ts";
 import { contraAccounts, DATABOOK_COL, DATABOOK_FIRST_ROW, MONTH_START, RAW_CUSTOMER_COLS, rawPayrollColsFor, deltaValues, pnlRows, priorColumn, stylePnlRow, valueStyle, writeDeltas, type PnlRowSpec, type PnlValues } from "./data.ts";
 import {
   ADJ_BASIS_COL,
   ADJ_CATEGORY_COL,
+  ADJ_PERIOD_START,
   ADJ_REF_COL,
   ADJ_STATUS_COL,
   ADJ_TIER_COL,
@@ -644,8 +645,11 @@ function scheduleSum(periodCol: number, match: NonNullable<LadderSource["match"]
   return `SUMIFS(${schedCol(periodCol)},${schedCol(ADJ_TIER_COL)},"${ADJUSTMENT_TIER_LABELS[match.tier]}"${category},${schedCol(ADJ_STATUS_COL)},"Accepted")`;
 }
 
-/** A cell of schedule row `i` (resolved once the Adjustments tab has laid out its rows). */
-const schedRowCell = (i: number, col: number, absCol = false) => `${S("adjustments")}${absCol ? "$" : ""}${colLetter(col)}@{adjustments.row${i}}`;
+/**
+ * A cell of schedule row `i` (resolved once the Adjustments tab has laid out its rows): the text columns on the schedule row,
+ * the period and month figures on the row's line in the figures block (verification F24).
+ */
+const schedRowCell = (i: number, col: number, absCol = false) => `${S("adjustments")}${absCol ? "$" : ""}${colLetter(col)}@{adjustments.${col >= ADJ_PERIOD_START ? "fig" : "row"}${i}}`;
 
 /** A ladder line's amount in one schedule column: a fixed rung's accepted rows by tier and category, else its linked rows gated on status (memo rows are not gated). */
 function lineFormula(source: LadderSource, col: number): string {
@@ -667,7 +671,7 @@ function labelFormula(spec: LadderRow, model: ModelOutput): string | undefined {
   const text = schedRowCell(i, 3, true);
   if (spec.tier === "memo") return `${text}&" "&${ref(i)}`;
   const fy = adjustmentsLayout(model).cols.filter((c) => c.column.ref.kind === "fiscal_year");
-  const sum = `SUM(${schedRowCell(i, fy[0]!.col, true)}:$${colLetter(fy[fy.length - 1]!.col)}@{adjustments.row${i}})`;
+  const sum = `SUM(${schedRowCell(i, fy[0]!.col, true)}:$${colLetter(fy[fy.length - 1]!.col)}@{adjustments.fig${i}})`;
   return `IF(${sum}<0,"(-) ","(+) ")&${text}&" "&${ref(i)}`;
 }
 
@@ -829,8 +833,8 @@ export function planLadder(ctx: TabContext): SheetBuilder {
  */
 function writeBasisNotes(b: SheetBuilder, head: number, rows: { x: ModelOutput["adjustments"][number]; i: number }[], l: PeriodLayout): void {
   b.text(head, 2, "Basis of each adjustment (linked from the Adjustments schedule)", { style: "subsection", align: { horizontal: "left", wrap: false } });
-  let units = 0;
-  for (let c = l.firstCol; c <= l.lastValueCol; c++) units += b.plan.widths.get(c) ?? WIDTH.value;
+  // The basis is merged across the value columns: each adds its width × 7 + 5 pixels (mergedUnits), not its width alone.
+  const units = mergedUnits(b.plan, l.firstCol, l.lastValueCol);
   rows.forEach(({ x, i }, k) => {
     const r = head + 1 + k;
     const label = `[${x.row.ref}] ${x.row.description}`;
@@ -838,7 +842,9 @@ function writeBasisNotes(b: SheetBuilder, head: number, rows: { x: ModelOutput["
     b.formula(r, l.firstCol, schedRowCell(i, ADJ_BASIS_COL, true), { style: "note", role: "text", expect: x.row.basis, label: `basis ${x.row.ref}` });
     b.plan.merges.push(`${addr(r, l.firstCol)}:${addr(r, l.lastValueCol)}`);
     const lines = Math.max(wrappedLines(label, LADDER_LABEL_WIDTH), wrappedLines(x.row.basis, units));
-    if (lines > 1) b.height(r, lines * 11.5 + 2);
+    // Every note row carries its height: LibreOffice sizes an unfixed row to the merged text at its own, narrower row-fit
+    // metric, so a basis that just fits one line printed with half an empty line under it (verification F8).
+    b.height(r, lines > 1 ? lines * 11.5 + 2 : ROW_HEIGHT.body);
   });
 }
 
@@ -953,11 +959,17 @@ export function planAdjustments(ctx: TabContext): SheetBuilder {
   // The ladder links to each schedule row by its position here.
   adj.forEach((_, i) => b.row(`row${i}`, first + i));
   const noteRow = last + 2;
-  // The period pages print from a compact copy of the schedule's figures, one line per adjustment: the schedule rows grow to
-  // fit their Basis text, and printed beside the periods those heights stretched every period page (guide 5.11).
-  const compactHead = noteRow + 2;
-  const compactFirst = compactHead + 1;
-  const tierFirst = compactFirst + adj.length + 2;
+  // The schedule's figures (the blue period inputs, their formulas and the monthly spread) sit in a block of their own under the
+  // note, one line per row with the row's Ref, Adjustment, Tier, Category and Status linked beside them: the schedule rows grow to
+  // their Basis text, and figures on those rows printed a page of half-empty lines (C37). The block is the only copy of the
+  // figures, and it prints (verification F24).
+  const figHead = noteRow + 2;
+  const figFirst = figHead + 1;
+  const figLast = figFirst + adj.length - 1;
+  b.row("figFirst", figFirst);
+  b.row("figLast", figLast);
+  adj.forEach((_, i) => b.row(`fig${i}`, figFirst + i));
+  const tierFirst = figLast + 3;
   const tierKeys = ["tier_definitional", "tier_normalization", "tier_s1", "tier_s2", "tier_s3", "tier_pro_forma", "tier_memo"] as const;
   tierKeys.forEach((k, i) => b.row(k, tierFirst + i));
   b.row("tierFirst", tierFirst);
@@ -975,7 +987,7 @@ export function planAdjustments(ctx: TabContext): SheetBuilder {
   const statutoryTaxes = (row: Adjustment, fy: number, col: number): string | undefined => {
     const salary = row.statutoryTaxesOn ? adj.findIndex((y) => y.row.ref === row.statutoryTaxesOn) : -1;
     if (salary < 0) return undefined;
-    const pay = `${addr(first + salary, col)}*${K}`;
+    const pay = `${addr(figFirst + salary, col)}*${K}`;
     return `ROUND(MIN(${pay},${A(`taxSsBase_${fy}`)})*${A("taxSocialSecurity")}+${pay}*${A("taxMedicare")}+MIN(${pay},${A("taxFutaBase")})*${A("taxFuta")},0)/${K}`;
   };
 
@@ -998,19 +1010,27 @@ export function planAdjustments(ctx: TabContext): SheetBuilder {
     b.formula(r, 10, `IF(${addr(r, ADJ_STATUS_COL)}="Accepted","Yes","No")`, { expect: row.status === "accepted" ? "Yes" : "No", label: `in CIM ${row.ref}`, align: { horizontal: "center" } });
     b.text(r, 11, row.pnlLine ? IS_LABELS[row.pnlLine] : "", { align: { horizontal: "center" } });
     b.text(r, 12, row.pfMethod ?? "", { align: { wrap: true, vertical: "top" } });
+    // The row's line in the figures block: its Ref, Adjustment, Tier, Category and Status linked, so the block reads on its own
+    // and the tier totals and the ladder select its figures by the same columns.
+    const fr = figFirst + idx;
+    b.formula(fr, ADJ_REF_COL, addr(r, ADJ_REF_COL), { expect: `[${row.ref}]`, label: `figures ref ${row.ref}`, align: { horizontal: "left" } });
+    b.formula(fr, 3, addr(r, 3), { expect: row.description, label: `figures label ${row.ref}`, align: { horizontal: "left", wrap: true } });
+    b.formula(fr, ADJ_TIER_COL, addr(r, ADJ_TIER_COL), { expect: ADJUSTMENT_TIER_LABELS[row.tier], label: `figures tier ${row.ref}` });
+    b.formula(fr, ADJ_CATEGORY_COL, addr(r, ADJ_CATEGORY_COL), { expect: ADJUSTMENT_CATEGORY_LABELS[row.category], label: `figures category ${row.ref}` });
+    b.formula(fr, ADJ_STATUS_COL, addr(r, ADJ_STATUS_COL), { expect: STATUS_LABEL[row.status], label: `figures status ${row.ref}`, align: { horizontal: "center" } });
     // Months exactly when the engine has them (adjustmentInWindow): a row without months is prorated from its fiscal years.
     const hasMonths = n > 0 && !!row.byMonth;
     const isPf = row.tier === "pro_forma";
     // An add-back tied to months by proportion: its fiscal years (and a YTD stub amount) are the blue inputs, each month a formula.
-    const allocation = hasMonths ? allocationFormulas(row, model, r, l) : undefined;
+    const allocation = hasMonths ? allocationFormulas(row, model, fr, l) : undefined;
     // Month cells.
     if (hasMonths) {
       months.forEach((m, i) => {
         const col = monthStart + i;
         const link = allocation?.[i] ?? monthLink(row, model, i);
         const engine = amountForMonth(row, model, i);
-        if (link?.f) b.formula(r, col, link.f, { fmt: FMT.body, expect: engine / K, label: `${row.ref} ${m}` });
-        else b.num(r, col, engine / K, { fmt: FMT.body });
+        if (link?.f) b.formula(fr, col, link.f, { fmt: FMT.body, expect: engine / K, label: `${row.ref} ${m}` });
+        else b.num(fr, col, engine / K, { fmt: FMT.body });
       });
     } else if (n > 0 && !isPf) {
       // A row without months spreads each fiscal year evenly over its months, as the engine prorates it, so the tier totals by month hold it.
@@ -1019,8 +1039,8 @@ export function planAdjustments(ctx: TabContext): SheetBuilder {
         const fy = model.monthly!.months[i]!.fiscalYear;
         const fyCol = fyCols.find((c) => c.column.fiscalYear === fy);
         const engine = (row.byFiscalYear[fy] ?? 0) / 12 / K;
-        if (fyCol) b.formula(r, col, `${addr(r, fyCol.col)}/12`, { fmt: FMT.body, expect: engine, label: `${row.ref} ${m} (prorated)` });
-        else b.num(r, col, engine, { fmt: FMT.body });
+        if (fyCol) b.formula(fr, col, `${addr(fr, fyCol.col)}/12`, { fmt: FMT.body, expect: engine, label: `${row.ref} ${m} (prorated)` });
+        else b.num(fr, col, engine, { fmt: FMT.body });
       });
     }
     // Period cells.
@@ -1029,54 +1049,47 @@ export function planAdjustments(ctx: TabContext): SheetBuilder {
       const isPfColumn = column.ref.kind === "pf";
       const engine = (x.byColumn[key] ?? 0) / K;
       if (isPf && !isPfColumn) {
-        b.na(r, col, "n.a.", { style: "line" });
+        b.na(fr, col, "n.a.", { style: "line" });
         continue;
       }
       const taxes = column.ref.kind === "fiscal_year" ? statutoryTaxes(row, column.fiscalYear!, col) : undefined;
       if (taxes && (allocation || !hasMonths)) {
-        b.formula(r, col, taxes, { fmt: FMT.body, expect: engine, label: `${row.ref} ${column.label} (statutory)` });
+        b.formula(fr, col, taxes, { fmt: FMT.body, expect: engine, label: `${row.ref} ${column.label} (statutory)` });
         continue;
       }
       if (allocation && (column.ref.kind === "fiscal_year" || (column.ref.kind === "ytd" && !column.priorYear && row.stub === "amount"))) {
         // The inputs the month formulas scale: each fiscal year, and the YTD amount the advisor gave for the stub.
-        b.num(r, col, engine, { fmt: FMT.body });
+        b.num(fr, col, engine, { fmt: FMT.body });
         continue;
       }
       // A fiscal year the grid does not cover has no month cells: its amount is typed from the annual source, as in annual-only mode.
       if (hasMonths && !offGrid(model, column)) {
-        const f = sumifsFormula({ valuesRow: monthRowRange(r), monthsRow: monthHeaderRow, startCell: addr(helpers.start, col, { row: true }), endCell: addr(helpers.end, col, { row: true }) });
-        b.formula(r, col, f, { fmt: FMT.body, expect: engine, label: `${row.ref} ${column.label}` });
+        const f = sumifsFormula({ valuesRow: monthRowRange(fr), monthsRow: monthHeaderRow, startCell: addr(helpers.start, col, { row: true }), endCell: addr(helpers.end, col, { row: true }) });
+        b.formula(fr, col, f, { fmt: FMT.body, expect: engine, label: `${row.ref} ${column.label}` });
         continue;
       }
       if (column.ref.kind === "fiscal_year") {
-        b.num(r, col, (row.byFiscalYear[column.fiscalYear!] ?? 0) / K, { fmt: FMT.body });
+        b.num(fr, col, (row.byFiscalYear[column.fiscalYear!] ?? 0) / K, { fmt: FMT.body });
         continue;
       }
       if (isPf && isPfColumn) {
-        b.num(r, col, (latestFy !== undefined ? (row.byFiscalYear[latestFy] ?? 0) : 0) / K, { fmt: FMT.body });
+        b.num(fr, col, (latestFy !== undefined ? (row.byFiscalYear[latestFy] ?? 0) : 0) / K, { fmt: FMT.body });
         continue;
       }
       // YTD, LTM and PF for rows without months: fiscal-year amounts prorated by months in the window.
       const f = prorationFormula(
-        fyCols.map((fc) => ({ amountCell: addr(r, fc.col), startCell: addr(helpers.start, fc.col, { row: true }), endCell: addr(helpers.end, fc.col, { row: true }) })),
+        fyCols.map((fc) => ({ amountCell: addr(fr, fc.col), startCell: addr(helpers.start, fc.col, { row: true }), endCell: addr(helpers.end, fc.col, { row: true }) })),
         addr(helpers.start, col, { row: true }),
         addr(helpers.end, col, { row: true }),
       );
-      b.formula(r, col, f, { fmt: FMT.body, expect: engine, label: `${row.ref} ${column.label} (prorated)` });
+      b.formula(fr, col, f, { fmt: FMT.body, expect: engine, label: `${row.ref} ${column.label} (prorated)` });
     }
-    if (idx > 0 && adj[idx - 1]!.row.tier !== row.tier) for (let c = 2; c <= lastCol; c++) b.cell(r, c, { border: { top: "thin" } });
-
-    // The compact line for print: Ref and Adjustment (the repeated title columns) and each period figure, linked.
-    const cr = compactFirst + idx;
-    b.formula(cr, 2, addr(r, ADJ_REF_COL), { expect: `[${row.ref}]`, label: `print ref ${row.ref}`, align: { horizontal: "left" } });
-    b.formula(cr, 3, addr(r, 3), { expect: row.description, label: `print label ${row.ref}`, align: { horizontal: "left", wrap: true } });
-    for (const { column, col } of l.cols) {
-      if (isPf && column.ref.kind !== "pf") b.na(cr, col, "n.a.", { style: "line" });
-      else b.formula(cr, col, addr(r, col), { fmt: FMT.body, expect: (x.byColumn[column.key] ?? 0) / K, label: `print ${row.ref} ${column.label}` });
+    if (idx > 0 && adj[idx - 1]!.row.tier !== row.tier) {
+      for (let c = 2; c <= 12; c++) b.cell(r, c, { border: { top: "thin" } });
+      for (let c = 2; c <= lastCol; c++) if (c <= 3 || c >= l.firstCol) b.cell(fr, c, { border: { top: "thin" } });
     }
-    if (idx > 0 && adj[idx - 1]!.row.tier !== row.tier) for (let c = 2; c <= l.lastValueCol; c++) if (c <= 3 || c >= l.firstCol) b.cell(cr, c, { border: { top: "thin" } });
   });
-  b.text(compactHead, 3, "Figures by period (links)", { style: "subsection", align: { horizontal: "left", wrap: false } });
+  b.text(figHead, 3, "Figures by period", { style: "subsection", align: { horizontal: "left", wrap: false } });
 
   // Ladder totals by tier (accepted rows), per period and per month, for the ladder and the monthly grid.
   b.section(tierFirst - 1, "Ladder totals by tier (accepted rows)", [[2, 12], ...valueSpans(l), ...(n ? [[monthStart, lastMonthCol] as [number, number]] : [])]);
@@ -1090,10 +1103,10 @@ export function planAdjustments(ctx: TabContext): SheetBuilder {
     { key: "tier_pro_forma", label: "Pro forma [PF]", crit: (c) => `${col(c)},${col(ADJ_TIER_COL)},"Pro forma",${col(ADJ_STATUS_COL)},"Accepted"`, series: "total_pro_forma", byColumn: (k) => sumTier(model, k, (r) => r.tier === "pro_forma") },
     { key: "tier_memo", label: "Memo (listed, never added) [M]", crit: (c) => `${col(c)},${col(ADJ_TIER_COL)},"Memo"`, series: "", byColumn: (k) => sumTier(model, k, (r) => r.tier === "memo", true) },
   ];
-  // The range runs to the blank row under the schedule, so a row inserted anywhere in it, or typed into that blank row, is
-  // counted; whole columns would be circular here. The ladder's check reads whole columns from its own tab.
+  // The range runs over the figures block to the blank row under it, so a row inserted anywhere in it, or typed into that blank
+  // row, is counted; whole columns would be circular here. The ladder's check reads whole columns from its own tab.
   function col(c: number): string {
-    return `$${colLetter(c)}$${first}:$${colLetter(c)}$${last + 1}`;
+    return `$${colLetter(c)}$${figFirst}:$${colLetter(c)}$${figLast + 1}`;
   }
   for (const t of tierSpecs) {
     const r = b.r(t.key);
@@ -1112,9 +1125,9 @@ export function planAdjustments(ctx: TabContext): SheetBuilder {
   }
   b.cell(b.r("tier_s3"), 3, { v: `Capital reserve [S3]${model.mode.mode === "mainStreet" ? "" : " (zero outside Main Street mode)"}` });
   b.note(noteRow, 2, "Note: a positive amount increases EBITDA. Refs number by tier in row order (insert a row and every ref renumbers). Status is an input: the ladder on Adj. EBITDA lists the rows accepted when the bot wrote the workbook (rerun the bot after changing a status to add a rung); a row set to Proposed, Supported or Excluded here drops out of every total at once. Rows with months carry each fiscal year by the named account's monthly shape (a one-time item in the months the account ran above its median, typed as inputs), so YTD and LTM take those months; rows without months are prorated by fiscal-year months in the window.");
-  // Two ranges, each one page wide: the schedule text with its note, then the compact figures and the tier totals with Ref and
-  // Adjustment repeated beside them, so the period pages carry one line per adjustment.
-  b.print({ areas: [`B2:${addr(noteRow, 12)}`, `${addr(compactHead, l.firstCol)}:${addr(lastPrinted, l.lastValueCol)}`], landscape: true, fitToWidth: 1, fitToHeight: 0, titlesRow: "2:6", titlesCol: "B:C" });
+  // Two ranges, each one page wide: the schedule text with its note, then the figures block and the tier totals with Ref and
+  // Adjustment repeated beside them, one line per adjustment.
+  b.print({ areas: [`B2:${addr(noteRow, 12)}`, `${addr(figHead, l.firstCol)}:${addr(lastPrinted, l.lastValueCol)}`], landscape: true, fitToWidth: 1, fitToHeight: 0, titlesRow: "2:6", titlesCol: "B:C" });
   b.furniture(ctx.codeName, ctx.asOfLabel);
   b.freeze(7, 3);
   return b;

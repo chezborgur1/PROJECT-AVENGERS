@@ -233,7 +233,7 @@ export function planHeadcount(ctx: TabContext): SheetBuilder | undefined {
   if (allocated) {
     // The staff's employer taxes and benefits: what the payroll line holds beyond gross pay, less the owner's taxes ([S4]).
     const ownerTaxRow = model.adjustments.findIndex((x) => x.row.tier === "owner_compensation" && x.row.category === "owner_compensation" && x.row.origin !== "owner_comp");
-    const s4 = ownerTaxRow >= 0 ? `${S("adjustments")}$${colLetter(adjustmentsLayout(model).byKey[latestFy.key]!)}@{adjustments.row${ownerTaxRow}}*${K}` : "0";
+    const s4 = ownerTaxRow >= 0 ? `${S("adjustments")}$${colLetter(adjustmentsLayout(model).byKey[latestFy.key]!)}@{adjustments.fig${ownerTaxRow}}*${K}` : "0";
     const cp = b.r("costPool");
     b.text(cp, 2, tie.basis === "wages" ? "P&L payroll taxes and benefits ($)" : "P&L payroll less register wages ($)", { style: "line" });
     b.formula(cp, 3, `${pnlPayroll}-${addr(tie.basis === "wages" ? pt : rt, 3)}`, { style: "line", fmt: FMT.body, expect: ec.pool, label: "employer cost pool" });

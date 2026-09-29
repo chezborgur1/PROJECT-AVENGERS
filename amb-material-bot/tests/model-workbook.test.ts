@@ -20,6 +20,7 @@ import { readCharts } from "../src/model/charts.ts";
 import { writeWorkbook } from "../src/model/workbook.ts";
 import { ridgelineDataset } from "./fixtures/sampleDataset.ts";
 import { modeMeasure } from "../src/model/periods.ts";
+import { colLetter } from "../src/model/sheet.ts";
 import { REPO, sampleRow, tmpDir } from "./helpers.ts";
 import { annualWithProForma, fourDateBalanceSheet, juneYearEnd, lowerMiddleMarket, midYear, monthlyBalanceSheets, type Scenario } from "./scenarios.ts";
 
@@ -394,7 +395,8 @@ describe("house style (guide 5.8-5.13)", () => {
   it("writes the Personal? tag and fills the period columns of the export-total rows on the Databook (QA round 3 F20)", () => {
     const db = wb.getWorksheet("Databook")!;
     const tags = db.getColumn(6).values.filter((v) => typeof v === "string" && v.startsWith("(+) "));
-    expect(tags).toContain("(+) Vehicle expenses");
+    // The tag carries the normalization rows the account feeds, as the guide's "(+) Owner vehicle [N1]" (verification F20).
+    expect(tags.some((t) => /^\(\+\) Vehicle expenses \[N1\]/.test(String(t)))).toBe(true);
     // "Personal?" is the header only, never a row's value.
     expect(db.getColumn(6).values.filter((v) => v === "Personal?")).toHaveLength(1);
     const income = db.getColumn(2).values.findIndex((v) => v === "Total Income");
@@ -962,5 +964,108 @@ describe("QA round 2 fixes on the written workbook", () => {
     expect((checks.getCell(r, 5).value as { formula?: string }).formula).toMatch(/^ABS\('Debt-Like Items'!\$C\$\d+-\('NWC'!\$\w+\$\d+/);
     expect(ev.value("Checks", r, 5)).toBeCloseTo(0, 9);
     expect(ev.value("Checks", r, 7)).toBe("OK");
+  });
+});
+
+describe("verification round 1 fixes on the written workbook", () => {
+  const rowOfLabel = (ws: ExcelJS.Worksheet, label: string, col = 2) => ws.getColumn(col).values.findIndex((v) => v === label);
+  const formulaOf = (c: ExcelJS.Cell) => (c.value as { formula?: string } | null)?.formula;
+  /** A tab's print ranges as the file defines them, without sheet names or $ signs ("B2:L26"). */
+  async function printAreasOf(name: string): Promise<string[]> {
+    const xml = await (await JSZip.loadAsync(fs.readFileSync(file))).file("xl/workbook.xml")!.async("string");
+    const sheets = [...xml.matchAll(/<sheet [^>]*name="([^"]+)"/g)].map((m) => m[1]!.replace(/&amp;/g, "&"));
+    const m = new RegExp(`<definedName name="_xlnm.Print_Area" localSheetId="${sheets.indexOf(name)}">([^<]*)</definedName>`).exec(xml);
+    return m ? m[1]!.split(",").map((a) => a.replace(/^.*!/, "").replace(/\$/g, "")) : [];
+  }
+
+  it("computes the Monthly P&L's prior-year YTD and LTM growth from the grid a year earlier (F10)", () => {
+    const monthly = wb.getWorksheet("Monthly P&L")!;
+    const growth = rowOfLabel(monthly, "% Growth");
+    expect(growth).toBeGreaterThan(0);
+    // G = YTD Dec-24 and J = LTM Dec-24: Jan-Dec 2023 is on the grid, so both are FY2024 over FY2023, as on the P&L Summary.
+    for (const c of [7, 10]) {
+      expect(formulaOf(monthly.getCell(growth, c)), `col ${c}`).toMatch(/SUMIFS\(.*EOMONTH\(.*,-13\)\+1/);
+      expect(Number(ev.value("Monthly P&L", growth, c))).toBeCloseTo(2_718_600 / 2_406_800 - 1, 6);
+    }
+    // The oldest fiscal year has no year-earlier months on the grid: n.a.
+    expect(monthly.getCell(growth, 3).value).toBe("n.a.");
+  });
+
+  it("opens each detail strip with its LTM and PF columns, links to the summary block, and prints them with the strip (F11)", async () => {
+    for (const name of ["Revenue Detail", "Expense Detail"]) {
+      const ws = wb.getWorksheet(name)!;
+      const groups = new Map<string, number>();
+      for (let c = 16; c <= 40; c++) {
+        const v = ws.getCell(5, c).value;
+        if (typeof v === "string" && !groups.has(v)) groups.set(v, c);
+      }
+      const ltm = groups.get("LTM")!;
+      const pf = groups.get("PF")!;
+      const strip = [...groups.entries()].find(([k]) => /^LTM Monthly/.test(k))![1];
+      expect(ltm, name).toBeGreaterThan(15);
+      expect(pf, name).toBe(ltm + 2);
+      expect(strip, name).toBeGreaterThan(pf);
+      // Each head cell links to the summary block's LTM Dec-25 (K) on its row.
+      expect(formulaOf(ws.getCell(9, ltm + 1)), name).toBe("K9");
+      // The strip's print range starts at the head.
+      const areas = await printAreasOf(name);
+      expect(areas[1], name).toMatch(new RegExp(`^${colLetter(ltm)}2:`));
+    }
+  });
+
+  it("lists unpaid bonuses and payroll taxes as an open debt-like item: accrued wages do not answer it (F13)", () => {
+    const dl = wb.getWorksheet("Debt-Like Items")!;
+    const r = rowOfLabel(dl, "Unpaid bonuses and payroll taxes");
+    expect(r).toBeGreaterThan(0);
+    expect(dl.getCell(r, 3).value).toBe("n.a.");
+    expect(model.debtLike!.checklist!.map((x) => x.item)).toContain("Unpaid bonuses and payroll taxes");
+  });
+
+  it("reads every check a tab carries into its Contents row: its own check rows, C15 and the raw tabs' ties (F19)", () => {
+    const contents = wb.getWorksheet("Contents")!;
+    const rowOf = (tab: string) => contents.getColumn(3).values.findIndex((v) => v === tab || (typeof v === "object" && v !== null && (v as { result?: string }).result === tab));
+    for (const tab of ["Customer Retention", "Cohorts", "Summary", "Concentration", "Opportunities", "Raw - Bank", "Raw - Customers", "Raw - Payroll", "Raw - P&L"]) {
+      const r = rowOf(tab);
+      expect(r, tab).toBeGreaterThan(0);
+      expect(formulaOf(contents.getCell(r, 6)), tab).toBeTruthy();
+      expect(ev.value("Contents", r, 6), tab).toBe("OK");
+    }
+    // Customer Retention's own row ("Check: listed revenue less Raw - Customers") and Cohorts' two are read by value.
+    expect(formulaOf(contents.getCell(rowOf("Customer Retention"), 6))).toMatch(/COUNTIFS\('Customer Retention'!\$C\$\d+:\$E\$\d+,">0\.0005"\)/);
+    expect(formulaOf(contents.getCell(rowOf("Cohorts"), 6))!.match(/COUNTIFS\('Cohorts'/g)!.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("forms the export totals on the Databook's own rows and tags personal accounts with their refs (F20)", () => {
+    const db = wb.getWorksheet("Databook")!;
+    const income = rowOfLabel(db, "Total Income");
+    const q = formulaOf(db.getCell(income, 17))!;
+    // No criteria range on another tab: the sections sit on the Databook's rows, to the blank row under the grid.
+    expect(q).toMatch(/^SUMIFS\(Q\$8:Q\$\d+,\$[A-Z]+\$8:\$[A-Z]+\$\d+,"Income"\)$/);
+    expect(q).not.toMatch(/Raw - P&L/);
+    const [, end] = /Q\$8:Q\$(\d+)/.exec(q)!;
+    const last = db.getColumn(2).values.findIndex((v, i) => i > 8 && (v === null || v === undefined)) ;
+    expect(Number(end)).toBe(last);
+    expect(Number(ev.value("Databook", income, 11))).toBeCloseTo(3_040_800, 0);
+    const tags = db.getColumn(6).values.filter((v) => typeof v === "string" && v.startsWith("(+) "));
+    expect(tags).toContain("(+) Charitable contributions [N4]");
+    for (const t of tags) expect(String(t)).toMatch(/\[N\d+\]/);
+  });
+
+  it("prints the Adjustments schedule's own figures, one line per row, with no mirror copy (F24)", async () => {
+    const adj = wb.getWorksheet("Adjustments")!;
+    const areas = await printAreasOf("Adjustments");
+    expect(areas).toHaveLength(2);
+    const [, fromCol, fromRow] = /^\$?([A-Z]+)\$?(\d+):/.exec(areas[1]!)!;
+    expect(fromCol).toBe("N");
+    const figHead = Number(fromRow);
+    expect(adj.getCell(figHead, 3).value).toBe("Figures by period");
+    // The block holds the inputs themselves: [S1]'s FY2025 is a formula over its monthly spread, not a link to another row.
+    const s1 = figHead + 1 + model.adjustments.findIndex((a) => a.row.ref === "S1");
+    expect(ev.value("Adjustments", s1, 2)).toBe("[S1]");
+    expect(formulaOf(adj.getCell(s1, 16))).toMatch(/^SUMIFS\(\$Y\d+:\$\w+\d+,/);
+    // The schedule rows above carry no figures, so the model holds each figure once.
+    const schedS1 = 8 + model.adjustments.findIndex((a) => a.row.ref === "S1");
+    expect(adj.getCell(schedS1, 16).value).toBeNull();
+    for (let r = figHead; r < figHead + model.adjustments.length + 1; r++) expect(String(adj.getCell(r, 3).value ?? ""), `row ${r}`).not.toMatch(/links\)/);
   });
 });

@@ -18,7 +18,7 @@ import ExcelJS from "exceljs";
 import { SOURCE_LABELS, type FinancialDataset } from "../domain/financials.ts";
 import type { RequestRow } from "../requests/schema.ts";
 import type { Assumptions } from "./assumptions.ts";
-import { dropEmptyNotesColumn, finalizeNotes, fitPrintWidth, freezeWideOnly, holdTitleInTitleColumns, paginate, resolveTokens, toggleAtRightEnd, wrapLongLabels, type CellSpec, type CfRule, type SheetPlan } from "./sheet.ts";
+import { dropEmptyNotesColumn, finalizeNotes, fitPrintWidth, freezeWideOnly, holdTitleInTitleColumns, paginate, resolveTokens, settleWraps, toggleAtRightEnd, wrapLongLabels, type CellSpec, type CfRule, type SheetPlan } from "./sheet.ts";
 import { COLOR, FONT, MARGINS, ROLE_COLOR, ROW_HEIGHT, STYLES, argb, type FontSpec } from "./styles.ts";
 import type { ModelOutput } from "./types.ts";
 import { planAssumptions, type TabContext } from "./workbook/assumptionsTab.ts";
@@ -153,7 +153,7 @@ export function planWorkbook(model: ModelOutput, opts: PlanOptions): WorkbookPla
     value: p.balanceSheet === p.pnl ? `P&L and balance sheet: ${SOURCE_LABELS[p.pnl]}` : `P&L: ${SOURCE_LABELS[p.pnl]}${p.balanceSheet ? `; balance sheet: ${SOURCE_LABELS[p.balanceSheet]}` : ""}`,
   }));
   byKey.checks = planChecks(ctx, builtKeys, checkFormulas(model, byKey)).plan;
-  byKey.contents = planContents(ctx, order, { preparedBy: opts.firmName, preparedOn: opts.preparedOn, version, sources }).plan;
+  byKey.contents = planContents(ctx, order, { preparedBy: opts.firmName, preparedOn: opts.preparedOn, version, sources }, byKey).plan;
 
   const plans = order.map((k) => byKey[k]!);
   for (const p of plans) {
@@ -162,6 +162,7 @@ export function planWorkbook(model: ModelOutput, opts: PlanOptions): WorkbookPla
     holdTitleInTitleColumns(p, opts.businessName);
     wrapLongLabels(p);
     fitPrintWidth(p);
+    settleWraps(p);
     freezeWideOnly(p);
     finalizeNotes(p);
     paginate(p);

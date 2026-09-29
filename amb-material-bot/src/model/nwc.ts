@@ -138,7 +138,8 @@ const STANDARD_DEBT_LIKE: { item: string; match: RegExp; memo?: boolean }[] = [
   { item: "Capital leases", match: /capital lease|finance lease/i },
   { item: "Shareholder loans", match: /shareholder|officer loan|owner loan|due to (owner|member)/i },
   { item: "Accrued interest", match: /accrued interest|interest payable/i },
-  { item: "Unpaid bonuses and payroll taxes", match: /bonus|payroll/i },
+  // Accrued wages ("Accrued payroll") are working capital and do not answer this item: only a bonus or payroll-tax balance does (verification F13).
+  { item: "Unpaid bonuses and payroll taxes", match: /bonus|payroll tax/i },
   { item: "Accrued income taxes", match: /income tax/i },
   { item: "Tax liens", match: /lien/i },
   { item: "Deferred capex", match: /deferred (capex|maintenance)/i },

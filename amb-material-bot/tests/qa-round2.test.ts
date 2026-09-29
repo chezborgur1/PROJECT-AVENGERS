@@ -296,7 +296,7 @@ describe("the Ridgeline deck's exhibits (F23, F25, F27, F29)", () => {
   });
 
   it("leads the people page with run-in paragraphs built from the notes' facts, the tables beside them (F28)", () => {
-    const { ctx, plan } = planned();
+    const { plan } = planned();
     const page = plan.pages.find((p) => p.draft.id === "S5.1")!;
     const prose = blocksOf(page).find((b) => b.kind === "prose") as { paragraphs: { lead?: string; body: string }[] };
     expect(prose.paragraphs.map((p) => p.lead)).toEqual(["Staffing.", "The owner’s role.", "Fleet and systems.", "Suppliers and reputation.", "Customers."]);

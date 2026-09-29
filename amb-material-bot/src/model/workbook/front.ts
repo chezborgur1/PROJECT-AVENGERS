@@ -5,7 +5,7 @@
 import { SOURCE_LABELS, parsePeriodKey, periodLabel } from "../../domain/financials.ts";
 import { ltmEqualsFiscalYear } from "../periods.ts";
 import { CHECKS } from "../checks.ts";
-import { addr, colLetter, rowOf, SheetBuilder } from "../sheet.ts";
+import { addr, colLetter, rowOf, SheetBuilder, type SheetPlan } from "../sheet.ts";
 import { COLOR, FMT, WIDTH } from "../styles.ts";
 import type { ModelOutput, PeriodColumn } from "../types.ts";
 import { A, KPI_FMT, kpiLabel, type TabContext } from "./assumptionsTab.ts";
@@ -108,7 +108,16 @@ const COVER_COL_PX = 49;
 
 // --- Contents -----------------------------------------------------------------------------------
 
-export function planContents(ctx: TabContext, built: SheetKey[], opts: { preparedBy: string; preparedOn: string; version: string; sources: { label: string; value: string }[] }): SheetBuilder {
+/**
+ * The check rows a tab carries of its own ("Check: listed revenue less Raw -
+ * Customers"): the ranges its red-on-non-zero check format covers.
+ */
+function localChecks(p: SheetPlan | undefined): string[] {
+  if (!p) return [];
+  return p.cf.flatMap((rule) => (/^ROUND\(\$?[A-Z]+\$?\d+,3\)<>0$/.test(rule.formula ?? "") ? [rule.ref] : []));
+}
+
+export function planContents(ctx: TabContext, built: SheetKey[], opts: { preparedBy: string; preparedOn: string; version: string; sources: { label: string; value: string }[] }, plans: Partial<Record<SheetKey, SheetPlan>> = {}): SheetBuilder {
   const { model } = ctx;
   const b = new SheetBuilder("contents", SHEET.contents, { output: false });
   const infoLabel = 8;
@@ -132,12 +141,17 @@ export function planContents(ctx: TabContext, built: SheetKey[], opts: { prepare
     // Annual-only books have no months: the detail tabs carry the Pro Forma cases where the strip would be.
     b.text(r, 4, model.monthly ? TAB_INFO[key].purpose : TAB_INFO[key].purpose.replace("; LTM strip", "; Pro Forma cases"));
     b.text(r, 5, TAB_INFO[key].units, { align: { horizontal: "center" } });
-    // Every check that tests the tab, the one it lives on or another it reads (C06 tests Adjustments as well as the ladder).
-    const tested = model.checks.filter((c) => c.tab === name || CHECKS.find((x) => x.id === c.id)?.also?.includes(name));
-    if (tested.length && built.includes("checks")) {
+    // Every check that tests the tab: the one it lives on, another it reads (C06 tests Adjustments as well as the ladder), C15
+    // on every output tab it scans for errors, and the tab's own check rows (verification F19).
+    const scannedByC15 = key !== "checks" && !!plans[key]?.output;
+    const tested = model.checks.filter((c) => (c.tab === name || CHECKS.find((x) => x.id === c.id)?.also?.includes(name) || (c.id === "C15" && scannedByC15)));
+    const local = localChecks(plans[key]).map((ref) => `${S(key)}${ref.replace(/([A-Z]+)(\d+)/g, "$$$1$$$2")}`);
+    if ((tested.length || local.length) && built.includes("checks")) {
       const failing = tested.filter((c) => c.status === "CHECK").length;
       const status = (id: string) => `${S("checks")}$G${rowOf("checks", `check_${id}`)}="CHECK"`;
-      b.formula(r, 6, `IF(OR(${tested.map((c) => status(c.id)).join(",")}),"CHECK","OK")`, { role: "text", align: { horizontal: "center" }, expect: failing ? "CHECK" : "OK", label: `check ${name}` });
+      // A check row reads CHECK when any of its figures rounds away from zero; text (n.a.) in it is not a figure.
+      const row = (ref: string) => `COUNTIFS(${ref},">0.0005")+COUNTIFS(${ref},"<-0.0005")>0`;
+      b.formula(r, 6, `IF(OR(${[...tested.map((c) => status(c.id)), ...local.map(row)].join(",")}),"CHECK","OK")`, { role: "text", align: { horizontal: "center" }, expect: failing ? "CHECK" : "OK", label: `check ${name}` });
     } else b.text(r, 6, "–", { align: { horizontal: "center" } });
     r++;
   });

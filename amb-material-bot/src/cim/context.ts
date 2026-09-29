@@ -11,7 +11,7 @@ import { findColumn, latestColumn } from "../model/types.ts";
 import { isFieldDepartment } from "../model/analytics.ts";
 import type { RequestRow } from "../requests/schema.ts";
 import { customerNoun, fyRange } from "../util/format.ts";
-import { Brief, buildBrief, joinDepartments } from "./brief.ts";
+import { Brief, buildBrief, departmentRoles, joinDepartments, staffByRole } from "./brief.ts";
 import type { CimCopy, PageCopyKey } from "./copy.ts";
 
 export interface Firm {
@@ -175,6 +175,19 @@ export function residualName(ctx: CimContext): string | undefined {
 export function fieldDepartments(ctx: CimContext): string {
   const names = (ctx.out.headcount?.byDepartment ?? []).map((d) => d.department).filter(isFieldDepartment);
   return names.length ? joinDepartments(names) : "";
+}
+
+/**
+ * The field employees by the payroll register's role names ("service and
+ * install technicians"), as the organization table names them; the
+ * departments' own words when the register gives no single role (verification F37).
+ */
+export function fieldRoles(ctx: CimContext): string {
+  const hc = ctx.out.headcount;
+  const names = (hc?.byDepartment ?? []).map((d) => d.department).filter(isFieldDepartment);
+  const roles = names.map((d) => departmentRoles(ctx.ds, hc!.asOf, d));
+  if (!names.length || roles.some((r) => r.length !== 1)) return fieldDepartments(ctx).toLowerCase();
+  return staffByRole(roles.map((r) => r[0]!)) ?? fieldDepartments(ctx).toLowerCase();
 }
 
 /**

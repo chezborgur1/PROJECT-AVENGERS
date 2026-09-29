@@ -224,12 +224,33 @@ function sentences(text: string): string[] {
     .filter(Boolean);
 }
 
+/**
+ * Sentences, and clauses after a semicolon, that open on a figure
+ * ("1,450 members produce…", "…; 9 of the top 10 have…"): AMB leads with a
+ * word (guide 4.5; verification F41). A fiscal-year label (FY2025) is a word;
+ * the text is checked as it prints, tokens resolved.
+ */
+export function figureLedClauses(text: string, continuation = false): string[] {
+  const out: string[] = [];
+  for (const [i, s] of sentences(text).entries()) {
+    // An observation's body runs on from its bold lead ("The top 10 total $139.4K," + "72% of commercial revenue"): its first
+    // words are mid-sentence.
+    // A colon introducing a value ("Residential service: $1.96M") is a label, not a clause; a semicolon starts one.
+    const parts = [...(continuation && i === 0 ? [] : [s]), ...s.split(/;\s+/).slice(1)];
+    for (const p of parts) if (/^[($]*[\d\u2212\u2013-]*\d/.test(p.trim())) out.push(p.trim());
+  }
+  return out;
+}
+
 /** One name for one thing across the deck (QA round 3 F37): a variant, and the word the deck uses instead. */
 const TERM_VARIANTS: { re: RegExp; use: string }[] = [
   { re: /\bopex\b/i, use: "operating expenses" },
   { re: /\bsales\b(?! (outstanding|tax))/i, use: "revenue" },
   // The field workforce is "field employees" in every exhibit (unit economics, definitions, compensation rows).
   { re: /\bfield (technicians?|team|staff|workers?|crew)\b/i, use: "field employees" },
+  // A role is named as the payroll register names it ("service technicians", "install technicians"), never by a department
+  // word the organization table does not use (verification F37).
+  { re: /\b(field service|installation|install) (employees?|staff|workers?|crew|team)\b/i, use: "the payroll register's role name" },
 ];
 
 /**
@@ -288,6 +309,7 @@ export function lintText(text: string, path: string): LintIssue[] {
   if (PRICE_TALK.test(bare)) out.push({ path, issue: "valuation or price language (guide D5)", text });
   // "a 18.5% margin" reads "a eighteen": figures spoken with a vowel sound take "an" (guide 4.2).
   if (/\ba \$?(8|1[18](?!\d))/.test(bare)) out.push({ path, issue: 'use "an" before a figure read with a vowel sound (8, 11, 18)', text });
+  for (const clause of figureLedClauses(bare, /\.body$/.test(path))) out.push({ path, issue: "a sentence or clause led by a figure: lead with a word (guide 4.5)", text: clause });
   for (const s of sentences(bare)) {
     for (const o of BANNED_OPENERS) if (s.startsWith(`${o},`) || s.startsWith(`${o} `)) out.push({ path, issue: `filler opener "${o}"`, text: s });
     if (!HAS_FIGURE.test(s)) {

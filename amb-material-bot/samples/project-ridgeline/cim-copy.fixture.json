@@ -43,12 +43,12 @@
         },
         {
           "lead": "No customer exceeds {{cust.largestShare}} of revenue, and the top 10 are {{cust.top10Share}}.",
-          "evidence": "Households and maintenance-agreement members, not listed individually, make up {{cust.residualShare}} of revenue; {{cust.top10Over5Years}} of the top 10 commercial customers have bought for five years or more.",
+          "evidence": "Households and maintenance-agreement members, not listed individually, make up {{cust.residualShare}} of revenue; of the top 10 commercial customers, {{cust.top10Over5Years}} have bought for five years or more.",
           "page": "S4.1"
         },
         {
-          "lead": "{{kpi.maintenance_members}} maintenance-agreement members produce {{line.maintenance.latest}} of recurring revenue {{fn.mgmt}}.",
-          "evidence": "Members renew at about {{kpi.renewal_rate}} and pay about {{agreement.revenuePerMember}} a year for two tune-ups, priority scheduling and a repair discount; agreements are offered on only {{kpi.agreement_offer_rate}} of service calls {{fn.mgmt}}.",
+          "lead": "Maintenance agreements produce {{line.maintenance.latest}} of recurring revenue a year {{fn.mgmt}}.",
+          "evidence": "Agreement revenue grew {{line.maintenance.cagr}} a year from FY2023 to FY2025; the member count, renewal, pricing and the share of service calls offered an agreement are on {{page:S2.3}}.",
           "page": "S2.3"
         },
         {
@@ -110,8 +110,8 @@
         },
         {
           "consideration": "Customer concentration",
-          "shows": "The largest customer, {{cust.largestId}}, is {{cust.largestShare}} of revenue and the top 10 are {{cust.top10Share}}; {{cust.residualShare}} comes from households and members not listed individually.",
-          "addressed": "Losing {{cust.largestId}} in full would remove {{cust.largestRevenue}} of revenue, less than FY2025 growth of {{rev.change}}; {{cust.top10Over5Years}} of the top 10 have bought for five years or more."
+          "shows": "The largest customer, {{cust.largestId}}, is {{cust.largestShare}} of revenue and the top 10 are {{cust.top10Share}}; households and members not listed individually make up {{cust.residualShare}}.",
+          "addressed": "Losing {{cust.largestId}} in full would remove {{cust.largestRevenue}} of revenue, less than FY2025 growth of {{rev.change}}; of the top 10, {{cust.top10Over5Years}} have bought for five years or more."
         },
         {
           "consideration": "Technician labor",
@@ -168,7 +168,7 @@
         {
           "row": "rev.line.Maintenance Agreements",
           "lead": "Maintenance agreements of {{line.maintenance.latest}}",
-          "body": "grew {{line.maintenance.cagr}} a year and were {{recurringShare.FY2025}} of FY2025 revenue; each of the {{kpi.maintenance_members}} members buys two tune-ups a year, priority scheduling and a 15% repair discount {{fn.mgmt}}."
+          "body": "grew {{line.maintenance.cagr}} a year and were {{recurringShare.FY2025}} of FY2025 revenue, the recurring base; member economics are on {{page:S2.3}}."
         },
         {
           "row": "rev.line.Discounts Given",
@@ -192,7 +192,7 @@
         },
         {
           "row": "cap.membersPerTech",
-          "lead": "Each field service employee serves {{agreement.membersPerTech}} members,",
+          "lead": "Each service technician serves {{agreement.membersPerTech}} members,",
           "body": "about {{agreement.visitsPerTech}} tune-up visits a year each and {{agreement.visitsPerYear}} across the team; agreements are offered on {{kpi.agreement_offer_rate}} of service calls {{fn.mgmt}}."
         },
         {
@@ -218,7 +218,7 @@
         {
           "row": "top.top10",
           "lead": "The top 10 total {{cust.top10Revenue}},",
-          "body": "{{cust.top10ShareOfCoded}} of commercial revenue; {{cust.top10Over5Years}} have bought for five years or more, and the newest for {{cust.top10MinTenure}}."
+          "body": "{{cust.top10ShareOfCoded}} of commercial revenue; of these, {{cust.top10Over5Years}} have bought for five years or more, and the newest for {{cust.top10MinTenure}}."
         },
         {
           "row": "mix.Property manager",
@@ -279,7 +279,7 @@
         {
           "row": "hr.departures",
           "lead": "In FY2025, {{hc.departures.FY2025}} departures",
-          "body": "were matched by {{hc.hires.FY2025}} hires; {{hc.departedOver2Years}} of the {{hc.departedTotal}} departures in the register came after more than two years of tenure."
+          "body": "were matched by {{hc.hires.FY2025}} hires; of the {{hc.departedTotal}} departures in the register, {{hc.departedOver2Years}} came after more than two years of tenure."
         }
       ]
     },
@@ -319,17 +319,17 @@
         {
           "row": "cost.payroll",
           "lead": "Payroll excluding the owner, {{payrollPct.latest}} of revenue,",
-          "body": "moved {{payrollPct.delta}} since FY2023: office wages fell from {{acct.office.pct.FY2023}} to {{acct.office.pct.FY2025}} of revenue while technician wages held at {{acct.technician.pct.FY2025}}."
+          "body": "moved {{payrollPct.delta}} since FY2023: office wages fell from {{acct.office.pct.FY2023}} to {{acct.office.pct.FY2025}} of revenue while technician wages, which rise with the work, held at {{acct.technician.pct.FY2025}}."
         },
         {
           "row": "cost.owner",
           "lead": "Owner compensation fell to {{ownerCompPct.latest}} of revenue",
-          "body": "from {{ownerCompPct.FY2023}} in FY2023 because the salary rose {{ownerComp.cagr}} a year while revenue grew {{rev.cagr}}."
+          "body": "from {{ownerCompPct.FY2023}} in FY2023 because the salary rose {{ownerComp.cagr}} a year while revenue grew {{rev.cagr}}; a buyer replaces it at the market cost on {{page:S7.2}}."
         },
         {
           "row": "cost.rent",
           "lead": "Rent of {{rent.latest}}",
-          "body": "rose {{rent.cagr}} a year under the Maple Ave lease, which runs through 2029 with a five-year renewal option {{fn.mgmt}}."
+          "body": "rose {{rent.cagr}} a year under the Maple Ave lease, which runs through 2029 with a five-year renewal option {{fn.mgmt}}, so its share fell as revenue grew."
         },
         {
           "row": "cost.opex",
@@ -343,8 +343,8 @@
       "observations": [
         {
           "row": "q.3",
-          "lead": "Third-quarter revenue of {{q3.FY2025}}",
-          "body": "was {{q3.share.FY2025}} of FY2025 against {{q1.share.FY2025}} in the first quarter, which holds the {{month.trough.FY2025}} low; the FY2023 split was {{q3.share.FY2023}} and {{q1.share.FY2023}}."
+          "lead": "Third-quarter revenue of {{q3.FY2025}}, the year's largest quarter,",
+          "body": "was {{q3.share.FY2025}} of FY2025 against {{q1.share.FY2025}} in the first quarter, which holds the {{month.trough.FY2025}} low; the FY2023 split was {{q3.share.FY2023}} and {{q1.share.FY2023}}, so the pattern held."
         },
         {
           "row": "q.total",
@@ -375,16 +375,16 @@
       "takeaway": "An owner-operator who takes Mark Delaney's place underwrites SDE of {{sde.latest}}; a buyer who hires a general manager underwrites Adj. EBITDA of {{adjEbitda.latest}}. Nothing pro forma is included; the figures assume no change in pricing, headcount or the maintenance-agreement program after closing."
     },
     "s7_2": {
-      "title": "FY2025 owner pay was {{ownerAboveMarket.latest}} above a {{replacementCost}} market cost; {{adj.repOnly.latest}} of add-backs are management representations",
+      "title": "FY2025 owner pay was {{ownerAboveMarket.latest}} above a {{replacementCost}} market cost; management representations back {{adj.repOnly.latest}} of add-backs",
       "observations": [
         {
           "row": "oc.replacement",
-          "lead": "Replacement cost of {{replacementCost}}",
-          "body": "is a {{replacementSalary}} general-manager salary, the owner's estimate of the market {{fn.mgmt}}, plus {{burdenPct}} for payroll taxes and benefits, deducted in every year shown."
+          "lead": "The replacement cost of {{replacementCost}} a year",
+          "body": "is a {{replacementSalary}} general-manager salary, the owner's estimate of the market {{fn.mgmt}}, plus {{burdenPct}} for payroll taxes and benefits, deducted in every year shown as [S2]."
         },
         {
           "row": "oc.above",
-          "lead": "Owner pay above market of {{ownerAboveMarket.latest}}",
+          "lead": "Owner pay above market of {{ownerAboveMarket.latest}} in FY2025",
           "body": "is salary and payroll taxes of {{ownerCompPaid.latest}} less the replacement cost, up from {{ownerAboveMarket.FY2023}} in FY2023 as the salary rose; a buyer who hires a manager keeps it."
         }
       ]

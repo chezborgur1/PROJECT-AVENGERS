@@ -11,7 +11,7 @@ import { defaultAssumptions } from "../src/model/assumptions.ts";
 import { masterCheckOf, withRenderCheck } from "../src/model/checks.ts";
 import { runModel } from "../src/model/engine.ts";
 import { assess, badBreaks, printedTabsOf, renderCheckWorkbook, type Span } from "../src/model/renderCheck.ts";
-import { clippedTexts, fitPrintWidth, MIN_PRINT_SCALE, paginate, printScaleOf, type SheetPlan } from "../src/model/sheet.ts";
+import { clippedTexts, fitPrintWidth, hiddenSpills, mergedUnits, MIN_PRINT_SCALE, paginate, printScaleOf, settleWraps, wrapDisagreements, wrappedLines, type SheetPlan } from "../src/model/sheet.ts";
 import { planWorkbook, writeWorkbook } from "../src/model/workbook.ts";
 import { ridgelineDataset } from "./fixtures/sampleDataset.ts";
 import { sampleRow, tmpDir } from "./helpers.ts";
@@ -283,4 +283,93 @@ describe("render check (C37)", () => {
     expect(r.tabs.map((t) => t.name)).toEqual(printed.map((t) => t.name));
     for (const t of r.tabs) expect(t.bodyPt, t.name).toBeGreaterThanOrEqual(7);
   }, 300_000);
+});
+
+describe("row heights as the render wraps (verification F8)", () => {
+  /** A one-column printed plan holding `text` wrapped in column B at `width`. */
+  const plan = (text: string, width: number, extra: Partial<SheetPlan> = {}) =>
+    ({
+      key: "t",
+      name: "T",
+      output: true,
+      cells: new Map<string, object>([["8:2", { v: text, align: { wrap: true } }], ["8:3", { v: 1 }]]),
+      widths: new Map([[2, width], [3, 9.1]]),
+      heights: new Map(),
+      hiddenCols: new Set(),
+      merges: [],
+      print: { areas: ["B2:C10"], landscape: false, fitToWidth: 1, fitToHeight: 0, rowBreaks: [], colBreaks: [] },
+      ...extra,
+    }) as unknown as SheetPlan;
+
+  it("widens a column whose wrapped text breaks into more lines in Excel than in LibreOffice's print layout", () => {
+    // 244 px of text: Excel gives 239 px at width 34 (two lines), LibreOffice 249 (one): the row printed half empty.
+    const p = plan("Related-party payables (in accrued and other)", 34);
+    expect(wrapDisagreements(p)).toEqual([{ cell: "B8", text: "Related-party payables (in accrued and other)", excel: 2, libreoffice: 1 }]);
+    settleWraps(p);
+    expect(wrapDisagreements(p)).toEqual([]);
+    expect(p.widths.get(2)).toBeGreaterThan(34);
+    expect(p.widths.get(2)).toBeLessThanOrEqual(34 * 1.12);
+  });
+
+  it("leaves a column whose text breaks alike in both alone", () => {
+    const p = plan("Accrued bonuses and payroll taxes (in accrued and other)", 34);
+    expect(wrapDisagreements(p)).toEqual([]);
+    settleWraps(p);
+    expect(p.widths.get(2)).toBe(34);
+  });
+
+  it("counts each merged column's padding, so a note that fits one line is not sized for two", () => {
+    const p = plan("x", 34, { widths: new Map([[3, 9.1], [4, 9.1], [5, 0.9], [6, 9.1]]) } as Partial<SheetPlan>);
+    // Four columns merged are 7 px a unit plus 5 px each: 28.2 units of width lay out 216 px, not 198.
+    expect(mergedUnits(p, 3, 6)).toBeCloseTo((28.2 * 7 + 20 - 5) / 7, 6);
+    const basis = "Removes family phone lines and personal meals expensed through the Company, $6.0K in FY2025, per the seller's add-back list.";
+    const ladder = plansFor(ridgelineDataset()).plans.find((x) => x.name === "Adj. EBITDA")!;
+    const r = [...ladder.cells].find(([, c]) => c.expect === basis)![0].split(":").map(Number)[0]!;
+    // [N3] fits one line across the merged value columns: its row is fixed at one body line, so LibreOffice cannot autofit it taller.
+    const merge = ladder.merges.find((m) => m.startsWith(`C${r}:`))!;
+    const [, to] = /:([A-Z]+)\d+$/.exec(merge)!;
+    expect(wrappedLines(basis, mergedUnits(ladder, 3, to!.charCodeAt(0) - 64))).toBe(1);
+    expect(ladder.heights.get(r)).toBe(12.75);
+  });
+
+  it("leaves no wrapped text on the tabs the verifiers named breaking differently in Excel and LibreOffice", () => {
+    const plans = plansFor(ridgelineDataset()).plans;
+    for (const name of ["Summary", "Contents", "Balance Sheet", "Cash Flow", "Debt-Like Items", "Deal Structure", "Adj. EBITDA", "NWC"]) {
+      expect(wrapDisagreements(plans.find((p) => p.name === name)!), name).toEqual([]);
+    }
+    // Checks: the notes column (C14 printed a gap after it) and the label column's rows up to C30.
+    const checks = wrapDisagreements(plans.find((p) => p.name === "Checks")!);
+    expect(checks.filter((d) => d.cell.startsWith("H"))).toEqual([]);
+    // The schedule's [S1] to [S4] rows print without a half-empty line.
+    const adj = plans.find((p) => p.name === "Adjustments")!;
+    const s = [...adj.cells].filter(([, c]) => typeof c.expect === "string" && /^\[S[1-4]\]$/.test(c.expect)).map(([k]) => Number(k.split(":")[0])).filter((r) => r < 30);
+    expect(s).toHaveLength(4);
+    expect(wrapDisagreements(adj).filter((d) => s.includes(Number(d.cell.replace(/^[A-Z]+/, ""))))).toEqual([]);
+  });
+});
+
+describe("text in a hidden column never spills into print (verification F11)", () => {
+  it("finds right-aligned text in a hidden column beside an empty printed cell", () => {
+    const p = {
+      key: "t",
+      name: "T",
+      output: true,
+      cells: new Map<string, object>([
+        ["9:5", { v: "n.a.", align: { horizontal: "right" } }],
+        ["10:5", { v: 3 }],
+        ["11:5", { v: "n.a.", align: { horizontal: "right" } }],
+        ["11:3", { v: 7 }],
+      ]),
+      widths: new Map(),
+      hiddenCols: new Set([4, 5]),
+      merges: [],
+      print: { areas: ["B2:C12", "F2:H12"], landscape: true, fitToWidth: 1, fitToHeight: 0, rowBreaks: [], colBreaks: [] },
+    } as unknown as SheetPlan;
+    // Row 9 spills over hidden D into C; row 11's C holds a figure, so nothing spills.
+    expect(hiddenSpills(p)).toEqual([{ cell: "E9", text: "n.a." }]);
+  });
+
+  it("writes no text into the detail strips' hidden prior-month column", () => {
+    for (const p of plansFor(ridgelineDataset()).plans) expect(hiddenSpills(p), p.name).toEqual([]);
+  });
 });

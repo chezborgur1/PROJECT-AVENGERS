@@ -426,14 +426,16 @@ export function writeDeltas(b: SheetBuilder, r: number, l: PeriodLayout, kind: P
 const refsText = (refs: string | undefined): string => (refs ? refs.split(", ").map((r) => `[${r}]`).join(" ") : "");
 
 /**
- * The Personal? tag (guide 5.2 mapping columns, "(+) Owner vehicle"): the
- * add-back the account would carry, from its own name; the schedule ref sits
- * in the Adjustment Ref column beside it.
+ * The Personal? tag (guide 5.2 mapping columns, "(+) Owner vehicle [N1]"):
+ * the add-back the account would carry, from its own name, with the
+ * normalization rows it feeds (verification F20), so the tag reads on its
+ * own when the Adjustment Ref column is out of view.
  */
-export function personalTag(row: Pick<DatabookRow, "account" | "personal">): string {
+export function personalTag(row: Pick<DatabookRow, "account" | "personal" | "adjustmentRef">): string {
   if (!row.personal) return "";
   const leaf = row.account.split(":").pop()!.trim();
-  return `(+) ${leaf.charAt(0).toUpperCase()}${leaf.slice(1).toLowerCase()}`;
+  const refs = (row.adjustmentRef ?? "").split(", ").filter((r) => /^N\d+$/.test(r));
+  return `(+) ${leaf.charAt(0).toUpperCase()}${leaf.slice(1).toLowerCase()}${refs.length ? ` ${refs.map((r) => `[${r}]`).join(" ")}` : ""}`;
 }
 
 /**
@@ -471,8 +473,9 @@ export function planDatabook(ctx: TabContext): SheetBuilder {
 
   const headers = ["Account (as exported)", "Source", "AMB Category", "Summary Line", "Personal?", "Adjustment Ref"];
   b.width(1, WIDTH.gutter);
-  // Personal? holds the tag ("(+) Charitable contributions"), not a bare flag.
-  [40, 18, 22, 30, 22, 13].forEach((w, i) => b.width(2 + i, w));
+  // Personal? holds the tag ("(+) Charitable contributions [N4]"), not a bare flag, wide enough for the longest one on one line.
+  const tagWidth = Math.max(22, ...rows.map((x) => Math.ceil((textWidthPx(personalTag(x)) + 4) / 7)));
+  [40, 18, 22, 30, tagWidth, 13].forEach((w, i) => b.width(2 + i, w));
   b.spacerCol(8);
   b.outlineCols(3, 7, 1);
   b.widths(periodStart, lastPeriodCol, WIDTH.value);
@@ -487,6 +490,11 @@ export function planDatabook(ctx: TabContext): SheetBuilder {
   b.width(tie.raw, 12);
   b.width(tie.diff, 17);
   b.width(tie.status, 10);
+  // Each account's section as the export heads it, on the Databook's own rows (screen only, right of the tie), so the export
+  // totals below select their accounts on this sheet: the ranges then grow with a row inserted in the grid (verification F20).
+  const sectionCol = tie.status + 2;
+  b.spacerCol(tie.status + 1);
+  b.width(sectionCol, 26);
   b.anatomy({ subtitle: "Databook: Account × Period ($)", lastCol, toggleCol: lastPeriodCol, masterToggle: ctx.masterToggle });
   b.text(3, lastPeriodCol - 1, "Print", { align: { horizontal: "right" } });
 
@@ -510,6 +518,7 @@ export function planDatabook(ctx: TabContext): SheetBuilder {
   hist.forEach((c, i) => header(6, periodStart + i, headerLabel(c)));
   if (n) writeMonthHeaders(b, 6, MONTH_START, months);
   ["Latest: Databook", "Latest: raw", "Diff, all periods", "Status"].forEach((h, i) => header(6, tie.databook + i, h));
+  b.cell(6, sectionCol, { style: "helper", v: "Section (as exported)", role: "helper" });
 
   // P&L accounts: months typed as exported (in cents), periods and the tie as formulas.
   const firstRow = DATABOOK_FIRST_ROW;
@@ -541,6 +550,7 @@ export function planDatabook(ctx: TabContext): SheetBuilder {
   rows.forEach((row, i) => {
     const r = firstRow + i;
     [row.account, SOURCE_LABELS[row.source], row.category, row.summaryLine, personalTag(row), refsText(row.adjustmentRef)].forEach((v, k) => b.text(r, 2 + k, v));
+    if (row.section) b.cell(r, sectionCol, { style: "helper", v: row.section, role: "helper" });
     if (n && !row.annualOnly) months.forEach((m, k) => b.num(r, MONTH_START + k, cents(row.byMonth?.[m] ?? 0), { fmt: FMT.body }));
     else if (!n) fyCols.forEach(({ c, col }) => b.num(r, col, cents(row.byFiscalYear[c.fiscalYear!] ?? 0), { fmt: FMT.body }));
     // A fiscal year off the grid is typed as the annual source exports it; the tie rows below prove it against that export.
@@ -556,8 +566,10 @@ export function planDatabook(ctx: TabContext): SheetBuilder {
   const allTotals = model.databook?.totals ?? [];
   const rawRowOfTotal = (t: DatabookTotal, accounts: number) => rawTotalsFirstRow(accounts) + allTotals.filter((x) => x.statement === t.statement).indexOf(t);
   const escape = (v: string) => v.replace(/[~*?]/g, "~$&").replace(/"/g, '""');
-  const pnlRaw = (c: "A" | "B") => `${S("rawPnl")}$${c}$4:$${c}$${3 + gridRows.length}`;
-  const lastGridRow = firstRow + gridRows.length - 1;
+  // Sections and accounts on the Databook's own rows, to the blank row under the grid: a row inserted anywhere in the grid, or
+  // typed into that blank row, is counted, and the ranges stay aligned (whole columns would include the totals themselves).
+  const gridEnd = lastRow + 1;
+  const own = (c: number) => `$${colLetter(c)}$${firstRow}:$${colLetter(c)}$${gridEnd}`;
   const sourceOf = (file: string) => SOURCE_LABELS[(rows.find((x) => x.file === file) ?? bsRows.find((x) => x.file === file) ?? rows[0] ?? bsRows[0])?.source ?? "quickbooks_export"];
   const totalLabels = (r: number, t: DatabookTotal) => {
     [t.label, sourceOf(t.file), "Export total"].forEach((v, k) => b.text(r, 2 + k, v));
@@ -582,7 +594,7 @@ export function planDatabook(ctx: TabContext): SheetBuilder {
           formula = `${at}*${K}`;
         } else {
           formula = f.terms
-            .map((term, j) => `${term.sign < 0 ? "-" : j ? "+" : ""}SUMIFS(${colL}$${firstRow}:${colL}$${lastGridRow},${pnlRaw("B")},"${escape(term.section)}"${term.accountPrefix ? `,${pnlRaw("A")},"${escape(term.accountPrefix)}*"` : ""})`)
+            .map((term, j) => `${term.sign < 0 ? "-" : j ? "+" : ""}SUMIFS(${colL}$${firstRow}:${colL}$${gridEnd},${own(sectionCol)},"${escape(term.section)}"${term.accountPrefix ? `,${own(DATABOOK_COL.account)},"${escape(term.accountPrefix)}*"` : ""})`)
             .join("");
         }
         b.formula(r, col, formula, { fmt: FMT.body, expect: t.databook[key] ?? 0, label: `${t.label} ${key}` });
@@ -652,6 +664,7 @@ export function planDatabook(ctx: TabContext): SheetBuilder {
   bsRows.forEach((row, i) => {
     const r = bsFirst + i;
     [row.account, SOURCE_LABELS[row.source], row.category, bsLabel(row.category)].forEach((v, k) => b.text(r, 2 + k, v));
+    if (row.section) b.cell(r, sectionCol, { style: "helper", v: row.section, role: "helper" });
     bsDates.forEach((m, k) => b.num(r, periodStart + k, cents(row.byMonth[m] ?? 0), { fmt: FMT.body }));
     bsTie(r, 4 + i, cents(row.byMonth[bsDates.at(-1)!] ?? 0), row.account);
   });
@@ -661,14 +674,15 @@ export function planDatabook(ctx: TabContext): SheetBuilder {
   if (bsTotals.length && nd) {
     const sec = bsLast + 2;
     b.section(sec, "Balance sheet totals as the export prints them ($)", [[2, 7]]);
-    const bsRaw = `${S("rawBs")}$B$4:$B$${3 + bsRows.length}`;
+    // Sections on the Databook's own rows, to the blank row under the accounts (as for the P&L totals above).
+    const bsSections = `$${colLetter(sectionCol)}$${bsFirst}:$${colLetter(sectionCol)}$${bsLast + 1}`;
     bsTotals.forEach((t, i) => {
       const r = sec + 1 + i;
       totalLabels(r, t);
       const terms = (t.formation as { terms: TotalTerm[] }).terms;
       bsDates.forEach((m, k) => {
         const colL = colLetter(periodStart + k);
-        const sum = (criteria: string) => `SUMIFS(${colL}$${bsFirst}:${colL}$${bsLast},${bsRaw},"${criteria}")`;
+        const sum = (criteria: string) => `SUMIFS(${colL}$${bsFirst}:${colL}$${bsLast + 1},${bsSections},"${criteria}")`;
         const formula = terms.map((term, j) => `${term.sign < 0 ? "-" : j ? "+" : ""}(${sum(escape(term.section))}+${sum(`${escape(term.section)} > *`)})`).join("");
         b.formula(r, periodStart + k, formula, { fmt: FMT.body, expect: t.databook[m] ?? 0, label: `${t.label} ${m}` });
       });
@@ -771,7 +785,8 @@ export function planMapping(ctx: TabContext): SheetBuilder {
   // Statement, source and file are the same for every account an export holds: each group of rows sits under a
   // section row naming them, so the table fits one page wide at full scale and every row stays one line tall.
   const headers = ["Account (as exported)", "Section", "AMB Category", "Summary Line", "Personal?", "Adj. Ref", "Mapped by"];
-  const widths = [36, 30, 32, 32, 22, 8, 10];
+  const tags = (model.databook?.pnl ?? []).map((x) => personalTag(x));
+  const widths = [36, 30, 32, 32, Math.max(22, ...tags.map((t) => Math.ceil((textWidthPx(t) + 4) / 7))), 8, 10];
   b.width(1, WIDTH.gutter);
   widths.forEach((w, i) => b.width(2 + i, w));
   const lastCol = 1 + headers.length;

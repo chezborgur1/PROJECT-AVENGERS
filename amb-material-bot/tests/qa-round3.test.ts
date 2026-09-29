@@ -342,7 +342,8 @@ describe("compensation reconciles to the P&L wage lines (F31)", () => {
     expect(groups[0]!.wages).toBeCloseTo(technician[1], 0);
     const block = headcountByDepartment(ctx, 5)!;
     expect(block.kind === "numTable" && block.spec.rows.map((r) => r.key)).toEqual(["dept.field", "dept.office", "dept.total"]);
-    expect(fieldWagesTie(ctx)).toBe("Field service and installation wages ($648.9K, FY2025) are the P&L technician wages; the table adds employer costs.");
+    // Named by the register's roles, as the organization table names them (verification F37).
+    expect(fieldWagesTie(ctx)).toBe("Service and install technician wages ($648.9K, FY2025) are the P&L technician wages; the table adds employer costs.");
     // The brief quotes pay only by those rows, so prose and table cannot disagree.
     expect(ctx.brief.has("hc.group.field.pctRevenue")).toBe(true);
     expect(ctx.brief.list().some((f) => /^hc\.dept\..*\.(avgComp|pctRevenue)$/.test(f.key))).toBe(false);

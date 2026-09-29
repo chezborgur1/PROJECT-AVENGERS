@@ -887,7 +887,8 @@ export function layoutPage(spec: PageSpec): LaidOutPage {
     }
     const fitted = fitOverflow(page, out);
     if (!fitted) throw new Error(`Page ${spec.id} overflows the content band: ends at ${out.bottom.toFixed(2)} in (guard 6.48)`);
-    warnings.push(`${spec.id}: ${fitted.note} to fit the page`);
+    // A chart set nearer its minimum height is layout, not a loss: only a dropped observation or a smaller table is a build note.
+    if (fitted.note) warnings.push(`${spec.id}: ${fitted.note} to fit the page`);
     page = fitted.page;
   }
   throw new Error(`Page ${spec.id} could not be fitted`);
@@ -998,6 +999,19 @@ function fitOverflow(page: PageSpec, out: LaidOutPage): { page: PageSpec; note: 
     return { ...b, items: b.items.slice(0, -1) };
   };
   const unkey = (p: PageSpec): PageSpec => (dropped ? withoutObsLetter(p, dropped) : p);
+  // A chart in the overflowing column gives up height first, down to the spec's 2.60 in minimum: it keeps its message at
+  // that height, where a dropped observation takes commentary the page's 120-word floor needs (spec 9; verification F43).
+  const excess = r3(Math.max(...out.placed.filter((p) => over.has(p.x)).map((p) => p.y + p.h)) - BAND.bottom);
+  // The chart may sit in the overflowing column or span it from a row above (a full-width chart over a table and its observations).
+  const overflowing = out.placed.filter((p) => p.y + p.h > BAND.bottom + 1e-6);
+  const above = new Set(out.placed.filter((q) => overflowing.some((o) => Math.abs(q.x - o.x) < 0.01 || (q.x <= o.x + 0.01 && q.x + q.w >= o.x + o.w - 0.01 && q.y < o.y))).map((q) => q.block));
+  const shortened = replace((b) => {
+    if (!above.has(b) || b.kind !== "chart") return undefined;
+    const from = b.h ?? DEFAULT_CHART_H;
+    const h = r3(Math.max(CHART_H.min, from - excess - 0.01));
+    return h < from - 0.02 ? { ...b, h } : undefined;
+  });
+  if (shortened) return { page: shortened, note: "" };
   const local = replace((b) => (inOverflow.has(b) ? dropObservation(b) : undefined));
   if (local) return { page: unkey(local), note: "dropped an observation" };
   const tightened = replace((b) => (inOverflow.has(b) && b.kind === "numTable" && (b.spec.fontSize ?? 8.5) > TABLE_FLOOR_PT ? { ...b, spec: { ...b.spec, fontSize: TABLE_FLOOR_PT } } : undefined));

@@ -561,6 +561,20 @@ export function freezeWideOnly(p: SheetPlan): void {
 }
 
 /** Whether a column falls inside any of the tab's print areas. */
+/**
+ * Whether a cell prints: inside one of the tab's print areas, row and column
+ * both (a column printed only in other rows is not), or in a repeated title
+ * column beside a row an area prints.
+ */
+function printedCell(p: SheetPlan, r: number, c: number): boolean {
+  const titles = p.print.titlesCol ? /^\$?([A-Z]+):\$?([A-Z]+)$/.exec(p.print.titlesCol) : null;
+  const inTitles = !!titles && c >= colIndex(titles[1]!) && c <= colIndex(titles[2]!);
+  return p.print.areas.some((a) => {
+    const m = /^\$?([A-Z]+)\$?(\d+):\$?([A-Z]+)\$?(\d+)$/.exec(a);
+    return !!m && r >= Number(m[2]) && r <= Number(m[4]) && (inTitles || (c >= colIndex(m[1]!) && c <= colIndex(m[3]!)));
+  });
+}
+
 function inPrintArea(p: SheetPlan, c: number): boolean {
   return p.print.areas.some((a) => {
     const m = /^\$?([A-Z]+)\$?\d+:\$?([A-Z]+)\$?\d+$/.exec(a);
@@ -690,17 +704,21 @@ export function finalizeNotes(p: SheetPlan): void {
     const tableNote = spec.style === "note" && c === 2 && lastCol > 2;
     let units = 0;
     if (tableNote) {
-      for (let k = 2; k <= lastCol; k++) if (!p.hiddenCols.has(k)) units += widthOf(p, k);
+      units = mergedUnits(p, 2, lastCol);
       p.merges.push(`${addr(r, 2)}:${addr(r, lastCol)}`);
     } else units = widthOf(p, c);
-    const bold = spec.font?.bold ?? STYLES[spec.style ?? "text"]?.font?.bold ?? false;
-    const lines = wrappedLines(text, units, bold);
-    if (lines === 1) continue;
+    const lines = cellLines(spec, text, units);
+    // A one-line table note is fixed at a body row too: LibreOffice fits an unfixed row to merged text at its own narrower
+    // row-fit metric, and a note that just fits printed half an empty line under it (verification F8).
+    if (lines === 1) {
+      if (tableNote && !p.heights.has(r)) p.heights.set(r, ROW_HEIGHT.body);
+      continue;
+    }
     // Only a merged note gets a fixed height: neither Excel nor LibreOffice sizes a row to a merged cell. A row whose wrapped
     // text sits in one cell is left unfixed, so each app sizes it to its own layout of the text; a height fixed from an
     // estimate printed half-empty rows in the LibreOffice render (QA round 3 F8).
     if (tableNote) p.heights.set(r, Math.max(p.heights.get(r) ?? 0, lines * 11.5 + 2));
-    else {
+    else if (lines > 1) {
       for (const [k2, other] of p.cells) {
         const [r2] = k2.split(":").map(Number) as [number];
         if (r2 === r && other.align?.vertical === undefined) other.align = { ...other.align, vertical: "top" };
@@ -711,6 +729,138 @@ export function finalizeNotes(p: SheetPlan): void {
 
 /** Pixels per width unit as LibreOffice lays a column out (Excel: 7); the paginator plans the rendered pages with it. */
 const LIBREOFFICE_PX_PER_UNIT = 7.45;
+
+/**
+ * A merged range's width in the units `wrappedLines` takes: each column adds
+ * its own width × 7 + 5 pixels, so a note merged across thirteen columns has
+ * 60 pixels more room than the sum of their widths suggests. Summing widths
+ * sized notes for lines they never wrap to (verification F8: Adj. EBITDA
+ * basis notes at 25 pt printing on one line).
+ */
+export function mergedUnits(p: SheetPlan, c1: number, c2: number): number {
+  let px = 0;
+  for (let k = c1; k <= c2; k++) if (!p.hiddenCols.has(k)) px += widthOf(p, k) * 7 + 5;
+  return Math.max(0, (px - 5) / 7);
+}
+
+/**
+ * LibreOffice's print layout of a column, measured on the rendered Balance
+ * Sheet: 7.40 px a width unit with no per-column padding (202.5 pt for B at
+ * 36.5), less about 3 px of cell padding for the text.
+ */
+const LIBREOFFICE_TEXT = { pxPerUnit: 7.4, padding: 3 } as const;
+
+/**
+ * The lines a planned cell's text wraps to in a column `units` wide, at its
+ * own size and weight, in Excel's metrics or in LibreOffice's print layout.
+ * An indent counts only where it renders: with a left or right alignment
+ * (a cell on General alignment carries its indent attribute unused, in
+ * Excel and in LibreOffice alike).
+ */
+function cellLines(spec: CellSpec, text: string, units: number, app: "excel" | "libreoffice" = "excel"): number {
+  const style = STYLES[spec.style ?? "text"];
+  const size = spec.font?.size ?? style?.font?.size ?? 9;
+  const bold = spec.font?.bold ?? style?.font?.bold ?? false;
+  const horizontal = spec.align?.horizontal ?? style?.align?.horizontal;
+  const indent = horizontal === "left" || horizontal === "right" ? (spec.align?.indent ?? style?.align?.indent ?? 0) : 0;
+  const scale = 9 / size;
+  if (app === "excel") return wrappedLines(text, (units - indent * 1.5) * scale, bold);
+  // wrappedLines lays out units × px + 1 pixels; LibreOffice has units × 7.40 − 3, less the indent.
+  const px = units * LIBREOFFICE_TEXT.pxPerUnit - LIBREOFFICE_TEXT.padding - indent * 1.5 * LIBREOFFICE_TEXT.pxPerUnit;
+  return wrappedLines(text, ((px - 1) / LIBREOFFICE_TEXT.pxPerUnit) * scale, bold, LIBREOFFICE_TEXT.pxPerUnit);
+}
+
+/** The printed text cells of a plan's rows (merged cells and table notes, which carry fixed heights, left out), row by row. */
+type TextCellAt = { r: number; c: number; spec: CellSpec; text: string; wraps: boolean };
+function printedTextRows(p: SheetPlan): Map<number, TextCellAt[]> {
+  const lastPrinted = Math.max(0, ...p.print.areas.map((a) => Number(/(\d+)$/.exec(a)?.[1] ?? 0)));
+  const rows = new Map<number, TextCellAt[]>();
+  for (const [key, spec] of p.cells) {
+    const [r, c] = key.split(":").map(Number) as [number, number];
+    const wraps = spec.align?.wrap === true || (spec.align?.wrap !== false && STYLES[spec.style ?? "text"]?.align?.wrap === true);
+    const text = typeof spec.v === "string" ? spec.v : typeof spec.expect === "string" ? spec.expect : undefined;
+    if (!text || r < 7 || r > lastPrinted || p.hiddenCols.has(c) || !printedCell(p, r, c)) continue;
+    if ((spec.style === "note" && c === 2) || p.merges.some((m) => m.startsWith(`${addr(r, c)}:`))) continue;
+    rows.set(r, [...(rows.get(r) ?? []), { r, c, spec, text, wraps }]);
+  }
+  return rows;
+}
+
+/**
+ * A row whose wrapped text makes it taller in Excel's column metrics (7 px a
+ * unit, which LibreOffice's own row autofit also follows) than the lines
+ * LibreOffice prints (about 7.40 px a unit): the row prints half empty in the
+ * QA render. Undefined when the row's tallest cell breaks alike in both.
+ */
+function rowGap(p: SheetPlan, cells: TextCellAt[]): { cell: string; text: string; excel: number; libreoffice: number } | undefined {
+  const wrapped = cells.filter((x) => x.wraps);
+  if (!wrapped.length) return undefined;
+  const lines = wrapped.map((x) => ({ x, excel: cellLines(x.spec, x.text, widthOf(p, x.c)), libreoffice: cellLines(x.spec, x.text, widthOf(p, x.c), "libreoffice") }));
+  const excel = Math.max(...lines.map((l) => l.excel));
+  const libreoffice = Math.max(...lines.map((l) => l.libreoffice));
+  if (excel === libreoffice) return undefined;
+  const driver = lines.find((l) => l.excel === excel)!;
+  return { cell: addr(driver.x.r, driver.x.c), text: driver.x.text, excel, libreoffice };
+}
+
+/**
+ * Wrapped text that breaks into more lines in Excel's column metrics than in
+ * LibreOffice's print layout: the row is sized to the first (LibreOffice's
+ * own row autofit uses it too) and printed with the second, so the QA render
+ * shows a half-empty row (verification F8: "Related-party payables (in
+ * accrued and other)" is 244 px in a column Excel gives 239 and LibreOffice
+ * 249). Each column holding such a row's tallest cell is widened, or else
+ * narrowed, by the least that leaves the fewest such rows, within 12% of its
+ * width, never under its floor, never cutting a one-line label, and never
+ * costing the tab its print scale floor. Rows keep no fixed height, so each
+ * app sizes them to text that now wraps alike.
+ */
+export function settleWraps(p: SheetPlan): void {
+  if (!p.output || !p.print.areas.length) return;
+  const rows = printedTextRows(p);
+  const gaps = () => [...rows.values()].filter((cells) => rowGap(p, cells)).length;
+  const cols = [...new Set([...rows.values()].flat().filter((x) => x.wraps).map((x) => x.c))].sort((a, b) => a - b);
+  for (const c of cols) {
+    const mine = [...rows.values()].filter((cells) => cells.some((x) => x.c === c && x.wraps));
+    const misses = () => mine.filter((cells) => rowGap(p, cells)).length;
+    const miss0 = misses();
+    if (!miss0) continue;
+    const w0 = widthOf(p, c);
+    // A label that does not wrap keeps its one line: a narrower column must not cut it at the cell edge.
+    const unwrapped = [...rows.values()].flat().filter((x) => x.c === c && !x.wraps && cellLines(x.spec, x.text, w0) === 1);
+    const keepsOneLine = (w: number) => unwrapped.every(({ spec, text }) => cellLines(spec, text, w) === 1);
+    const scale0 = printScaleOf(p);
+    const total0 = gaps();
+    const floor = Math.max(c === 2 ? TEXT_FLOOR.label : TEXT_FLOOR.other, p.minWidths?.get(c) ?? 0);
+    const steps = Math.ceil((w0 * 0.12) / 0.5);
+    // Wider first (text breaks into fewer lines), then narrower; the least change that settles the column wins, else the one
+    // that leaves the fewest half-empty rows, never adding one elsewhere on the tab.
+    const candidates = [...Array.from({ length: steps }, (_, k) => w0 + (k + 1) * 0.5), ...Array.from({ length: steps }, (_, k) => w0 - (k + 1) * 0.5)];
+    let best = { w: w0, miss: miss0 };
+    for (const w of candidates) {
+      if (w < floor) continue;
+      p.widths.set(c, w);
+      const scale = printScaleOf(p);
+      if (!keepsOneLine(w) || (scale < scale0 && (scale < SETTLE_SCALE_FLOOR || scale < scale0 - 2))) continue;
+      const miss = misses();
+      if (miss < best.miss && gaps() - total0 <= miss - miss0) best = { w, miss };
+      if (!best.miss) break;
+    }
+    p.widths.set(c, best.w);
+  }
+}
+
+/** Lowest print scale settleWraps may take a tab to: the same floor fitPrintWidth keeps, so body text stays clear of C37's 7 pt. */
+const SETTLE_SCALE_FLOOR = MIN_PRINT_SCALE;
+
+/** Every printed row that would print half empty in LibreOffice: its tallest wrapped cell breaks into more lines in Excel's metrics than LibreOffice prints (settleWraps leaves none it could fix). */
+export function wrapDisagreements(p: SheetPlan): { cell: string; text: string; excel: number; libreoffice: number }[] {
+  if (!p.output || !p.print.areas.length) return [];
+  return [...printedTextRows(p).values()].flatMap((cells) => {
+    const g = rowGap(p, cells);
+    return g ? [g] : [];
+  });
+}
 
 /** Letter paper less the 5.11 top and bottom margins, in points, as LibreOffice lays out a page body. */
 const PAGE_BODY_PT = { portrait: (11 - 1.3) * 72, landscape: (8.5 - 1.3) * 72 } as const;
@@ -858,7 +1008,7 @@ export function clippedTexts(p: SheetPlan): { cell: string; text: string }[] {
   for (const [key, spec] of p.cells) {
     const [r, c] = key.split(":").map(Number) as [number, number];
     const text = typeof spec.v === "string" ? spec.v : typeof spec.expect === "string" ? spec.expect : undefined;
-    if (!text || r < 5 || r > lastPrinted || p.hiddenCols.has(c) || !inPrintArea(p, c) || spec.align?.wrap === true || merged(r, c)) continue;
+    if (!text || r < 5 || r > lastPrinted || p.hiddenCols.has(c) || !printedCell(p, r, c) || spec.align?.wrap === true || merged(r, c)) continue;
     const style = STYLES[spec.style ?? "text"];
     const size = spec.font?.size ?? style?.font?.size ?? 9;
     const bold = spec.font?.bold ?? style?.font?.bold ?? false;

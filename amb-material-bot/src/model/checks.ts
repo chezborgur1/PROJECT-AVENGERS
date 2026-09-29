@@ -10,10 +10,10 @@ import { gridCovers, windowMonths } from "./periods.ts";
 
 /** Each check with the tab it lives on and, in `also`, the other tabs whose figures it tests (the Contents Check column reads both). */
 export const CHECKS: { id: string; check: string; tab: string; also?: string[] }[] = [
-  { id: "C01", check: "Databook ties to each raw export, every subtotal and period", tab: "Databook" },
+  { id: "C01", check: "Databook ties to each raw export, every subtotal and period", tab: "Databook", also: ["Raw - P&L", "Raw - P&L Annual", "Raw - BS"] },
   { id: "C02", check: "Monthly P&L category totals equal Databook, every month", tab: "Monthly P&L", also: ["Databook"] },
   { id: "C03", check: "Every P&L Summary line equals the grid's months in its window, recomputed as months to its end less months before its start", tab: "P&L Summary" },
-  { id: "C04", check: "P&L Summary Net Income equals Monthly P&L Net Income", tab: "P&L Summary" },
+  { id: "C04", check: "P&L Summary Net Income equals Monthly P&L Net Income", tab: "P&L Summary", also: ["Monthly P&L"] },
   { id: "C05", check: "Reported EBITDA equals Net Income + D1:D3", tab: "Adj. EBITDA" },
   { id: "C06", check: "Adjustments schedule totals by tier equal the ladder", tab: "Adj. EBITDA", also: ["Adjustments"] },
   { id: "C07", check: "Balance sheet balances (A = L + E), every period", tab: "Balance Sheet" },
@@ -21,9 +21,10 @@ export const CHECKS: { id: string; check: string; tab: string; also?: string[] }
   { id: "C09", check: "Cash flow ending cash equals balance-sheet cash", tab: "Cash Flow" },
   { id: "C10", check: "Projection balance sheet balances; projection cash ties", tab: "Projections" },
   { id: "C11", check: "Sources equal Uses", tab: "Deal Structure" },
-  { id: "C12", check: "Customer revenue total vs P&L revenue (flag if variance > 2%)", tab: "Customer Overview" },
-  { id: "C13", check: "Payroll register total vs P&L payroll (flag > 5%)", tab: "Headcount" },
-  { id: "C14", check: "Revenue vs bank deposits (flag > 5%)", tab: "Proof of Cash" },
+  { id: "C12", check: "Customer revenue total vs P&L revenue (flag if variance > 2%)", tab: "Customer Overview", also: ["Raw - Customers"] },
+  { id: "C13", check: "Payroll register total vs P&L payroll (flag > 5%)", tab: "Headcount", also: ["Raw - Payroll"] },
+  { id: "C14", check: "Revenue vs bank deposits (flag > 5%)", tab: "Proof of Cash", also: ["Raw - Bank"] },
+  // C15 tests every output tab it scans; the Contents index maps it to each of them (verification F19).
   { id: "C15", check: "No error values on any output tab", tab: "Checks" },
   { id: "C16", check: "Every period label equals its derived value", tab: "P&L Summary" },
   { id: "C17", check: "No volatile functions (TODAY, NOW, OFFSET, INDIRECT) anywhere", tab: "Checks" },

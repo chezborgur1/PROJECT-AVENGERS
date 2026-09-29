@@ -12,9 +12,9 @@ import { monthLabel } from "../domain/financials.ts";
 import type { Ladder, PeriodColumn, PeriodValues } from "../model/types.ts";
 import { isFieldDepartment } from "../model/analytics.ts";
 import { cagr, customerNoun, describeDelta, EN_DASH, fmtBps, fmtCount, fmtGrowth, fmtMoney, fmtPct, fyRange, k, MINUS, parseSigned, toK, wholeShares } from "../util/format.ts";
-import { accountLabel, evidenceGroup, fmtKpi, joinDepartments, ladderAdjustments, latestKpi, payGroups, revenueMix } from "./brief.ts";
+import { accountLabel, departmentRoles, evidenceGroup, fmtKpi, ladderAdjustments, latestKpi, payGroups, rolePlural } from "./brief.ts";
 import type { CimContext } from "./context.ts";
-import { at, confirm, fieldDepartments, pageRef, population, resolveCopy, tableColumns } from "./context.ts";
+import { at, confirm, fieldRoles, pageRef, population, resolveCopy, tableColumns } from "./context.ts";
 import type { Observation } from "./copy.ts";
 import { withCustomerNoun } from "./copy.ts";
 import type { Block, ExhibitHeader, NumCol, NumRow, NumTableSpec, ObsItem, TextCell, TextTableSpec } from "./design.ts";
@@ -94,6 +94,9 @@ function fitCols(cols: NumCol[], max: number, droppable: string[] = []): NumCol[
   if (short() > 0 && label && label.w < LABEL_MAX) label.w = r3(Math.min(LABEL_MAX, label.w + short()));
   return out;
 }
+
+/** A phrase with its first letter capitalized, to open a table cell ("Service and install technicians"). */
+const inTextCap = (s: string): string => (s ? `${s.charAt(0).toUpperCase()}${s.slice(1)}` : s);
 
 /** Figures for a row across columns. `$` on first and total rows only (spec 4.1). */
 const kv = (ps: PeriodValues[], get: (p: PeriodValues) => number, dollar = false): string[] => ps.map((p) => k(get(p), { dollar }));
@@ -255,7 +258,9 @@ export function quickStatsOperating(ctx: CimContext, w: number): Block | undefin
   if (members) {
     const renewal = kpiOf(ctx, "renewal_rate");
     const v = latestKpi(members, ctx.out.fiscalYearEndMonth)!;
-    rows.push({ type: "line", key: "op.members", label: "Agreement members (#)", vals: [fmtCount(v)], text: `${shortDefinition(members.definition ?? members.label)}${renewal ? `; about ${fmtKpi(renewal, latestKpi(renewal, ctx.out.fiscalYearEndMonth)!)} renew` : ""}` });
+    // Renewal and pricing are the capacity page's facts: the Quick Stats name the count and point there (verification F38).
+    const economics = ctx.present.has("S2.3") ? `; renewal and pricing on ${pageRef("S2.3")}` : renewal ? `; about ${fmtKpi(renewal, latestKpi(renewal, ctx.out.fiscalYearEndMonth)!)} renew` : "";
+    rows.push({ type: "line", key: "op.members", label: "Agreement members (#)", vals: [fmtCount(v)], text: `${shortDefinition(members.definition ?? members.label)}${economics}` });
   }
   const cu = ctx.out.customers;
   if (cu) {
@@ -263,7 +268,12 @@ export function quickStatsOperating(ctx: CimContext, w: number): Block | undefin
   }
   const hc = ctx.out.headcount;
   if (hc) {
-    const parts = hc.byDepartment.map((d) => `${d.count} ${d.department.toLowerCase()}`);
+    // Staff by the register's role name where a department holds one role ("14 service technicians"), as the organization
+    // table names them; a department of several roles keeps its own word ("4 office") (verification F37).
+    const parts = hc.byDepartment.map((d) => {
+      const roles = departmentRoles(ctx.ds, hc.asOf, d.department);
+      return `${d.count} ${roles.length === 1 ? (d.count === 1 ? roles[0]!.toLowerCase() : rolePlural(roles[0]!)) : d.department.toLowerCase()}`;
+    });
     rows.push({ type: "line", key: "op.employees", label: "Employees excl. owner (#)", vals: [fmtCount(hc.latestHeadcount)], text: parts.join(", ") });
     // Money in a fact table carries its unit in the cell (spec 4.3), so a per-person figure is never read in the table's thousands.
     rows.push({ type: "line", key: "op.revField", label: "Revenue per field employee", vals: [fmtMoney(hc.loadRatios.revenuePerFieldEmployee)], text: `${ctx.latest.label} revenue over ${fmtCount(hc.latestFieldHeadcount)} field employees` });
@@ -1423,7 +1433,8 @@ export function fieldWagesTie(ctx: CimContext): string | undefined {
   if (!accounts.length || !booked || Math.abs(field.wages - booked) > 0.01 * booked) return undefined;
   const names = accounts.map((a) => accountLabel(a).toLowerCase());
   const lines = names.length === 1 ? names[0]! : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]!}`;
-  return `${joinDepartments(field.departments)} wages (${fmtMoney(booked)}, ${fy.label}) are the P&L ${lines}; the table adds employer costs.`;
+  // "Service and install technician wages": the register's roles, as a noun's modifier.
+  return `${inTextCap(fieldRoles(ctx).replace(/(\w)s$/, "$1"))} wages (${fmtMoney(booked)}, ${fy.label}) are the P&L ${lines}; the table adds employer costs.`;
 }
 
 /** Headcount roll-forward by fiscal year with departures by type (S5.3). */
@@ -1481,7 +1492,7 @@ export function unitEconomics(ctx: CimContext, w: number): Block | undefined {
   const rows: NumRow[] = [
     { type: "line", label: "Revenue", key: "ue.revenue", vals: [...kv(ps, (p) => p.pnl.revenue, true), ...change((p) => p.pnl.revenue)], text: "Total revenue" },
     { type: "line", label: "Employees at year-end (#)", key: "ue.employees", vals: [...ps.map((p) => cnt(employees(p))), ...change(employees)], text: "Register, excl. owner" },
-    { type: "line", label: "Field employees at year-end (#)", key: "ue.field", vals: [...ps.map((p) => cnt(field(p))), ...change(field)], text: fieldDepartments(ctx) },
+    { type: "line", label: "Field employees at year-end (#)", key: "ue.field", vals: [...ps.map((p) => cnt(field(p))), ...change(field)], text: inTextCap(fieldRoles(ctx)) },
     { type: "line", label: "Revenue per employee", key: "ue.revEmp", vals: [...kv(ps, (p) => p.kpis.revenue_per_employee ?? 0), ...change((p) => p.kpis.revenue_per_employee ?? 0)], text: "Revenue ÷ employees" },
     { type: "line", label: "Revenue per field employee", key: "ue.revField", vals: [...kv(ps, (p) => p.kpis.revenue_per_field_employee ?? 0), ...change((p) => p.kpis.revenue_per_field_employee ?? 0)], text: "Revenue ÷ field employees" },
     { type: "ratio", label: "Payroll excl. owner, % revenue", key: "ue.labor", vals: [...pv(ps, (p) => p.kpis.labor_cost_pct_revenue ?? Number.NaN), ...(changeHead ? [""] : [])], text: bpsChange((p) => p.kpis.labor_cost_pct_revenue ?? 0) },
@@ -1508,7 +1519,12 @@ export function capacityFacts(ctx: CimContext, w: number): Block | undefined {
     rows.push({ type: "line", key: "cap.perMember", label: "Agreement revenue per member", vals: [`$${fmtCount(Math.round(rev / m))} a year`], text: `${ctx.latest.label} ${recurring[0]!.label.toLowerCase()} revenue ÷ ${fmtCount(m)} members (1)` });
     rows.push({ type: "line", key: "cap.visits", label: "Tune-up visits a year (#)", vals: [fmtCount(m * 2)], text: /two tune-ups/i.test(members.definition ?? "") ? "Two tune-ups a year per member (1)" : "" });
     if (!/two tune-ups/i.test(members.definition ?? "")) rows.pop();
-    if (techs) rows.push({ type: "line", key: "cap.membersPerTech", label: `Members per ${techs.department.toLowerCase()} employee (#)`, vals: [fmtCount(Math.round(m / techs.count))], text: `${fmtCount(m)} members ÷ ${techs.count} ${techs.department.toLowerCase()} employees` });
+    if (techs) {
+      const roles = departmentRoles(ctx.ds, hc!.asOf, techs.department);
+      const one = roles.length === 1 ? roles[0]!.toLowerCase() : `${techs.department.toLowerCase()} employee`;
+      const many = roles.length === 1 ? rolePlural(roles[0]!) : `${techs.department.toLowerCase()} employees`;
+      rows.push({ type: "line", key: "cap.membersPerTech", label: `Members per ${one} (#)`, vals: [fmtCount(Math.round(m / techs.count))], text: `${fmtCount(m)} members ÷ ${techs.count} ${many}` });
+    }
   }
   const offer = kpiOf(ctx, "agreement_offer_rate");
   if (offer) rows.push({ type: "line", key: "cap.offer", label: "Service calls offered an agreement", vals: [fmtKpi(offer, latestKpi(offer, ctx.out.fiscalYearEndMonth)!)], text: "Per management (1)" });

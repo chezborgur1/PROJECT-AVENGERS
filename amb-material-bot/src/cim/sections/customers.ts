@@ -47,7 +47,7 @@ const s4_1: PageModule = {
           note: standardNote(ctx, codedNote(ctx)),
           footnotes: [
             ...(residualName(ctx) ? [`${capFirst(residualName(ctx)!)} are not listed individually; their revenue is the P&L revenue less the ${population(ctx)}.`] : []),
-            ...(ctx.out.customers ? [`${capFirst(population(ctx))} billed at any time in ${ctx.out.customers.period.label}; ${b.t("cust.count")} were active at ${monthLabel(ctx.latest.end)}.`] : []),
+            ...(ctx.out.customers ? [`${capFirst(population(ctx))} billed at any time in ${ctx.out.customers.period.label}; of them, ${b.t("cust.count")} were active at ${monthLabel(ctx.latest.end)}.`] : []),
           ],
         },
         carries: top ? ["S4.4"] : [],
@@ -63,7 +63,7 @@ function fallback41(ctx: CimContext): NonNullable<CimCopy["s4_1"]> {
     observations: [
       { row: "top.C-001", lead: `The largest ${one}, {{cust.largestId}}, is {{cust.largestShare}} of revenue`, body: "at {{cust.largestRevenue}} in the latest year." },
       { row: "top.top10", lead: "The top 10 are {{cust.top10Share}} of revenue", body: `and {{cust.top10ShareOfCoded}} of listed-${one} revenue.` },
-      { row: "mix.residual", lead: "{{cust.residualShare}} of revenue is not listed by customer,", body: `because the list does not name ${residualName(ctx) ?? "those customers"} one by one.` },
+      { row: "mix.residual", lead: "Revenue not listed by customer is {{cust.residualShare}} of the total,", body: `because the list does not name ${residualName(ctx) ?? "those customers"} one by one.` },
     ],
   };
 }

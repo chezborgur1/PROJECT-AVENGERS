@@ -197,6 +197,42 @@ export interface PayGroup extends Department {
 /** Longest pay-group name the compensation table sets on one line. */
 const GROUP_LABEL_MAX = 22;
 
+/**
+ * The payroll register's role names for the people in a department at a date
+ * ("Field service" -> ["Service technician"]): the deck names staff by role,
+ * never by a department word the organization table does not use (verification
+ * F37: "14 field service employees" beside "14 service technicians").
+ */
+export function departmentRoles(ds: FinancialDataset, asOf: string, department: string): string[] {
+  const active = (ds.payroll?.employees ?? []).filter((e) => e.department === department && e.hireDate <= asOf && (!e.terminationDate || e.terminationDate > asOf));
+  return [...new Set(active.map((e) => e.role))];
+}
+
+/** A role's plural in running text: "service technicians", "customer service / dispatch staff". */
+export function rolePlural(role: string): string {
+  const r = /^[A-Z][a-z]/.test(role) && !/^[A-Z][a-z]+ [A-Z]/.test(role) ? `${role.charAt(0).toLowerCase()}${role.slice(1)}` : role;
+  if (/\bcrew$|\bstaff$|s$/i.test(r)) return r;
+  if (/\//.test(r)) return `${r} staff`;
+  return `${r}s`;
+}
+
+/**
+ * Staff named by their roles, in the plural: "service technicians",
+ * "service and install technicians" (roles sharing a last word), "service
+ * technicians and dispatchers". Undefined when a department has no register roles.
+ */
+export function staffByRole(roles: string[]): string | undefined {
+  if (!roles.length) return undefined;
+  const plurals = roles.map(rolePlural);
+  if (plurals.length === 1) return plurals[0];
+  const last = plurals.map((p) => p.split(" ").at(-1));
+  if (last.every((w) => w === last[0]) && plurals.every((p) => p.includes(" "))) {
+    const heads = plurals.map((p) => p.split(" ").slice(0, -1).join(" "));
+    return `${heads.slice(0, -1).join(", ")} and ${heads.at(-1)} ${last[0]}`;
+  }
+  return `${plurals.slice(0, -1).join(", ")} and ${plurals.at(-1)}`;
+}
+
 /** "Field service", "Installation" -> "Field service and installation". */
 export function joinDepartments(names: string[]): string {
   const joined = names.length === 1 ? names[0]! : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]!.toLowerCase()}`;
@@ -554,8 +590,10 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
     b.add("agreement.revenuePerMember", fmtDollars(Math.round(recurring[0]!.amount / memberCount)), recurring[0]!.amount / memberCount, `${latest.label} ${recurring[0]!.label.toLowerCase()} revenue per member`);
     if (/two tune-ups/i.test(members!.definition ?? "")) b.add("agreement.visitsPerYear", fmtCount(memberCount * 2), memberCount * 2, "Tune-up visits a year (two per member)");
     const techs = out.headcount?.byDepartment.find((d) => /field service|service/i.test(d.department));
-    if (techs) b.add("agreement.membersPerTech", fmtCount(Math.round(memberCount / techs.count)), memberCount / techs.count, `Members per ${techs.department.toLowerCase()} employee`);
-    if (techs && /two tune-ups/i.test(members!.definition ?? "")) b.add("agreement.visitsPerTech", fmtCount(Math.round((memberCount * 2) / techs.count)), (memberCount * 2) / techs.count, `Tune-up visits a year per ${techs.department.toLowerCase()} employee (two per member)`);
+    const techRoles = techs ? departmentRoles(ds, out.headcount!.asOf, techs.department) : [];
+    const tech = techRoles.length === 1 ? techRoles[0]!.toLowerCase() : `${techs?.department.toLowerCase()} employee`;
+    if (techs) b.add("agreement.membersPerTech", fmtCount(Math.round(memberCount / techs.count)), memberCount / techs.count, `Members per ${tech}`);
+    if (techs && /two tune-ups/i.test(members!.definition ?? "")) b.add("agreement.visitsPerTech", fmtCount(Math.round((memberCount * 2) / techs.count)), (memberCount * 2) / techs.count, `Tune-up visits a year per ${tech} (two per member)`);
   }
   const fleetItems = ds.intake?.fleetAndEquipment.filter((f) => f.count !== undefined) ?? [];
   if (fleetItems.length) {

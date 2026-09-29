@@ -14,6 +14,7 @@ import type { FinancialDataset } from "../src/domain/financials.ts";
 import { defaultAssumptions } from "../src/model/assumptions.ts";
 import { runModel } from "../src/model/engine.ts";
 import { EN_DASH, MINUS, parseSigned } from "../src/util/format.ts";
+import { lintText } from "../src/cim/copy.ts";
 import { ridgelineDataset } from "./fixtures/sampleDataset.ts";
 import { sampleRow } from "./helpers.ts";
 
@@ -189,5 +190,112 @@ describe("p7 owner table and its replacement (F29)", () => {
     const owner = blocksOf(page).find((b) => b.kind === "textTable" && b.header?.title === "Owner responsibilities and transition") as Extract<Block, { kind: "textTable" }>;
     expect(owner.spec.head!.slice(0, 4)).toEqual(["Responsibility", "Hrs/wk", "Who assumes it post-close", "Transition support"]);
     expect(blocksOf(page).some((b) => b.kind === "numTable" && b.header?.title === "Adjustments by evidence")).toBe(false);
+  });
+});
+
+describe("debt-like standard list (F13)", () => {
+  it("asks for unpaid bonuses and payroll taxes although accrued wages are on the balance sheet", () => {
+    const { ds, out } = model();
+    expect(ds.debtLikeItems!.some((i) => i.item === "Accrued payroll")).toBe(true);
+    expect(out.debtLike!.checklist!.map((x) => x.item)).toContain("Unpaid bonuses and payroll taxes");
+  });
+
+  it("drops the item when a bonus or payroll-tax balance answers it", () => {
+    const ds = ridgelineDataset();
+    ds.debtLikeItems = [...ds.debtLikeItems!, { ...ds.debtLikeItems![0]!, item: "Accrued bonuses", balance: 5000, treatment: "debt_like" }];
+    const out = runModel(ds, defaultAssumptions(ds, row));
+    expect(out.debtLike!.checklist!.map((x) => x.item)).not.toContain("Unpaid bonuses and payroll taxes");
+    const ds2 = ridgelineDataset();
+    ds2.debtLikeItems = [...ds2.debtLikeItems!, { ...ds2.debtLikeItems![0]!, item: "Payroll taxes payable", balance: 2000, treatment: "debt_like" }];
+    expect(runModel(ds2, defaultAssumptions(ds2, row)).debtLike!.checklist!.map((x) => x.item)).not.toContain("Unpaid bonuses and payroll taxes");
+  });
+});
+
+describe("one name per role (F37)", () => {
+  it("names staff by the payroll register's roles in the Quick Stats, the capacity table, the notes and the definitions", () => {
+    const { plan } = planned();
+    const page = (id: string) => plan.pages.find((p) => p.draft.id === id)!;
+    const rowText = (id: string, key: string) => blocksOf(page(id)).flatMap((b) => (b.kind === "numTable" ? b.spec.rows : [])).find((r) => r.key === key);
+    expect(rowText("S1.1", "op.employees")!.text).toBe("14 service technicians, 4 install technicians, 4 office, 1 operations manager");
+    const cap = rowText("S2.3", "cap.membersPerTech")!;
+    expect(cap.label).toBe("Members per service technician (#)");
+    expect(cap.text).toBe("1,450 members ÷ 14 service technicians");
+    expect(rowText("S2.3", "ue.field")!.text).toBe("Service and install technicians");
+    expect(page("S5.1").layout!.spec.notes.note).toMatch(/Service and install technician wages \(\$648\.9K, FY2025\)/);
+    const defs = JSON.stringify(blocksOf(page("S11.1")));
+    expect(defs).toContain("field employees are the service and install technicians");
+    expect(defs).toContain("Members per service technician");
+    // No page names the same people by a department word.
+    const all = JSON.stringify(plan.pages.map((p) => p.draft.spec));
+    expect(all).not.toMatch(/field service employees?|installation (staff|employees?)|\d+ installation\b/i);
+  });
+
+  it("lints a department word used for staff", () => {
+    expect(lintText("Each field service employee serves 104 members.", "t").some((i) => /payroll register's role name/.test(i.issue))).toBe(true);
+    expect(lintText("Each service technician serves 104 members.", "t")).toEqual([]);
+  });
+});
+
+describe("member facts once, on page 9 (F38)", () => {
+  it("keeps the renewal rate, price and offer rate on the capacity page and points to it elsewhere", () => {
+    const { plan } = planned();
+    const page = (id: string) => plan.pages.find((p) => p.draft.id === id)!;
+    const members = blocksOf(page("S1.1")).flatMap((b) => (b.kind === "numTable" ? b.spec.rows : [])).find((r) => r.key === "op.members")!;
+    expect(members.text).toMatch(/renewal and pricing on \{\{page:S2\.3\}\}|renewal and pricing on page 9/);
+    expect(members.text).not.toMatch(/82%/);
+    const considerations = blocksOf(page("S1.2")).find((b) => b.kind === "textTable") as Extract<Block, { kind: "textTable" }>;
+    const agreements = considerations.spec.rows.map((r) => r.map((c) => (typeof c === "string" ? c : `${c.lead} ${c.body}`)).join(" ")).find((t) => /Maintenance agreements produce/.test(t))!;
+    for (const repeated of ["1,450", "82%", "$200", "35%"]) expect(agreements, repeated).not.toContain(repeated);
+    const obs = blocksOf(page("S2.2")).find((b) => b.kind === "observations") as Extract<Block, { kind: "observations" }>;
+    const c = obs.items.find((i) => /Maintenance agreements/.test(i.lead))!;
+    expect(c.body).not.toMatch(/tune-ups|priority scheduling|1,450/);
+  });
+});
+
+describe("clauses lead with a word (F41)", () => {
+  it("finds sentences and clauses that open on a figure, and lets an observation body run on from its lead", async () => {
+    const { figureLedClauses } = await import("../src/cim/copy.ts");
+    expect(figureLedClauses("1,450 members produce $289.4K.")).toEqual(["1,450 members produce $289.4K."]);
+    expect(figureLedClauses("Losing C-001 would remove $121.6K; 9 of the top 10 have bought for five years.")).toEqual(["9 of the top 10 have bought for five years."]);
+    expect(figureLedClauses("$24.0K of add-backs rest on management representation.")).toHaveLength(1);
+    expect(figureLedClauses("FY2025 revenue was $3.04M; of the top 10, 9 have bought for five years.")).toEqual([]);
+    expect(figureLedClauses("72% of commercial revenue; of these, 9 have bought for five years.", true)).toEqual([]);
+    expect(lintText("In FY2025, 3 departures were matched by 3 hires; 4 of the 5 left after two years.", "s.observations[0].lead").some((i) => /led by a figure/.test(i.issue))).toBe(true);
+  });
+
+  it("keeps the Ridgeline copy clean of figure-led clauses", async () => {
+    const { lintCopy } = await import("../src/cim/copy.ts");
+    const ctx = planned().ctx;
+    expect(lintCopy(fixtureCopy(), ctx.brief).filter((i) => /led by a figure/.test(i.issue))).toEqual([]);
+  });
+});
+
+describe("commentary before a chart's spare height (F43)", () => {
+  it("shortens a chart toward its 2.60 in minimum before dropping an observation", () => {
+    const item = (k: string) => ({ key: k, lead: "An observation lead of about ten words here,", body: "and a body that runs on for two lines of the column at its usual width and size, with a clause after a semicolon; and more." });
+    const page = {
+      id: "T2",
+      section: "T",
+      title: "T",
+      rows: [{ columns: [{ span: [1, 12] as [number, number], blocks: [{ kind: "chart", header: { title: "C" }, spec: { type: "hbar", labels: ["a"], values: [1] }, h: 3.4 } as Block, { kind: "observations", header: { title: "Observations" }, items: ["A", "B", "C", "D", "E", "F"].map(item) } as Block] }] }],
+      notes: {},
+    };
+    const out = layoutPage(page as never);
+    const obs = out.placed.find((p) => p.block.kind === "observations")!.block as Extract<Block, { kind: "observations" }>;
+    const chart = out.placed.find((p) => p.block.kind === "chart")!.block as Extract<Block, { kind: "chart" }>;
+    expect(out.bottom).toBeLessThanOrEqual(6.48 + 1e-6);
+    expect(chart.h!).toBeLessThan(3.4);
+    expect(chart.h!).toBeGreaterThanOrEqual(2.6);
+    // All six observations kept while the chart could give up height.
+    if (chart.h! > 2.6 + 1e-6) expect(obs.items).toHaveLength(6);
+    expect(out.warnings.filter((w) => /shortened|chart/.test(w))).toEqual([]);
+  });
+
+  it("brings the cost-structure page over the 120-word floor with mechanism clauses", () => {
+    const { plan } = planned();
+    const p = plan.pages.find((x) => x.draft.id === "S6.3")!;
+    expect(p.layout!.words).toBeGreaterThanOrEqual(120);
+    expect(plan.warnings.some((w) => /^S6\.3: .*words of commentary/.test(w))).toBe(false);
+    expect(plan.warnings.some((w) => /^S6\.3: dropped an observation/.test(w))).toBe(false);
   });
 });

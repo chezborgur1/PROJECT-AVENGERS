@@ -166,8 +166,8 @@ function fallbackConsiderations(ctx: CimContext): NonNullable<CimCopy["s1_2"]> {
     { lead: `Adj. EBITDA was {{adjEbitda.latest}}, ${b.article("adjMargin.latest")} {{adjMargin.latest}} margin.`, evidence: `Every adjustment from Reported EBITDA of {{repEbitda.latest}} is itemized with its evidence.`, page: "S7.1" },
   ];
   if (b.has("cust.largestShare")) items.push({ lead: "The largest customer is {{cust.largestShare}} of revenue.", evidence: "The top 10 customers are {{cust.top10Share}} of revenue.", page: "S4.1" });
-  if (b.has("hc.total")) items.push({ lead: "{{hc.total}} employees besides the owner, {{hc.field}} in the field.", evidence: `Payroll excluding the owner was {{payrollPct.latest}} of revenue in ${ctx.latest.label}.`, page: "S5.1" });
-  else if (b.has("staff.total")) items.push({ lead: "{{staff.total}} employees besides the owner {{fn.mgmt}}.", evidence: `Payroll excluding the owner was {{payrollPct.latest}} of revenue in ${ctx.latest.label}.`, page: "S5.1" });
+  if (b.has("hc.total")) items.push({ lead: "The Company employs {{hc.total}} people besides the owner, {{hc.field}} in the field.", evidence: `Payroll excluding the owner was {{payrollPct.latest}} of revenue in ${ctx.latest.label}.`, page: "S5.1" });
+  else if (b.has("staff.total")) items.push({ lead: "The Company employs {{staff.total}} people besides the owner {{fn.mgmt}}.", evidence: `Payroll excluding the owner was {{payrollPct.latest}} of revenue in ${ctx.latest.label}.`, page: "S5.1" });
   const described = ctx.intake?.owner.transition.description;
   const transition = described ? withCustomerNoun(described, b.customerNoun) : undefined;
   if (b.has("owner.transitionMonths") && transition) items.push({ lead: "The owner offers up to {{owner.transitionMonths}} months of transition after closing {{fn.mgmt}}.", evidence: `${transition} {{fn.mgmt}}.`, page: "S10.1" });
@@ -314,7 +314,7 @@ function fallbackBuyer(ctx: CimContext): NonNullable<CimCopy["s1_4"]> {
     },
   ];
   if (b.has("cust.largestShare")) rows.push({ consideration: "Customer concentration", shows: "The largest customer is {{cust.largestShare}} of revenue and the top 10 are {{cust.top10Share}}.", addressed: `Losing the largest customer in full would remove {{cust.largestRevenue}} of revenue${b.has("rev.change") && (b.value("rev.change") ?? 0) > 0 ? ` against ${ctx.latest.label} growth of {{rev.change}}` : `, {{cust.largestShare}} of the total`}.` });
-  const staff = b.has("hc.total") ? "{{hc.total}} employees besides the owner, {{hc.field}} in the field" : b.has("staff.total") ? "{{staff.total}} employees besides the owner {{fn.mgmt}}" : undefined;
+  const staff = b.has("hc.total") ? "The Company employs {{hc.total}} people besides the owner, {{hc.field}} in the field" : b.has("staff.total") ? "The Company employs {{staff.total}} people besides the owner {{fn.mgmt}}" : undefined;
   if (staff) {
     const keep = ctx.intake?.management.find((m) => m.postCloseIntent === "stays");
     rows.push({
