@@ -265,3 +265,106 @@ Needs from others:
 
 - **Owner:** rule on Q29 (capital reserve above or below Adj. EBITDA). The deck discloses both figures meanwhile.
 - **CIM builder:** tighten the templated copy so its pages balance, then make `layoutPage` throw on a column gap (spec 14).
+
+## Fixer (QA round 2)
+
+Owner: the QA round 2 fixer. All 59 findings were worked at the root: the blocker and every major first, then the minors. Each fix has a test (`tests/qa-round2.test.ts`, the "QA round 2 fixes" block in `tests/model-workbook.test.ts`, and additions to `tests/model.test.ts`, `tests/model-print.test.ts`, `tests/cim-copy.test.ts` and `tests/period-shapes.test.ts`). Shared types changed additively only:
+- `financials.ts`: `BankTransaction`, `ExportTotal`, `FinancialDataset.bankTransactions?` and `exportTotals?`, `Adjustment.statutoryTaxesOn?`, the `accrued_bonus_payroll_tax` detail line, and the `"% of sales, latest year"` PF method.
+- `types.ts`: `TotalTerm`, `TotalFormation`, `DatabookTotal`, `databook.totals?`, `PeriodValues.ownerPayrollTaxes?`, `STALE_DAYS` and `dataAgeDays`.
+
+**Guide 5.5 needs correcting (owner).** The build departs from `docs/HOUSE_STYLE.md` 5.5 in two places, on purpose:
+1. **The reconciliation holdback is a memo inside the price.** 5.5 lists "Reconciliation Holdback (funded to escrow; asset purchase)" as a Use on Sources & Uses. It is part of the purchase price, paid into escrow at close instead of to the Seller. Adding it as a use counts it twice and makes the buyer raise cash the closing never pays out (finding 1). `Deal Structure` prints it as an italic memo under the price, "inside the Purchase Price; not added to Total Uses". Total Uses is price plus fees plus working-capital funding.
+2. **The seller memo is split.** 5.5's asset-purchase waterfall has one memo, "Seller-retained cash and NWC (AR + unbilled − AP − accrued)". The build prints three lines: seller-retained cash (Balance Sheet cash at the sheet date), seller-retained NWC (the NWC tab), and their sum. A single line mixed a cash balance with a working-capital figure from another date, and the reader could not tie either to its tab (finding 8).
+Please change 5.5's Sources & Uses and seller-proceeds rows to match, or rule otherwise.
+
+What changed, by area (finding numbers in brackets):
+
+- **Deal and valuation** [1, 8, 14, 57]:
+  - The holdback and the seller memo, as above.
+  - The bridge takes cash and debt from one dated sheet.
+  - Scenario defaults: Low and High keep the latest year's cost-of-revenue ratio (the new "% of sales, latest year" method) and hold payroll. Low no longer gets a payroll that shrinks with sales, and High no longer carries the older, worse 3-year blend. Mid is unchanged.
+- **Owner compensation** [20, 21, 23]:
+  - [S4] (the owner's employer payroll taxes) is accepted when [S1] is documented and sums into the [S1] rung. That is guide 5.4: SDE adds back salary, payroll taxes and benefits.
+  - Headline figures: SDE $561,775, Adj. EBITDA $385,725, mode measure $452,525.
+  - Payroll excluding the owner is on the payroll register's basis everywhere: cost table, brief and labor KPI.
+  - [S4] at statutory rates is now a formula on [S1] in the workbook, with the rates and one Social Security wage base per year as blue inputs on Assumptions [12].
+- **Raw tabs and C01** [7]:
+  - Every subtotal the export prints is kept (`ReportLines.totals`, `exportTotals`), re-formed from the Databook rows (`src/model/exportTotals.ts`) and tied in cents.
+  - The raw tabs print a "Totals as exported" block. The Databook ties P&L and balance-sheet totals by SUMIFS on the raw sections.
+  - C01 covers every subtotal and period.
+  - Bank lines are kept and classified (Operating, Transfer, Loan, Owner, Reversal, Withdrawal). Proof of Cash sums the Operating lines by month.
+- **Workbook print and render** [2, 3, 4, 5, 10, 11, 16]:
+  - The ladder's Basis prints beside each row, apart at scale 85.
+  - `clippedTexts` and a verifier lint catch text cut at a cell edge in print, and C37 now catches clipping, overlap, empty pages and stretched rows.
+  - Widths were fitted to content on Mapping, the raw tabs, the Databook tie block, Contents, NWC and Opportunities.
+  - Customer Overview prints currency on its first row and total only. Balance Sheet and NWC head their dates mmm-yy.
+- **Colour code, inputs and sources** [12, 13, 19]:
+  - Every formula that reaches another sheet is green whatever its role (`fontColorOf`), string builders included. A verifier lint fails a black cross-sheet formula.
+  - Proof of Cash flags read the Checks C14 tolerance through a linked cell.
+  - The seller's operating facts are blue inputs in an "Operating facts (per management)" block on Assumptions, with units in their labels. The Summary links them in green.
+  - The Main Street threshold and the structure preset, which no formula reads, are grey reference cells.
+  - Source and Basis cells are in plain words. A verifier lint fails a guide section, open-question number or precedent key (ICP5, BENP, SUNPA, SUN) in any cell outside the raw tabs.
+- **Checks** [17, 54, 59]:
+  - C03 recomputes every P&L Summary line as the grid's months to the window's end less those before its start. The grid's own SUMIFS block could not fail.
+  - C19 ties the debt-like total to what NWC removes at the latest date. Accrued bonuses and payroll taxes payable are a detail line in `DEBT_LIKE_LINES`, the one list both the debt-like schedule and NWC use, so a balance is never deducted twice.
+  - The master check pluralises.
+  - The test count is dropped from CLAUDE.md and README.
+- **Schedule and Databook** [15]:
+  - The Databook ref column lists every row an account feeds, [D3] and [S3] for depreciation included.
+  - "Personal?" flags only personal or discretionary hints, never a one-time legal fee.
+  - Guide 5.3 now documents what the code does: `Capital reserve` as a category, `To be requested` evidence (for a computed row awaiting its document), the auto-accepted interest-income [N] row, [S3] and [S4].
+- **Named outputs** [18]:
+  - GDR_LTM and NDR_LTM are defined only when the LTM closes a fiscal year. Otherwise the engine's values are null and the names are absent, so a fiscal-year figure is never labelled LTM.
+  - Tested on the Jul-25 as-of case.
+- **Robustness** [44 to 53, 55, 56, 57]:
+  - Blocker: `fitNotes` fits the notes band instead of refusing a page.
+  - Period labels on fiscal-year tables.
+  - Customer active-at has one definition, and LTM customer windows are priced over years the list covers.
+  - S8 stands alone at dated sheets.
+  - The fiscal-year disclosure survives a full band, and the ingest warnings are right.
+  - `tests/period-shapes.test.ts` runs a mid-year as-of date, a June year-end, 14- and 18-month data and bank months outside the P&L end to end.
+- **CIM** [22 to 43, 51, 58]:
+  - Invented facts: the transaction claim and the seasonal cause are cut, and the reserve is called an AMB estimate with its footnote.
+  - Data guards drop placeholder-only columns and list the question. A question recorded without a placeholder (a column left out, a contractor license not listed) now reaches `open-questions.md`: `collectOpenQuestions` used to keep only questions tied to a printed `[Confirm: …]`.
+  - Planner warnings: `mixedUnits`, `narrowTables`, `orphanMarkers`, `exhibitCounts` (at most three exhibits a page), and a 0.8 fill floor on body pages S2 to S9.
+  - Charts are at least 2.60 in tall.
+  - S5.1 is text-led, with run-in paragraphs built from the notes' facts.
+  - Copy lint: open claims, a period for every title figure, and the article before a figure.
+  - Cost table: lines in order of latest share, "Payroll taxes" named by its parent account, "Δ bps" with the span in the units, and the adjustment an account carries ("Adjusted in [N2]").
+  - Growth reads n.m. under $10K or 1% of revenue.
+  - Ref headers are left-aligned. Trailing markers are tied to their word by a non-breaking space.
+  - S2.2 milestones become a "History." paragraph when the page already has three exhibits.
+  - S10: the process table is `# | Stage | What happens | Target timing`, the contact block is headerless, and the ICP1 no-contact line is verbatim.
+  - The real-estate term is footnoted (1). The overview adds the customer sentence.
+  - The appendix names source periods (Dec-23, Jan-25 to Dec-25). It also says 2026 year-to-date results are not included and have been requested.
+
+Deviations to know:
+- The fill floor (0.8) applies to body pages S2 to S9 only. S1 pages carry the headline tables and S10/S11 are reference pages.
+- Debt-Like Items, Deal Structure and Checks stay landscape. Their width is text, and portrait would print under the 7 pt floor. Guide 5.11 now records this exception.
+- The Ridgeline copy fixture gained observations (S2.2 discounts, S2.3, S6.1, S6.3), lengthened two (S4.1, S4.2) to balance their pages, and has rewritten titles. Every figure is still a brief token. The copy lint is clean.
+
+Not done, and why:
+- **Scenario rows [14]**: the guide's per-case rows (replacement salary, reserve, deferred capex, equity injection, loan term and rate by case, with Basis and Source) are not added. Deferred capex still reads one input. The engine and both workbook tabs need a case dimension on the deal inputs, and the valuation grids follow. Only the defaults and the new method were changed.
+- **Mode as a formula [13]**: MainStreetMode stays a typed input set by the bot's rule. A formula on the threshold would run MainStreetMode, then the measure, then PF Adj. EBITDA, then [S3], then MainStreetMode, a circular reference unless the measure is rebuilt from the rungs below [S3]. The threshold is a grey reference cell meanwhile.
+- **C03 on the other period tabs and the C35 strip [17]**: C03 covers the P&L Summary only. Adj. EBITDA, Adjustments, Revenue Detail and Expense Detail need the same bounded recompute, and C35 still skips the Customer Retention strip.
+- **Repeated observation position [41]**: the list still sits bottom right on most pages. Alternating placement by archetype is a planner change across every page, and each page's column balance would have to be re-proved.
+- **S6.4 [32]**: the title was rewritten to what the page shows. The trailing-twelve-month line and the seasonality-index row need the combo-chart work already listed under QA round 1 [42].
+- **One population term [37]**: "Other (n types)" is fixed, and the monthly appendix names its twelve months FY2025 when the LTM is the fiscal year. "Customers", "accounts" and "listed commercial accounts" are still not linted to one term.
+- **Build notes that remain**: S5.1 drops one observation to fit, and S6.1 sets its income statement at 8 pt (the 8 pt floor holds). Both are logged in `run-summary.md`.
+- **Verifier shim**: `fast-formula-parser` does not broadcast a range compared with a scalar. `SUMPRODUCT(--(LEN(range)>0))` (Valuation's offer count) evaluates to 1 whatever the range holds, and passes only because Ridgeline has one offer column. C03 avoids the form. The offer count or the shim should be fixed.
+
+Verification (final run):
+- `npx tsc --noEmit` is clean, also under `--noUnusedLocals --noUnusedParameters`.
+- `npx vitest run`: 25 files, 306 tests passing.
+- `npm run demo`:
+  - 10,851 formulas verified, 10,830 cells compared; 0 errors, mismatches or lint findings.
+  - "All checks OK" with C37 run: 31 tabs, smallest body text 7.0 pt, nothing clipped, overlapping or past the margin, no empty page, no stretched row.
+  - A 21-page deck with its PDF and page images, and 14 open questions.
+- `recalc.py` on a copy of the workbook: `total_errors: 0` over 10,854 formulas.
+- `validate.py` on the deck: passes.
+- Changed pages and tabs were rendered and read: deck pages 4, 6, 8, 11, 13, 14, 16, 19 and 20; workbook tabs Summary, Assumptions, P&L Summary, Adjustments, Customer Overview, Balance Sheet, NWC, Proof of Cash and Checks.
+
+Needs from others:
+- **Owner:** correct guide 5.5 as above (holdback memo inside the price; seller memo split), and rule on the per-case scenario rows [14].
+- **Model builder:** apply C03's bounded recompute to the other period tabs, and extend C35 to the Customer Retention strip [17].
+- **CIM builder:** alternate the observation block's position by archetype [41], and add the trailing-twelve-month line and the seasonality index to S6.4 [32].

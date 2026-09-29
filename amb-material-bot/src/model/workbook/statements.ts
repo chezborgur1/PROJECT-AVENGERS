@@ -152,14 +152,16 @@ export function planPnlSummary(ctx: TabContext): SheetBuilder {
       b.formula(checkRow, col, `${addr(b.r("net_income"), col)}-${S("monthly")}${colLetter(col)}${rowOf("monthly", "net_income")}`, { style: "check", fmt: FMT.check, expect: 0, tol: 1e-6, label: "C04" });
     }
     b.checkCf(checkRow, l.firstCol, l.lastValueCol);
-    // C03: every dollar line against the grid recomputed another way, a SUMPRODUCT of the months inside the window, so a
-    // wrong window, row or criterion in the SUMIFS shows (the grid's own period block is the same SUMIFS and could not fail).
-    b.text(linesCheckRow, 2, "Check: every line less the grid's months in its window", { style: "check" });
+    // C03: every dollar line against the grid recomputed another way, the months to the window's end less the months before
+    // its start, so a wrong window, row or criterion in the SUMIFS shows (the grid's own period block is the same SUMIFS
+    // and could not fail).
+    b.text(linesCheckRow, 2, "Check: every line less its grid months", { style: "check" });
     const dollarRows = rows.filter((x) => !["section", "spacer", "margin", "ratio"].includes(x.kind));
     for (const { col } of l.cols) {
-      const inWindow = `--(${monthlyHeader}>=${addr(helpers.start, col, { row: true })}),--(${monthlyHeader}<=${addr(helpers.end, col, { row: true })})`;
+      const [start, end] = [addr(helpers.start, col, { row: true }), addr(helpers.end, col, { row: true })];
       const gridKey = (x: (typeof rows)[number]) => (x.account ? `rev:${x.account}` : x.contra ? "rev_contra" : x.key);
-      const terms = dollarRows.map((x) => `ABS(${addr(b.r(x.key), col)}-SUMPRODUCT(${inWindow},${monthlyRow(gridKey(x))}))`);
+      const window = (row: string) => `SUMIF(${monthlyHeader},"<="&${end},${row})-SUMIF(${monthlyHeader},"<"&${start},${row})`;
+      const terms = dollarRows.map((x) => `ABS(${addr(b.r(x.key), col)}-(${window(monthlyRow(gridKey(x)))}))`);
       b.formula(linesCheckRow, col, terms.join("+"), { style: "check", fmt: FMT.check, expect: 0, tol: 1e-6, label: "C03" });
     }
     b.checkCf(linesCheckRow, l.firstCol, l.lastValueCol);

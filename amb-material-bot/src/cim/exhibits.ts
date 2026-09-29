@@ -1513,7 +1513,9 @@ export function monthlyIncomeStatement(ctx: CimContext): Block | undefined {
   if (!mo || mo.months.length < 12) return undefined;
   const idx = mo.months.map((_, i) => i).slice(-12);
   const lab = monthLabel(mo.months[idx[idx.length - 1]!]!.key);
-  const cols: NumCol[] = [{ w: 2.6, kind: "label" }, ...idx.map((i): NumCol => ({ w: 0.74, kind: "num", head: monthLabel(mo.months[i]!.key), group: `LTM ${lab}, by month` })), { w: GAP, kind: "gap" }, { w: 0.85, kind: "num", head: lab, group: "LTM" }];
+  // When the twelve months are the latest fiscal year, they are named by it, as every other page names that period (QA round 2 F37).
+  const fy = ctx.ltm ? undefined : ctx.fy.find((c) => c.end === mo.months[idx[idx.length - 1]!]!.key);
+  const cols: NumCol[] = [{ w: 2.6, kind: "label" }, ...idx.map((i): NumCol => ({ w: 0.74, kind: "num", head: monthLabel(mo.months[i]!.key), group: fy ? `${fy.label}, by month` : `LTM ${lab}, by month` })), { w: GAP, kind: "gap" }, { w: 0.85, kind: "num", head: fy ? fy.label : lab, group: fy ? "Fiscal year" : "LTM" }];
   const s = mo.series;
   // The owner's employer payroll taxes by month ([S4]'s months), moved from payroll to owner compensation as on the annual pages.
   const taxRow = ctx.ds.adjustments?.find((a) => a.tier === "owner_compensation" && a.category === "owner_compensation" && a.origin !== "owner_comp");

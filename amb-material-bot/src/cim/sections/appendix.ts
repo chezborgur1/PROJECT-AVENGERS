@@ -102,7 +102,7 @@ function staleNote(ctx: CimContext): string {
   if (dataAgeDays(ctx.out.asOfDate, ctx.date) <= STALE_DAYS) return "";
   const year = ctx.date.getUTCFullYear();
   const since = monthLabel(ctx.out.asOfDate.slice(0, 7));
-  return ` Results after ${since}${Number(ctx.out.asOfDate.slice(0, 4)) < year ? `, including ${year} year to date,` : ""} are not included and have been requested from the Seller.`;
+  return ` Results after ${since}${Number(ctx.out.asOfDate.slice(0, 4)) < year ? `, including ${year} year to date,` : ""} are not included; they have been requested.`;
 }
 
 const s11_1: PageModule = {

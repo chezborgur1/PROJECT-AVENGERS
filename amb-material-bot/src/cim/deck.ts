@@ -44,14 +44,21 @@ export async function renderDeck(ctx: CimContext, plan: DeckPlan): Promise<Buffe
   return deck.write();
 }
 
-/** Every placeholder the deck prints, with its question where an exhibit recorded one, and the copy's open questions. */
-function collectOpenQuestions(ctx: CimContext, plan: DeckPlan): string[] {
+/**
+ * Every placeholder the deck prints, with its question where an exhibit
+ * recorded one; the questions a module recorded without a placeholder (a
+ * column left out until the Seller supplies it, a license not listed); and
+ * the copy's open questions.
+ */
+export function collectOpenQuestions(ctx: CimContext, plan: DeckPlan): string[] {
   const printed = new Set<string>();
   for (const p of plan.pages) if (p.draft.spec) for (const m of placeholdersIn(p.draft.spec)) printed.add(m);
   const recorded = ctx.openQuestions.filter((q) => [...printed].some((m) => q.includes(m)));
+  // A question with no placeholder stands on its own; one tied to a placeholder the deck no longer prints is dropped.
+  const standalone = ctx.openQuestions.filter((q) => !q.includes("[Confirm:"));
   const explained = [...recorded, ...ctx.copy.open_questions];
   const unexplained = [...printed].filter((m) => !explained.some((q) => q.includes(m))).map((m) => `Deck placeholder: ${m}`);
-  return [...new Set([...recorded, ...ctx.copy.open_questions, ...unexplained])];
+  return [...new Set([...recorded, ...standalone, ...ctx.copy.open_questions, ...unexplained])];
 }
 
 /**

@@ -294,7 +294,7 @@ From each `BalanceSheetPeriod`: `ar = accounts_receivable`, `unbilled = detail.u
 
 ### 5.12 Rounding and formats
 
-The engine keeps full precision. The workbook divides by 1,000 at the Databook and shows `#,##0` (guide 5.10). The CIM prints whole thousands and states "totals may not sum due to rounding" when displayed figures do not foot; prose keeps one decimal (`$371.9K`). Percentages: margins 1 dp, mix and shares 0 dp.
+The engine keeps full precision. The workbook divides by 1,000 at the Databook and shows `#,##0` (guide 5.10). The CIM prints whole thousands and states "totals may not sum due to rounding" when displayed figures do not foot; prose keeps one decimal (`$385.7K`). Percentages: margins 1 dp, mix and shares 0 dp.
 
 ---
 
@@ -320,16 +320,17 @@ All in dollars. The fixture test asserts these; the engine and workbook must rep
 | (–) Interest income (non-operating) | N5 | (3,100) |
 | Total normalization adjustments | | 28,400 |
 | (+) Owner compensation | S1 | 200,000 |
-| **SDE** | | **547,915 (18.0%)** |
+| (+) Payroll taxes on owner compensation (statutory rates) | S4 | 13,860 |
+| **SDE** | | **561,775 (18.5%)** |
 | (–) Market replacement compensation (95,000 × 1.15) | S2 | (109,250) |
 | (–) Capital reserve (three-year average D&A, proxy) | S3 | (66,800) |
-| **Adj. EBITDA** | | **371,865 (12.2%)** |
+| **Adj. EBITDA** | | **385,725 (12.7%)** |
 | Pro forma adjustments | | none |
-| **PF Adj. EBITDA** | | **371,865** |
+| **PF Adj. EBITDA** | | **385,725** |
 
-Other years: FY2024 Reported EBITDA 214,640, normalization 44,600, SDE 449,240, Adj. EBITDA 273,190; FY2023 Reported EBITDA 158,200, normalization 19,800, SDE 358,000, Adj. EBITDA 181,950. N6–N9 are bot-flagged rows at 0, proposed; M1 is a memo at 0.
+Other years: FY2024 Reported EBITDA 214,640, normalization 44,600, [S4] 13,250, SDE 462,490, Adj. EBITDA 286,440; FY2023 Reported EBITDA 158,200, normalization 19,800, [S4] 12,584, SDE 370,584, Adj. EBITDA 194,534. [S4] is the owner's employer payroll taxes at federal statutory rates on the [S1] salary (Social Security to the year's wage base, Medicare, FUTA on $7,000), accepted because [S1] is documented, and summed into the [S1] rung (guide 5.4: SDE adds back salary, payroll taxes and benefits). N6–N9 are bot-flagged rows at 0, proposed; M1 is a memo at 0.
 
-**Mode.** Measure before the reserve: 319,515 + 28,400 + 200,000 − 109,250 = 438,665 < 1,000,000 → Main Street; deal form asset purchase (intake preference agrees). In LMM presentation the owner-compensation normalization would print as one line of 90,750.
+**Mode.** Measure before the reserve: 319,515 + 28,400 + 200,000 + 13,860 − 109,250 = 452,525 < 1,000,000 → Main Street; deal form asset purchase (intake preference agrees). In LMM presentation the owner-compensation normalization ([S1] with [S4], less [S2]) would print as one line of 104,610.
 
 **Customers.** 62 coded accounts; commercial revenue 598,200 / 702,500 / 811,700 by year; residual (households and members) 1,808,600 / 2,016,100 / 2,229,100; totals tie to revenue. Largest `C-001` 121,600 = 4.00% of revenue; top ten 586,800 = 19.30%; active 40 at Jan-23, 44 at Dec-23, 49 at Dec-24, 52 at Dec-25 (FY2025: +7 new, −4 lost, churn 4 ÷ 50.5 = 7.9%).
 

@@ -756,12 +756,12 @@ describe("QA round 2 fixes on the written workbook", () => {
     for (const tab of ["Balance Sheet", "NWC"]) expect(plain(wb.getWorksheet(tab)!.getCell(6, 3).numFmt), tab).toBe(plain(FMT.monthHeader));
   });
 
-  it("recomputes every P&L Summary line from the grid's months by SUMPRODUCT, not the grid's own SUMIFS block (C03, F17)", () => {
+  it("recomputes every P&L Summary line from the grid's months another way, not the grid's own SUMIFS block (C03, F17)", () => {
     const pnl = wb.getWorksheet("P&L Summary")!;
-    const r = rowOfLabel(pnl, "Check: every line less the grid's months in its window");
+    const r = rowOfLabel(pnl, "Check: every line less its grid months");
     expect(r).toBeGreaterThan(0);
     const f = (pnl.getCell(r, 3).value as { formula?: string }).formula!;
-    expect(f).toMatch(/SUMPRODUCT\(--\('Monthly P&L'!\$\w+\$6:\$\w+\$6>=/);
+    expect(f).toMatch(/SUMIF\('Monthly P&L'!\$\w+\$6:\$\w+\$6,"<="&/);
     expect(f).not.toMatch(/'Monthly P&L'!C\d/);
     expect(ev.value("P&L Summary", r, 3)).toBeCloseTo(0, 6);
   });

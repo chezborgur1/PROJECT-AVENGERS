@@ -10,7 +10,7 @@ import { totalsDifference } from "./exportTotals.ts";
 export const CHECKS: { id: string; check: string; tab: string }[] = [
   { id: "C01", check: "Databook ties to each raw export, every subtotal and period", tab: "Databook" },
   { id: "C02", check: "Monthly P&L category totals equal Databook, every month", tab: "Monthly P&L" },
-  { id: "C03", check: "Every P&L Summary line equals the grid's months in its window, recomputed by SUMPRODUCT", tab: "P&L Summary" },
+  { id: "C03", check: "Every P&L Summary line equals the grid's months in its window, recomputed as months to its end less months before its start", tab: "P&L Summary" },
   { id: "C04", check: "P&L Summary Net Income equals Monthly P&L Net Income", tab: "P&L Summary" },
   { id: "C05", check: "Reported EBITDA equals Net Income + D1:D3", tab: "Adj. EBITDA" },
   { id: "C06", check: "Adjustments schedule totals by tier equal the ladder", tab: "Adj. EBITDA" },
@@ -100,7 +100,7 @@ export function computeChecks(ctx: CheckContext): { checks: CheckResult[]; maste
 
   // C03, C04: period columns against the grid.
   if (grid) {
-    ok("C03", 0, DOLLAR_TOLERANCE, "Each line's SUMIFS against a SUMPRODUCT of the grid over the same window");
+    ok("C03", 0, DOLLAR_TOLERANCE, "Each line's SUMIFS against two SUMIFs of the grid that bound the same window");
     const c04 = maxAbs(
       hist
         .filter((c) => c.ref.kind === "fiscal_year")

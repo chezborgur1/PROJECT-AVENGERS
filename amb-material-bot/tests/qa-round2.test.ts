@@ -15,6 +15,7 @@ import { partialYearNote } from "../src/ingest/quickbooksExport.ts";
 import { countRollForward, customerAnalytics, customerActiveAt } from "../src/model/analytics.ts";
 import { defaultAssumptions } from "../src/model/assumptions.ts";
 import { costShiftChart, costStructure, incomeStatement } from "../src/cim/exhibits.ts";
+import { collectOpenQuestions } from "../src/cim/deck.ts";
 import { accountLabel } from "../src/cim/brief.ts";
 import { keepMarker, notesLineCount, type Block } from "../src/cim/design.ts";
 import { S11 as appendix } from "../src/cim/sections/appendix.ts";
@@ -272,6 +273,7 @@ describe("the Ridgeline deck's exhibits (F23, F25, F27, F29)", () => {
     const service = tables.find((t) => t.header?.title === "Service lines")!;
     expect(service.spec.head).not.toContain("Pricing basis");
     expect(ctx.openQuestions.some((q) => /pricing basis of each service line/.test(q))).toBe(true);
+    expect(collectOpenQuestions(ctx, plan).some((q) => /pricing basis of each service line/.test(q))).toBe(true);
     const owner = tables.find((t) => t.header?.title === "Owner responsibilities and transition")!;
     expect(owner.spec.head).toEqual(["Responsibility", "Transition support", "Obs."]);
     expect(ctx.openQuestions.some((q) => /Who assumes each of the owner's duties/.test(q))).toBe(true);
@@ -309,8 +311,10 @@ describe("the Ridgeline deck's exhibits (F23, F25, F27, F29)", () => {
     const s22 = plan.pages.find((p) => p.draft.id === "S2.2")!;
     const history = blocksOf(s22).find((b) => b.kind === "prose") as { paragraphs: { lead?: string; body: string }[] };
     expect(history.paragraphs[0]).toEqual({ lead: "History.", body: "Founded by Mark Delaney in 2009; became a Carrier Factory Authorized Dealer in 2015; added plumbing service in 2019 (1)." });
-    // A suppliers table, where one prints, is titled by what it holds; the missing contractor license is asked for.
+    // A suppliers table, where one prints, is titled by what it holds; the missing contractor license is asked for, and a
+    // question recorded without a placeholder reaches open-questions.md like any other.
     expect(ctx.openQuestions.some((q) => /^Contractor licenses/.test(q))).toBe(true);
+    expect(collectOpenQuestions(ctx, plan).some((q) => /^Contractor licenses/.test(q))).toBe(true);
   });
 
   it("lays out the process with its own Target timing column, the contact block headerless, the no-contact line verbatim (F40)", () => {
@@ -405,7 +409,7 @@ describe("basis of preparation (F42, F43)", () => {
   const noteOf = (date: string) => appendix.pages.find((p) => p.id === "S11.1")!.build(ctxAt(date))[0]!.spec!.notes.note ?? "";
 
   it("says the months after the latest figures are not included when the deck is dated long after them", () => {
-    expect(noteOf("2026-09-29")).toContain("Results after Dec-25, including 2026 year to date, are not included and have been requested from the Seller.");
+    expect(noteOf("2026-09-29")).toContain("Results after Dec-25, including 2026 year to date, are not included; they have been requested.");
     expect(noteOf("2026-02-15")).not.toContain("Results after");
   });
 
