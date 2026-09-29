@@ -414,3 +414,10 @@ Not done, and why:
 
 Needs from others:
 - **Owner:** confirm the two QA round 2 / QA round 3 rulings above (table width and placeholder columns) in the design spec, and rule on printing the Adjustments inputs [24].
+
+Verification (final run):
+- `npx tsc --noEmit` is clean.
+- `npx vitest run`: 26 files, 362 tests passing.
+- `npm run demo`: 11,501 formulas verified, 0 errors, mismatches or lint findings; "All checks OK" with C37 run (31 tabs, smallest body text 7.2 pt, no empty or widow page, no block split); a 21-page deck with its PDF and page images, copy lint 0 issues, 24 open questions.
+- `recalc.py` on a copy of the workbook: `total_errors: 0` over 11,348 formulas. `validate.py` on the deck: passes.
+- Rendered and read: deck pages 7, 10, 11, 12, 14, 15, 16, 17, 18; workbook tabs Summary, Contents, Assumptions, P&L Summary, Adj. EBITDA, Adjustments, Revenue Charts, Debt-Like Items and Valuation.
