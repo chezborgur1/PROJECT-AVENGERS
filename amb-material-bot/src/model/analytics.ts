@@ -166,6 +166,8 @@ export interface CustomerContext {
   years: number[];
   pnlRevenueByFy: Record<number, number>;
   gridMonths?: MonthKey[];
+  /** Further windows for the count roll-forward (the YTD columns and the prior-year LTM). */
+  windows?: PeriodColumn[];
 }
 
 export function customerAnalytics(ctx: CustomerContext): CustomerAnalytics {
@@ -267,7 +269,8 @@ export function customerAnalytics(ctx: CustomerContext): CustomerAnalytics {
     // Customer revenue exists by fiscal year only, so the LTM dollar bridge is the latest fiscal year's when the windows coincide.
     const latestMonths = fiscalYearMonths(latestFy, fye);
     const ltmIsLatestFy = countWindow.start === latestMonths[0] && countWindow.end === latestMonths[11];
-    out.retention = { byFiscalYear, ltm: { counts: ltmCounts, dollars: ltmIsLatestFy ? byFiscalYear[latestFy]!.dollars : emptyDollars() }, monthly, medianTenureYears, ...(list.customers.some((c) => !c.startDate) ? { revenueInferred: true } : {}) };
+    const byWindow = Object.fromEntries((ctx.windows ?? []).map((w) => [w.key, countRollForward(dated, `${w.start}-01`, monthEndDate(w.end))]));
+    out.retention = { byFiscalYear, ltm: { counts: ltmCounts, dollars: ltmIsLatestFy ? byFiscalYear[latestFy]!.dollars : emptyDollars() }, byWindow, monthly, medianTenureYears, ...(list.customers.some((c) => !c.startDate) ? { revenueInferred: true } : {}) };
 
     // Cohorts by the fiscal year of the start date, when three or more fall inside the window (FY-4 onward);
     // earlier starts share one "Pre-" row so the triangle still accounts for every dated customer.

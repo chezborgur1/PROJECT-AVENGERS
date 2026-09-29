@@ -330,6 +330,53 @@ describe("house style (guide 5.8-5.13)", () => {
     expect(Number(detail.getCell(total, 7).result)).toBeCloseTo(2_718_600 / 2_406_800 - 1, 6);
   });
 
+  it("carries the PF vs. LTM block on the detail tabs and the YTD and prior-year LTM windows on the retention count block (QA round 3 F11)", () => {
+    for (const name of ["Revenue Detail", "Expense Detail"]) {
+      const ws = wb.getWorksheet(name)!;
+      // N:O after the PF column (L), as on the P&L Summary.
+      expect(ws.getCell(5, 14).value, name).toBe("PF vs. LTM");
+      expect([ws.getCell(6, 14).value, ws.getCell(6, 15).value], name).toEqual(["($)", "(%)"]);
+      expect(ws.getCell(9, 14).formula, name).toBe("L9-K9");
+    }
+    const ret = wb.getWorksheet("Customer Retention")!;
+    const groups = [3, 7, 10].map((c) => ret.getCell(5, c).value);
+    expect(groups).toEqual(["Full Year", "YTD", "LTM"]);
+    const ending = ret.getColumn(2).values.findIndex((v) => v === "Ending Count");
+    const byWindow = model.customers!.retention!.byWindow!;
+    expect(Number(ret.getCell(ending, 7).result)).toBe(byWindow["YTD2024-12"]!.endingCount);
+    expect(Number(ret.getCell(ending, 10).result)).toBe(byWindow["LTM2024-12"]!.endingCount);
+    expect(Number(ret.getCell(ending, 11).result)).toBe(model.customers!.retention!.ltm!.counts.endingCount);
+  });
+
+  it("prints every (-) row as a deduction, negative, on every tab (QA round 3 F14)", () => {
+    const positive: string[] = [];
+    for (const ws of wb.worksheets) {
+      ws.eachRow((r, n) => {
+        const label = r.getCell(2).value;
+        const text = typeof label === "string" ? label : (label as { result?: unknown } | null)?.result;
+        if (typeof text !== "string" || !text.startsWith("(-) ") || text.startsWith("(-) /")) return;
+        r.eachCell((c, col) => {
+          if (col < 3) return;
+          const v = typeof c.value === "number" ? c.value : (c.value as { result?: unknown } | null)?.result;
+          if (typeof v === "number" && v > 1e-9) positive.push(`${ws.name}!${c.address} ${text} = ${v}`);
+        });
+        void n;
+      });
+    }
+    expect(positive).toEqual([]);
+  });
+
+  it("keeps the formulas a reviewer audits short, with the repeated arithmetic in grey helper rows (QA round 3 F15)", () => {
+    const longest = (name: string) => Math.max(...formulasOf(wb.getWorksheet(name)!).map((x) => x.f.length));
+    // The C03 check row was 3,260 characters, the listed-customer KPI 1,300, Checks C15 1,429 and each Headcount helper 413.
+    expect(longest("P&L Summary")).toBeLessThan(600);
+    expect(longest("Checks")).toBeLessThan(600);
+    expect(longest("Headcount")).toBeLessThan(400);
+    const checks = wb.getWorksheet("Checks")!;
+    const c15 = checks.getColumn(2).values.findIndex((v) => v === "C15");
+    expect(checks.getCell(c15, 5).formula).toMatch(/^SUM\(E\d+:E\d+\)$/);
+  });
+
   it("maps each check to every tab it tests in the Contents Check column, and describes Raw - Bank as it is (QA round 3 F19)", () => {
     const contents = wb.getWorksheet("Contents")!;
     const rowOfTab = (name: string) => {
@@ -473,6 +520,44 @@ describe("annual-only workbook (guide 5.2A)", () => {
   }, 180_000);
 });
 
+describe("scenario block per-case inputs (QA round 3 F12, F21)", () => {
+  it("lists the six recast and financing rows by case, and a case typed over moves only its own valuation", async () => {
+    const ds = ridgelineDataset();
+    const assumptions = defaultAssumptions(ds, row);
+    const base = runModel(ds, assumptions);
+    assumptions.scenarios.high.financing = { loanRate: 0.08, replacementSalary: 110_000 };
+    const model = runModel(ds, assumptions);
+    const file = path.join(dir, "scenario-inputs.xlsx");
+    await writeWorkbook({ row, dataset: ds, assumptions, model, firmName: "AMB Advisory Services", preparedOn: "2026-09-28" }, file);
+    const v = await verifyWorkbook(file, model);
+    expect(v.errors).toEqual([]);
+    expect(v.mismatches).toEqual([]);
+    const [lowB, midB, highB] = (["low", "mid", "high"] as const).map((k) => base.valuationDetail!.cases[k].financing);
+    const [low, mid, high] = (["low", "mid", "high"] as const).map((k) => model.valuationDetail!.cases[k].financing);
+    expect([low!.dscr, mid!.dscr]).toEqual([lowB!.dscr, midB!.dscr]);
+    expect(high!.rate).toBe(0.08);
+    // $15K more replacement salary at the 15% burden comes off the High case's cash flow for debt service.
+    expect(high!.cashFlowAvailable).toBeCloseTo(highB!.cashFlowAvailable - 15_000 * 1.15, 6);
+    expect(high!.dscr).not.toBeCloseTo(highB!.dscr, 3);
+
+    const w = new ExcelJS.Workbook();
+    await w.xlsx.readFile(file);
+    const a = w.getWorksheet("Assumptions")!;
+    const labels = a.getColumn(2).values;
+    for (const label of ["Owner replacement salary ($)", "Capital reserve ($)", "Deferred capex / renovation ($)", "Equity injection (%)", "Loan term (years)", "Interest rate (%)"]) expect(labels, label).toContain(label);
+    const rate = labels.findIndex((x) => x === "Interest rate (%)");
+    expect(a.getCell(rate, 4).formula).toMatch(/^\$C\$\d+$/);
+    expect(a.getCell(rate, 5).value).toBe(0.08);
+    expect(a.getCell(rate, 6).value).toBe("Per AMB, by case");
+    const val = w.getWorksheet("Valuation")!;
+    const vRate = val.getColumn(2).values.findIndex((x) => x === "Interest Rate");
+    expect(val.getCell(vRate, 5).formula).toMatch(/Assumptions'!\$E\$\d+$/);
+    // The earnings basis is one set of figures under its own header, not the Low case's.
+    const basisRow = val.getColumn(2).values.findIndex((x) => typeof x === "string" && x.startsWith("Earnings basis"));
+    expect(val.getCell(basisRow, 3).value).toBe("LTM Dec-25");
+  }, 180_000);
+});
+
 // The cases the sample does not cover (QA round 1): each goes through the real ingest, the engine, the
 // workbook and the verifier, which must agree cell for cell or the pipeline refuses to deliver.
 describe("period and balance-sheet cases beyond the sample", () => {
@@ -505,6 +590,9 @@ describe("period and balance-sheet cases beyond the sample", () => {
     await book.xlsx.readFile(midFile);
     const names = (book.definedNames as unknown as { model: { name: string }[] }).model.map((n) => n.name);
     expect(names).not.toContain("GDR_LTM");
+    // The customer list is by fiscal year, so its concentration table is FY2024's, not the LTM's: no Top10Share_LTM (QA round 3 F17).
+    expect(out.namedOutputs.Top10Share_LTM).toBeNull();
+    expect(names).not.toContain("Top10Share_LTM");
     expect(names).toContain("AdjEBITDA_LTM");
     const ltm = out.periods["LTM2025-07"]!.ladder;
     const ytd = out.periods["YTD2025-07"]!.ladder;

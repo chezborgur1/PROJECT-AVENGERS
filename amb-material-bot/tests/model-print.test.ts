@@ -179,6 +179,21 @@ describe("page breaks at block boundaries (QA round 3 F1, F7)", () => {
   });
 });
 
+describe("Print toggle at the right end of row 3 (QA round 3 F16)", () => {
+  it("puts \"Print\" and the toggle in the last two printed columns of every tab that prints in one range across", () => {
+    const colOf = (a: string) => a.replace(/[$\d]/g, "").split("").reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0);
+    for (const p of plansFor(ridgelineDataset()).plans) {
+      if (!p.toggle || p.print.colBreaks.length) continue;
+      // The right end of the range the toggle prints with (Adjustments prints it over its period pages, the second range).
+      const ends = p.print.areas.map((a) => colOf(a.split(":")[1]!));
+      expect(ends, p.name).toContain(p.toggle.col);
+      const last = p.toggle.col;
+      expect(p.cells.get(`3:${last - 1}`)?.v, p.name).toBe("Print");
+      expect(p.cells.get(`3:${last}`)?.f, p.name).toMatch(/Contents/);
+    }
+  });
+});
+
 describe("verifier coverage", () => {
   it("gives every formula on an output tab an engine expectation, the title link and Print toggle aside", () => {
     for (const p of plansFor(ridgelineDataset()).plans.filter((x) => x.output)) {

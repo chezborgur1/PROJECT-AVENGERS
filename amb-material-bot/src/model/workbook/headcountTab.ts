@@ -87,7 +87,9 @@ export function planHeadcount(ctx: TabContext): SheetBuilder | undefined {
   const empHeader = helperEnd + 3;
   const empFirst = empHeader + 1;
   const empLast = empFirst + ctx.employees.length - 1;
-  const helperCol = { id: 2, dept: 3, tenure: 4, monthsAtDeparture: 5, fteYears: 6 };
+  // Each employee's register fields are looked up once into their own helper columns, so the tenure and FTE formulas read
+  // plain cells (QA round 3 F15). Column 9 is the print area's spacer and stays empty.
+  const helperCol = { id: 2, dept: 3, owner: 4, hire: 5, term: 6, fte: 7, tenure: 8, monthsAtDeparture: 10, fteYears: 11 };
   // The latest fiscal year's window, from the roll-forward's helper rows, for the FTE-years each employee worked in it.
   const fyStart = addr(helperStart, 2 + n, { row: true, col: true });
   const fyEnd = addr(helperEnd, 2 + n, { row: true, col: true });
@@ -177,10 +179,11 @@ export function planHeadcount(ctx: TabContext): SheetBuilder | undefined {
       const cells: Record<(typeof rollKeys)[number], [string, number]> = {
         start: [`COUNTIFS(${OWNER},"No",${HIRE},"<"&${start},${TERM},"")+COUNTIFS(${OWNER},"No",${HIRE},"<"&${start},${TERM},">="&${start})`, rf.start],
         hires: [`COUNTIFS(${OWNER},"No",${HIRE},">="&${start},${HIRE},"<="&${end})`, rf.hires],
-        resignations: [departed("resignation"), rf.departuresByType.resignation ?? 0],
-        terminations: [departed("termination"), rf.departuresByType.termination ?? 0],
-        unclassified: [`${departed("")}-${at("resignations")}-${at("terminations")}`, rf.departures - (rf.departuresByType.resignation ?? 0) - (rf.departuresByType.termination ?? 0)],
-        end: [`${at("start")}+${at("hires")}-${at("resignations")}-${at("terminations")}-${at("unclassified")}`, rf.end],
+        // Departures are "(-)" rows, negative like every deduction in the workbook (the ladder's convention).
+        resignations: [`-${departed("resignation")}`, -(rf.departuresByType.resignation ?? 0)],
+        terminations: [`-${departed("termination")}`, -(rf.departuresByType.termination ?? 0)],
+        unclassified: [`-${departed("")}-${at("resignations")}-${at("terminations")}`, -(rf.departures - (rf.departuresByType.resignation ?? 0) - (rf.departuresByType.termination ?? 0))],
+        end: [`${at("start")}+${at("hires")}+${at("resignations")}+${at("terminations")}+${at("unclassified")}`, rf.end],
       };
       const [f, expect] = cells[k];
       b.formula(rr, c, f, { style: k === "end" ? "keyTotal" : k === "start" ? "lineFirst" : "line", fmt: FMT.body, expect, label: `${k} ${y.label}` });
@@ -246,24 +249,42 @@ export function planHeadcount(ctx: TabContext): SheetBuilder | undefined {
 
   // Helper block: tenure at the as-of date for those on payroll, months at departure for leavers.
   b.text(empHeader - 1, 2, "Helper: tenure by employee (outside the print area)", { style: "helper" });
-  ["ID", "Department", "Tenure at as-of (yrs)", "Months at departure", `FTE-years in ${latestFy.label}`].forEach((h, i) => b.text(empHeader, 2 + i, h, { style: "helper" }));
+  const helperHeaders: [number, string][] = [
+    [helperCol.id, "ID"],
+    [helperCol.dept, "Department"],
+    [helperCol.owner, "Owner?"],
+    [helperCol.hire, "Hire date"],
+    [helperCol.term, "Termination date"],
+    [helperCol.fte, "FTE"],
+    [helperCol.tenure, "Tenure at as-of (yrs)"],
+    [helperCol.monthsAtDeparture, "Months at departure"],
+    [helperCol.fteYears, `FTE-years in ${latestFy.label}`],
+  ];
+  for (const [c, h] of helperHeaders) b.text(empHeader, c, h, { style: "helper" });
   const fyStartIso = `${latestFy.start}-01`;
   const fyEndSerial = serialOfMonthEnd(latestFy.end);
   ctx.employees.forEach((e, i) => {
     const rr = empFirst + i;
     const id = addr(rr, helperCol.id);
-    const field = (range: string) => `INDEX(${range},MATCH(${id},${ID},0))`;
+    const lookup = (range: string) => `INDEX(${range},MATCH(${id},${ID},0))`;
     const onPayrollAtAsOf = !e.isOwner && excelSerial(e.hireDate) <= excelSerial(model.asOfDate) && (!e.terminationDate || excelSerial(e.terminationDate) > excelSerial(model.asOfDate));
     b.text(rr, helperCol.id, e.id, { style: "helper" });
-    b.formula(rr, helperCol.dept, field(DEPT), { style: "helper", role: "helper", expect: e.department, label: `dept ${e.id}` });
-    b.formula(rr, helperCol.tenure, `IF(OR(${field(OWNER)}="Yes",AND(${field(TERM)}<>"",${field(TERM)}<=${ASOF}),${field(HIRE)}>${ASOF}),"",(${ASOF}-${field(HIRE)})/365.25)`, {
+    b.formula(rr, helperCol.dept, lookup(DEPT), { style: "helper", role: "helper", expect: e.department, label: `dept ${e.id}` });
+    b.formula(rr, helperCol.owner, lookup(OWNER), { style: "helper", role: "helper", expect: e.isOwner ? "Yes" : "No", label: `owner ${e.id}` });
+    b.formula(rr, helperCol.hire, lookup(HIRE), { style: "helper", role: "helper", fmt: FMT.date, expect: excelSerial(e.hireDate), label: `hire ${e.id}` });
+    // An empty termination cell reads "" here, not the 0 a bare INDEX returns.
+    b.formula(rr, helperCol.term, `IF(${lookup(TERM)}="","",${lookup(TERM)})`, { style: "helper", role: "helper", fmt: FMT.date, expect: e.terminationDate ? excelSerial(e.terminationDate) : "", label: `term ${e.id}` });
+    b.formula(rr, helperCol.fte, lookup(FTE), { style: "helper", role: "helper", fmt: FMT.oneDp, expect: e.fte, label: `fte ${e.id}` });
+    const field = (c: number) => addr(rr, c);
+    const [owner, hire, term, fte] = [field(helperCol.owner), field(helperCol.hire), field(helperCol.term), field(helperCol.fte)];
+    b.formula(rr, helperCol.tenure, `IF(OR(${owner}="Yes",AND(${term}<>"",N(${term})<=${ASOF}),${hire}>${ASOF}),"",(${ASOF}-${hire})/365.25)`, {
       style: "helper",
       role: "helper",
       fmt: FMT.oneDp,
       expect: onPayrollAtAsOf ? (excelSerial(model.asOfDate) - excelSerial(e.hireDate)) / 365.25 : "",
       label: `tenure ${e.id}`,
     });
-    b.formula(rr, helperCol.monthsAtDeparture, `IF(OR(${field(OWNER)}="Yes",${field(TERM)}=""),"",(${field(TERM)}-${field(HIRE)})/(365.25/12))`, {
+    b.formula(rr, helperCol.monthsAtDeparture, `IF(OR(${owner}="Yes",${term}=""),"",(${term}-${hire})/(365.25/12))`, {
       style: "helper",
       role: "helper",
       fmt: FMT.oneDp,
@@ -271,10 +292,10 @@ export function planHeadcount(ctx: TabContext): SheetBuilder | undefined {
       label: `months ${e.id}`,
     });
     // Days on payroll inside the fiscal year (the last day is the day before termination, as the counts treat it) over days in the year.
-    const lastDay = `IF(${field(TERM)}="",${fyEnd},${field(TERM)}-1)`;
+    const lastDay = `IF(${term}="",${fyEnd},${term}-1)`;
     const days = (from: number, to: number) => Math.max(0, to - from + 1);
     const engineYears = e.isOwner ? 0 : (e.fte * days(Math.max(excelSerial(fyStartIso), excelSerial(e.hireDate)), Math.min(fyEndSerial, e.terminationDate ? excelSerial(e.terminationDate) - 1 : fyEndSerial))) / (fyEndSerial - excelSerial(fyStartIso) + 1);
-    b.formula(rr, helperCol.fteYears, `IF(${field(OWNER)}="Yes",0,${field(FTE)}*MAX(0,MIN(${fyEnd},${lastDay})-MAX(${fyStart},${field(HIRE)})+1)/(${fyEnd}-${fyStart}+1))`, {
+    b.formula(rr, helperCol.fteYears, `IF(${owner}="Yes",0,${fte}*MAX(0,MIN(${fyEnd},${lastDay})-MAX(${fyStart},${hire})+1)/(${fyEnd}-${fyStart}+1))`, {
       style: "helper",
       role: "helper",
       fmt: FMT.oneDp,

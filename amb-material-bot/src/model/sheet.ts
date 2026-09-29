@@ -506,8 +506,10 @@ export function fitPrintWidth(p: SheetPlan): void {
     for (const [c, w] of planned) p.widths.set(c, w);
     p.print.scale = MIN_PRINT_SCALE;
     p.print.fitToWidth = 0;
+    // An analysis tab repeats its label column on each page; a raw export does not, since its A1 title and source line would
+    // print cut to that one column on every continuation page (QA round 3 F18).
     const first = /^\$?([A-Z]+)/.exec(p.print.areas[0]!)?.[1];
-    if (!p.print.titlesCol && first) p.print.titlesCol = `${first}:${first}`;
+    if (!p.print.titlesCol && first && p.output) p.print.titlesCol = `${first}:${first}`;
   }
   for (const c of textCols) {
     if (widthOf(p, c) === planned.get(c)) continue;
@@ -619,6 +621,52 @@ export function dropEmptyNotesColumn(p: SheetPlan): void {
     const m = /:\$?([A-Z]+)(\$?\d+)$/.exec(a);
     return m && colIndex(m[1]!) >= spacer ? a.replace(/:\$?([A-Z]+)(\$?\d+)$/, `:${lastCol}$2`) : a;
   });
+}
+
+/** Width of the column added after a notes column to hold the Print toggle. */
+const TOGGLE_COL_WIDTH = 7;
+
+/**
+ * The Print toggle sits at the right end of row 3 (guide 5.9): "Print" and
+ * the boxed cell in the last two printed columns of the tab's first print
+ * range. A planner that placed it after its figures, short of a notes column
+ * printed in the same range, has it moved: "Print" right-aligned in that
+ * last column and the toggle in a narrow column carved from its right side,
+ * so the printed width, and with it the print scale, is unchanged. A tab
+ * printed in column pages (the Monthly P&L) keeps its toggle.
+ */
+export function toggleAtRightEnd(p: SheetPlan): void {
+  if (!p.toggle || !p.print.areas.length || p.print.colBreaks.length) return;
+  const m = /^(\$?[A-Z]+\$?\d+):\$?([A-Z]+)(\$?\d+)$/.exec(p.print.areas[0]!);
+  if (!m) return;
+  const last = colIndex(m[2]!);
+  const { row, col } = p.toggle;
+  if (col >= last) return;
+  const toggle = p.cells.get(cellKey(row, col))!;
+  const underline: CellSpec = { border: { bottom: "thin" } };
+  if (p.cells.get(cellKey(row, col - 1))?.v === "Print") p.cells.set(cellKey(row, col - 1), { ...underline });
+  p.cells.set(cellKey(row, col), { ...underline });
+  const place = (labelCol: number, at: number) => {
+    // "Print" is right-aligned against the toggle, running left over empty cells when its own column is a spacer.
+    p.cells.set(cellKey(row, labelCol), { ...p.cells.get(cellKey(row, labelCol)), v: "Print", f: undefined, role: "text", align: { horizontal: "right" } });
+    p.cells.set(cellKey(row, at), { ...p.cells.get(cellKey(row, at)), ...toggle });
+    p.toggle = { row, col: at };
+  };
+  if (widthOf(p, last) < 30) {
+    // A last column about as wide as V51's toggle column (18) takes the toggle itself.
+    place(last - 1, last);
+    return;
+  }
+  // A notes-wide last column gives up its right side to a narrow toggle column, so the printed width is unchanged.
+  p.widths.set(last, widthOf(p, last) - TOGGLE_COL_WIDTH);
+  p.widths.set(last + 1, TOGGLE_COL_WIDTH);
+  // The header band and its section fills run on over the carved column, so the table still ends at the toggle's edge.
+  for (const [k, spec] of [...p.cells]) {
+    const [r, c] = k.split(":").map(Number) as [number, number];
+    if (c === last && r > row && ["headerGroup", "header", "section"].includes(spec.style ?? "")) p.cells.set(cellKey(r, last + 1), { style: spec.style, v: null, role: "text" });
+  }
+  place(last, last + 1);
+  p.print.areas[0] = `${m[1]}:${colLetter(last + 1)}${m[3]}`;
 }
 
 /**
@@ -733,6 +781,8 @@ export function paginate(p: SheetPlan): void {
         let at = r;
         for (let b = r; b > pageStart + 1; b--) {
           if (!opens(b)) continue;
+          // A heading directly above the block (a section row over a table's header row) moves with it.
+          while (b - 1 > pageStart + 1 && ["section", "subsection"].includes(styleB(b - 1) ?? "")) b--;
           if (titleHeight + blockHeight(b) <= capacity && bodyRows(pageStart, b - 1) >= MIN_PAGE_ROWS) at = b;
           break;
         }
@@ -759,6 +809,7 @@ export function paginate(p: SheetPlan): void {
         let moved = false;
         for (let b = last; b > prevStart + 1; b--) {
           if (!opens(b)) continue;
+          while (b - 1 > prevStart + 1 && ["section", "subsection"].includes(styleB(b - 1) ?? "")) b--;
           if (fits(b) && bodyRows(prevStart, b - 1) >= MIN_PAGE_ROWS) {
             breaks[breaks.length - 1] = b - 1;
             moved = true;

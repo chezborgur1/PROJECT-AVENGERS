@@ -216,3 +216,16 @@ describe("one label, one definition; modules and sources say what is true (F53, 
     expect(depreciationProxySource([2023, 2024, 2025])).toBe("Three-year average of depreciation expense, FY2023–FY2025");
   });
 });
+
+describe("Debt-Like Items standard list (F13)", () => {
+  it("lists every 5.6 standard item no source balance covers, as Open, and none the sources already show", () => {
+    const model = runModel(ridgelineDataset(), defaultAssumptions(ridgelineDataset(), row));
+    const listed = model.debtLike!.checklist!.map((x) => x.item);
+    // The sample's balance sheet shows vehicle loans, an SBA loan and a credit card: those items are not repeated.
+    for (const covered of ["Vehicle and equipment loans", "SBA loans", "Credit-card balances"]) expect(listed).not.toContain(covered);
+    for (const open of ["PPP or EIDL balances", "Capital leases", "Shareholder loans", "Tax liens", "Known litigation"]) expect(listed).toContain(open);
+    expect(model.debtLike!.checklist!.find((x) => x.item === "Personal guarantees")).toEqual({ item: "Personal guarantees", memo: true });
+    // Open items never move a balance.
+    expect(model.debtLike!.debtLike).toBe(0);
+  });
+});

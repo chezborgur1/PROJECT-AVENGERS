@@ -224,6 +224,8 @@ export interface DebtLikeSummary {
   /** Memo: balances kept in NWC under the AMB default (deferred revenue, customer deposits). */
   inNwc: number;
   asOf: string;
+  /** The guide 5.6 standard items no source balance covers: listed with Status Open until diligence clears them. */
+  checklist?: { item: string; memo: boolean }[];
 }
 
 // --- Customer analytics (guide 5.5) -------------------------------------------------
@@ -273,6 +275,8 @@ export interface CustomerAnalytics {
   retention?: {
     byFiscalYear: Record<number, { counts: RetentionCounts; dollars: RetentionDollars }>;
     ltm?: { counts: RetentionCounts; dollars: RetentionDollars };
+    /** Count roll-forward over the other windows the tab shows (YTD and the prior-year LTM), keyed by column key; dates count any window. */
+    byWindow?: Record<string, RetentionCounts>;
     /** Monthly count roll-forward for the strip and MC-C1; `startingCount` of month m equals `endingCount` of m−1. */
     monthly?: { month: MonthKey; counts: RetentionCounts }[];
     medianTenureYears: number;
@@ -623,6 +627,9 @@ export interface FinancingCase {
   /** SDE − market replacement compensation − capital reserve (Main Street), or PF Adj. EBITDA − maintenance capex. */
   cashFlowAvailable: number;
   dscr: number;
+  /** Main Street: the two deductions from the case's SDE, the ladder's [S2] and [S3] moved by the case's own replacement salary and reserve. */
+  marketReplacement?: number;
+  capitalReserve?: number;
 }
 
 /** The Main Street valuation block of guide 5.5, one case per column. */

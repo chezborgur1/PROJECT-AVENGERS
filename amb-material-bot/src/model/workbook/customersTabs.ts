@@ -157,11 +157,20 @@ export function planRetention(ctx: TabContext): SheetBuilder | undefined {
   const ret = ca.retention;
   const b = new SheetBuilder("retention", SHEET.retention);
   const years = model.columns.filter((c) => c.ref.kind === "fiscal_year" && !c.projected);
-  const ltm = model.columns.find((c) => c.ref.kind === "ltm" && !c.priorYear);
   const cols: { column: PeriodColumn; col: number }[] = years.map((c, i) => ({ column: c, col: 3 + i }));
+  // The count block runs over every window the P&L Summary shows (guide 5.5: FY, YTD, LTM); the dollar block over fiscal years.
+  const groups = [{ from: 3, to: 3 + years.length - 1, label: "Full Year" }];
+  const spacers = [3 + years.length];
   let next = 3 + years.length + 1;
-  if (ltm) cols.push({ column: ltm, col: next++ });
-  const lastSummary = next - 1;
+  for (const [label, kind] of [["YTD", "ytd"], ["LTM", "ltm"]] as const) {
+    const group = model.columns.filter((c) => c.ref.kind === kind && !c.projected);
+    if (!group.length) continue;
+    const from = next;
+    for (const c of group) cols.push({ column: c, col: next++ });
+    groups.push({ from, to: next - 1, label });
+    spacers.push(next++);
+  }
+  const lastSummary = next - 2;
   // The monthly strip sits beside the monthly grid's months; an annual-only model (guide 5.2A) has neither.
   const withStrip = gridMonths(model).length > 0;
   const stripHidden = lastSummary + 2;
@@ -171,8 +180,7 @@ export function planRetention(ctx: TabContext): SheetBuilder | undefined {
   b.width(1, WIDTH.gutter);
   b.width(2, WIDTH.label);
   b.widths(3, lastSummary, WIDTH.value);
-  b.spacerCol(3 + years.length);
-  b.spacerCol(lastSummary + 1);
+  for (const c of spacers) b.spacerCol(c);
   if (withStrip) {
     b.hideCol(stripHidden);
     b.widths(stripFirst, stripLast, WIDTH.stripRetention);
@@ -181,8 +189,6 @@ export function planRetention(ctx: TabContext): SheetBuilder | undefined {
   b.width(notesCol, WIDTH.notes);
   b.anatomy({ subtitle: `${ca.term} Retention: Count and Dollar Roll-Forwards (#, $)`, lastCol: notesCol, toggleCol: lastSummary, masterToggle: ctx.masterToggle });
   b.text(3, lastSummary - 1, "Print", { align: { horizontal: "right" } });
-  const groups = [{ from: 3, to: 3 + years.length - 1, label: "Full Year" }];
-  if (ltm) groups.push({ from: lastSummary, to: lastSummary, label: "LTM" });
   b.tier1(5, [...groups, ...(withStrip ? [{ from: stripFirst, to: stripLast, label: `LTM Monthly ${ca.term}s` }] : []), { from: notesCol, to: notesCol, label: "Notes" }]);
   b.tier2(6, { from: 3, to: lastSummary }, [], `${ca.term} Count`);
   const asOfMonth = model.assumptions!.asOfMonth;
@@ -193,7 +199,7 @@ export function planRetention(ctx: TabContext): SheetBuilder | undefined {
     stripMonths.forEach((m, i) => b.formula(6, stripFirst + i, `EOMONTH(${addr(6, stripFirst + i - 1)},0)+1`, { style: "monthHeader", fmt: FMT.monthHeader, role: "text", expect: serialOfMonthStart(m), label: `strip ${m}` }));
   }
   b.cell(6, notesCol, { style: "header", v: null, role: "text" });
-  const spans: [number, number][] = [[3, 3 + years.length - 1], ...(ltm ? [[lastSummary, lastSummary] as [number, number]] : []), ...(withStrip ? [[stripFirst, stripLast] as [number, number]] : [])];
+  const spans: [number, number][] = [...groups.map((g) => [g.from, g.to] as [number, number]), ...(withStrip ? [[stripFirst, stripLast] as [number, number]] : [])];
 
   // Helper rows: window start and end per summary column (dates), below the printed block.
   let r = 8;
@@ -256,7 +262,7 @@ export function planRetention(ctx: TabContext): SheetBuilder | undefined {
   const countValues = (c: number): ReturnType<typeof countFor> => {
     const column = cols.find((x) => x.col === c)?.column;
     if (column) {
-      const rf = column.ref.kind === "fiscal_year" ? ret.byFiscalYear[column.fiscalYear!]!.counts : ret.ltm!.counts;
+      const rf = column.ref.kind === "fiscal_year" ? ret.byFiscalYear[column.fiscalYear!]!.counts : column.ref.kind === "ltm" && !column.priorYear ? ret.ltm!.counts : ret.byWindow![column.key]!;
       return countFor(rf);
     }
     const m = stripMonthOf(c);
@@ -282,20 +288,21 @@ export function planRetention(ctx: TabContext): SheetBuilder | undefined {
         case "newCustomers":
           f = `COUNTIFS(${START()},">="&${w.start},${START()},"<="&${w.end})`;
           break;
+        // Losses are "(-)" rows, negative like every deduction in the workbook (the ladder's convention).
         case "lostRegrettable":
-          f = `COUNTIFS(${END()},">="&${w.start},${END()},"<="&${w.end},${REASON()},"regrettable")`;
+          f = `-COUNTIFS(${END()},">="&${w.start},${END()},"<="&${w.end},${REASON()},"regrettable")`;
           break;
         case "lostNonRegrettable":
-          f = `COUNTIFS(${END()},">="&${w.start},${END()},"<="&${w.end},${REASON()},"non_regrettable")`;
+          f = `-COUNTIFS(${END()},">="&${w.start},${END()},"<="&${w.end},${REASON()},"non_regrettable")`;
           break;
         case "lostUnclassified":
-          f = `COUNTIFS(${END()},">="&${w.start},${END()},"<="&${w.end})-${at("lostRegrettable")}-${at("lostNonRegrettable")}`;
+          f = `-COUNTIFS(${END()},">="&${w.start},${END()},"<="&${w.end})-${at("lostRegrettable")}-${at("lostNonRegrettable")}`;
           break;
         case "lostTotal":
           f = `${at("lostRegrettable")}+${at("lostNonRegrettable")}+${at("lostUnclassified")}`;
           break;
         case "endingCount":
-          f = `${at("startingCount")}+${at("newCustomers")}-${at("lostTotal")}`;
+          f = `${at("startingCount")}+${at("newCustomers")}+${at("lostTotal")}`;
           break;
         case "avgCustomers":
           f = `(${at("startingCount")}+${at("endingCount")})/2`;
@@ -304,7 +311,7 @@ export function planRetention(ctx: TabContext): SheetBuilder | undefined {
           f = `IFERROR(${at("newCustomers")}/${at("startingCount")},"n.a.")`;
           break;
         default:
-          f = `IFERROR(${at("lostTotal")}/${at("avgCustomers")},"n.a.")`;
+          f = `IFERROR(-${at("lostTotal")}/${at("avgCustomers")},"n.a.")`;
       }
       const fmt = isRatio ? FMT.pct1 : k === "avgCustomers" ? FMT.oneDp : FMT.body;
       const expect = isRatio ? (k === "newGrowth" ? (v.startingCount ? v.newCustomerGrowth : "n.a.") : v.avgCustomers ? v.churn : "n.a.") : v[k as keyof typeof v];
@@ -401,12 +408,12 @@ export function planRetention(ctx: TabContext): SheetBuilder | undefined {
           expect = d.startingRevenue;
           break;
         case "churnRevenue":
-          f = `SUM(${hRange(base + 6)})`;
-          expect = d.churn;
+          f = `-SUM(${hRange(base + 6)})`;
+          expect = -d.churn;
           break;
         case "downsell":
-          f = `SUM(${hRange(base + 7)})`;
-          expect = d.downsell;
+          f = `-SUM(${hRange(base + 7)})`;
+          expect = -d.downsell;
           break;
         case "upsell":
           f = `SUM(${hRange(base + 8)})`;
@@ -417,7 +424,7 @@ export function planRetention(ctx: TabContext): SheetBuilder | undefined {
           expect = d.newRevenue;
           break;
         case "endingRevenue":
-          f = `${at("startingRevenue")}-${at("churnRevenue")}-${at("downsell")}+${at("upsell")}+${at("newRevenue")}`;
+          f = `${at("startingRevenue")}+${at("churnRevenue")}+${at("downsell")}+${at("upsell")}+${at("newRevenue")}`;
           expect = d.endingRevenue;
           break;
         case "lostInYear":
@@ -429,11 +436,11 @@ export function planRetention(ctx: TabContext): SheetBuilder | undefined {
           expect = d.endingRevenue + (d.lostInYearRevenue ?? 0);
           break;
         case "gdr":
-          f = `IFERROR((${at("startingRevenue")}-${at("churnRevenue")}-${at("downsell")})/${at("startingRevenue")},"n.a.")`;
+          f = `IFERROR((${at("startingRevenue")}+${at("churnRevenue")}+${at("downsell")})/${at("startingRevenue")},"n.a.")`;
           expect = d.startingRevenue ? d.gdr : "n.a.";
           break;
         default:
-          f = `IFERROR((${at("startingRevenue")}-${at("churnRevenue")}-${at("downsell")}+${at("upsell")})/${at("startingRevenue")},"n.a.")`;
+          f = `IFERROR((${at("startingRevenue")}+${at("churnRevenue")}+${at("downsell")}+${at("upsell")})/${at("startingRevenue")},"n.a.")`;
           expect = d.startingRevenue ? d.ndr : "n.a.";
       }
       b.formula(rr, c, f, { style: isTotal ? "keyTotal" : isRatio ? "ratio" : "line", fmt: isRatio ? FMT.pct1 : k === "startingRevenue" || isTotal ? FMT.currency : FMT.body, expect, label: `${k} FY${y.fiscalYear}` });
@@ -479,10 +486,10 @@ function countFor(c: RetentionCounts) {
   return {
     startingCount: c.startingCount,
     newCustomers: c.newCustomers,
-    lostRegrettable: c.lostByReason.regrettable,
-    lostNonRegrettable: c.lostByReason.nonRegrettable,
-    lostUnclassified: c.lostByReason.unclassified,
-    lostTotal: c.lostCustomers,
+    lostRegrettable: -c.lostByReason.regrettable,
+    lostNonRegrettable: -c.lostByReason.nonRegrettable,
+    lostUnclassified: -c.lostByReason.unclassified,
+    lostTotal: -c.lostCustomers,
     endingCount: c.endingCount,
     avgCustomers: c.avgCustomers,
     newCustomerGrowth: c.newCustomerGrowth,
@@ -556,7 +563,8 @@ export function planConcentration(ctx: TabContext): SheetBuilder | undefined {
   b.note(r, 2, `Note: ${ca.term.toLowerCase()}s are coded C-001 onward in order of revenue; names stay on the raw tab. Tenure is measured from the start date to the as-of date and is never negative. The total is the ${ca.term.toLowerCase()} list plus the residual bucket, which ties to P&L revenue (check C12).`);
   b.print({ area: `B2:${addr(r, 9)}`, landscape: false, fitToWidth: 1, fitToHeight: 0, titlesRow: "5:6" });
   b.furniture(ctx.codeName, ctx.asOfLabel);
-  b.defineName("Top10Share_LTM", `$D$${b.r("top10")}`);
+  // Named for the LTM only when the table's window is the LTM; a list by fiscal year beside a mid-year LTM leaves it out.
+  if (model.namedOutputs.Top10Share_LTM !== null) b.defineName("Top10Share_LTM", `$D$${b.r("top10")}`);
   return b;
 }
 

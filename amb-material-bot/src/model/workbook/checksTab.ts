@@ -15,6 +15,8 @@ import { offGrid, periodLayout, S, SHEET, type SheetKey } from "./layout.ts";
 /** How a check's difference is computed in the workbook; absent = the engine's value is typed. */
 export interface CheckFormula {
   f: string;
+  /** Terms written one per grey helper row below the print area, which `f` then totals: one per tab for C15 (QA round 3 F15). */
+  parts?: { label: string; f: string }[];
 }
 
 /** Root-sum-square of a range, a scalar that is zero exactly when every cell is zero. */
@@ -31,6 +33,18 @@ export function planChecks(ctx: TabContext, built: Set<SheetKey>, formulas: Reco
   b.text(3, 5, "Print", { align: { horizontal: "right" } });
   b.tier1(5, [{ from: 2, to: lastCol, label: "Checks" }]);
   ["ID", "Check", "Tab", "Difference", "Tolerance", "Status", "Note"].forEach((h, i) => b.cell(6, 2 + i, { style: "header", v: h, role: "text", align: { horizontal: i === 1 || i === 6 ? "left" : "center" } }));
+  // Checks built from many terms put each in a grey helper row after the note, below the print area, and total them.
+  const partRows = new Map<string, { first: number; last: number }>();
+  let partRow = 8 + model.checks.length + CHECK_GROUPS.length + 8;
+  for (const c of model.checks) {
+    const parts = formulas[c.id]?.parts;
+    if (!parts?.length) continue;
+    partRows.set(c.id, { first: partRow, last: partRow + parts.length - 1 });
+    parts.forEach((x) => {
+      b.text(partRow, 3, x.label, { style: "helper" });
+      b.formula(partRow++, 5, x.f, { style: "helper", role: "helper", fmt: FMT.check, expect: 0, label: x.label });
+    });
+  }
   let r = 8;
   b.row("first", r);
   for (const c of model.checks) {
@@ -45,8 +59,9 @@ export function planChecks(ctx: TabContext, built: Set<SheetKey>, formulas: Reco
     const formula = formulas[c.id];
     const tabBuilt = built.has(sheetKeyOf(c.tab)) || c.tab === "Checks";
     if (formula && tabBuilt && c.status !== "n.a.") {
+      const parts = partRows.get(c.id);
       // Dollar checks print at $000s, like the tabs they read; the tolerance is the check's own.
-      b.formula(r, 5, formula.f, { fmt: FMT.check, expect: c.tolerance >= 1 ? c.difference / 1000 : c.difference, tol: Math.max(1e-6, toleranceInUnits(c)), label: `${c.id} difference` });
+      b.formula(r, 5, parts ? `SUM(${addr(parts.first, 5)}:${addr(parts.last, 5)})` : formula.f, { fmt: FMT.check, expect: c.tolerance >= 1 ? c.difference / 1000 : c.difference, tol: Math.max(1e-6, toleranceInUnits(c)), label: `${c.id} difference` });
     } else if (c.status === "n.a.") {
       b.na(r, 5, "n.a.");
     } else if (c.status === "Pending") {
@@ -141,7 +156,7 @@ export function checkFormulas(model: ModelOutput, plans: Partial<Record<SheetKey
   if (has("proofOfCash")) out.C14 = { f: `${S("proofOfCash")}$F$${rowOf("proofOfCash", "variancePct")}` };
   // C15 scans every output tab over the cells it actually uses.
   const scanned = (Object.entries(plans) as [SheetKey, SheetPlan][]).filter(([k, p]) => p.output && k !== "checks");
-  out.C15 = { f: scanned.map(([k, p]) => `SUMPRODUCT(--ISERROR(${S(k)}${usedRange(p)}))`).join("+") };
+  out.C15 = { f: "", parts: scanned.map(([k, p]) => ({ label: `C15: error cells on ${SHEET[k]}`, f: `SUMPRODUCT(--ISERROR(${S(k)}${usedRange(p)}))` })) };
   if (has("monthly") && has("pnl")) {
     out.C16 = { f: `IF(AND(${l.cols.map(({ col }) => `${S("pnl")}${colLetter(col)}6=${S("monthly")}${colLetter(col)}6`).join(",")}),0,1)` };
   }

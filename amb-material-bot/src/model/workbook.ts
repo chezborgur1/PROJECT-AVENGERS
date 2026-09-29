@@ -18,7 +18,7 @@ import ExcelJS from "exceljs";
 import { SOURCE_LABELS, type FinancialDataset } from "../domain/financials.ts";
 import type { RequestRow } from "../requests/schema.ts";
 import type { Assumptions } from "./assumptions.ts";
-import { dropEmptyNotesColumn, finalizeNotes, fitPrintWidth, freezeWideOnly, holdTitleInTitleColumns, paginate, resolveTokens, wrapLongLabels, type CellSpec, type CfRule, type SheetPlan } from "./sheet.ts";
+import { dropEmptyNotesColumn, finalizeNotes, fitPrintWidth, freezeWideOnly, holdTitleInTitleColumns, paginate, resolveTokens, toggleAtRightEnd, wrapLongLabels, type CellSpec, type CfRule, type SheetPlan } from "./sheet.ts";
 import { COLOR, FONT, MARGINS, ROLE_COLOR, ROW_HEIGHT, STYLES, argb, type FontSpec } from "./styles.ts";
 import type { ModelOutput } from "./types.ts";
 import { planAssumptions, type TabContext } from "./workbook/assumptionsTab.ts";
@@ -139,7 +139,10 @@ export function planWorkbook(model: ModelOutput, opts: PlanOptions): WorkbookPla
     const planner = planners[key];
     if (!planner) continue;
     const b = planner();
-    if (b) byKey[key] = b.plan;
+    if (!b) continue;
+    // Raw tabs carry customer and employee names, so they print with the confidentiality footer too (guide 5.11).
+    if (key.startsWith("raw")) b.furniture(ctx.codeName, ctx.asOfLabel);
+    byKey[key] = b.plan;
   }
   const builtKeys = new Set(Object.keys(byKey) as SheetKey[]);
   builtKeys.add("contents");
@@ -155,6 +158,7 @@ export function planWorkbook(model: ModelOutput, opts: PlanOptions): WorkbookPla
   const plans = order.map((k) => byKey[k]!);
   for (const p of plans) {
     dropEmptyNotesColumn(p);
+    toggleAtRightEnd(p);
     holdTitleInTitleColumns(p, opts.businessName);
     wrapLongLabels(p);
     fitPrintWidth(p);

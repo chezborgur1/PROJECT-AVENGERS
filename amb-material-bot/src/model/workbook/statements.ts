@@ -2,7 +2,7 @@
 // 5.1 rows 5-7, 5.3, 5.4). Every period cell is a SUMIFS over the monthly
 // grid or the schedule's own month cells; nothing on the ladder is typed.
 
-import { ADJUSTMENT_CATEGORY_LABELS, ADJUSTMENT_TIER_LABELS, IS_LABELS, monthPeriod, type Adjustment, type IsCategory } from "../../domain/financials.ts";
+import { ADJUSTMENT_CATEGORY_LABELS, ADJUSTMENT_TIER_LABELS, IS_LABELS, monthPeriod, monthRange, type Adjustment, type IsCategory } from "../../domain/financials.ts";
 import { activeCount } from "./customersTabs.ts";
 import { addr, colLetter, rowOf, SheetBuilder, wrappedLines } from "../sheet.ts";
 import { COLOR, FMT, WIDTH } from "../styles.ts";
@@ -65,7 +65,9 @@ export function planPnlSummary(ctx: TabContext): SheetBuilder {
   r++;
   const kpiSection = r;
   b.row("sec_kpi", r++);
-  const kpiKeys = kpiRows(model, ctx.customerYears);
+  // Each listed-customer fiscal year's share of every window, in grey helper rows below the period helpers (filled once they exist).
+  const shareRows = new Map<number, number>();
+  const kpiKeys = kpiRows(model, ctx.customerYears, shareRows);
   for (const k of kpiKeys) b.row(k.key, r++);
   r++;
   // The two ties to the grid (C03, C04) exist only when there is a grid; annual-only models read the Databook directly.
@@ -83,6 +85,29 @@ export function planPnlSummary(ctx: TabContext): SheetBuilder {
   const n = gridMonths(model).length;
   const monthlyRow = (key: string) => `${S("monthly")}$${colLetter(MONTH_START)}$${rowOf("monthly", key)}:$${colLetter(MONTH_START + n - 1)}$${rowOf("monthly", key)}`;
   const monthlyHeader = `${S("monthly")}$${colLetter(MONTH_START)}$6:$${colLetter(MONTH_START + n - 1)}$6`;
+  // Grey helper rows keep the long formulas auditable (QA round 3 F15): the window shares the listed-customer KPI reads, then
+  // C03's difference for each line, which the check row totals.
+  let helperRow = helpers.end + 2;
+  if (model.customers) {
+    for (const y of ctx.customerYears) {
+      const hr = helperRow++;
+      shareRows.set(y, hr);
+      b.text(hr, 2, `Share of FY${y} in the window (listed ${model.customers.term.toLowerCase()}s)`, { style: "helper" });
+      const w = fiscalYearWindow(y, model);
+      for (const { column, col } of l.cols) {
+        const lo = `MAX(${addr(helpers.start, col, { row: true })},${w.start})`;
+        const hi = `MIN(${addr(helpers.end, col, { row: true })},${w.end})`;
+        const months = monthRange(column.start, column.end).filter((m) => monthPeriod(m, model.fiscalYearEndMonth).fiscalYear === y).length;
+        b.formula(hr, col, `MAX(0,(YEAR(${hi})-YEAR(${lo}))*12+MONTH(${hi})-MONTH(${lo})+1)/12`, { style: "helper", role: "helper", fmt: FMT.pct1, expect: months / 12, label: `FY${y} share ${column.label}` });
+      }
+    }
+  }
+  const dollarRows = rows.filter((x) => !["section", "spacer", "margin", "ratio"].includes(x.kind) && !x.subsection);
+  const c03First = helperRow + 1;
+  if (monthly) {
+    b.text(helperRow, 2, "C03 helper: each line less the grid's months to its window end, less those before its start", { style: "helper" });
+    helperRow = c03First + dollarRows.length;
+  }
   const dbFirst = DATABOOK_FIRST_ROW;
   const dbLast = DATABOOK_FIRST_ROW + (model.databook?.pnl.length ?? 1) - 1;
 
@@ -192,14 +217,14 @@ export function planPnlSummary(ctx: TabContext): SheetBuilder {
     // its start, so a wrong window, row or criterion in the SUMIFS shows (the grid's own period block is the same SUMIFS
     // and could not fail).
     b.text(linesCheckRow, 2, "Check: every line less its grid months", { style: "check" });
-    const dollarRows = rows.filter((x) => !["section", "spacer", "margin", "ratio"].includes(x.kind));
+    const gridKey = (x: (typeof rows)[number]) => (x.account ? `rev:${x.account}` : x.contra ? "rev_contra" : x.key);
+    dollarRows.forEach((x, i) => b.text(c03First + i, 2, `C03: ${x.label}`, { style: "helper" }));
     for (const { column, col } of l.cols) {
       if (offGrid(model, column)) continue;
       const [start, end] = [addr(helpers.start, col, { row: true }), addr(helpers.end, col, { row: true })];
-      const gridKey = (x: (typeof rows)[number]) => (x.account ? `rev:${x.account}` : x.contra ? "rev_contra" : x.key);
       const window = (row: string) => `SUMIF(${monthlyHeader},"<="&${end},${row})-SUMIF(${monthlyHeader},"<"&${start},${row})`;
-      const terms = dollarRows.map((x) => `ABS(${addr(b.r(x.key), col)}-(${window(monthlyRow(gridKey(x)))}))`);
-      b.formula(linesCheckRow, col, terms.join("+"), { style: "check", fmt: FMT.check, expect: 0, tol: 1e-6, label: "C03" });
+      dollarRows.forEach((x, i) => b.formula(c03First + i, col, `ABS(${addr(b.r(x.key), col)}-(${window(monthlyRow(gridKey(x)))}))`, { style: "helper", role: "helper", fmt: FMT.check, expect: 0, tol: 1e-6, label: `C03 ${x.key} ${column.label}` }));
+      b.formula(linesCheckRow, col, `SUM(${addr(c03First, col)}:${addr(c03First + dollarRows.length - 1, col)})`, { style: "check", fmt: FMT.check, expect: 0, tol: 1e-6, label: "C03" });
     }
     b.checkCf(linesCheckRow, l.firstCol, l.lastValueCol);
   }
@@ -278,7 +303,7 @@ interface KpiRow {
  * above. Management-stated operating facts carry their own date and sit on
  * the Summary, not in a period column.
  */
-function kpiRows(model: ModelOutput, customerYears: number[]): KpiRow[] {
+function kpiRows(model: ModelOutput, customerYears: number[], shareRows: Map<number, number>): KpiRow[] {
   const rows: KpiRow[] = [];
   const raw = (sheet: "rawCustomers" | "rawPayroll", c: number) => `${S(sheet)}$${colLetter(c)}:$${colLetter(c)}`;
   const ratio = (v: number | undefined) => v ?? "n.a.";
@@ -289,17 +314,14 @@ function kpiRows(model: ModelOutput, customerYears: number[]): KpiRow[] {
       fmt: FMT.body,
       cell: (c, col, _at, h, pv) => ({ f: activeCount(addr(h.end, col, { row: true }), monthPeriod(c.end, model.fiscalYearEndMonth).fiscalYear, customerYears), expect: pv.kpis.customers ?? 0 }),
     });
-    // Listed customers' revenue in the window (each fiscal year of the raw list prorated by the months it contributes), over the listed count.
-    const listedRevenue = (h: { start: number; end: number }, col: number) =>
-      prorationFormula(
-        customerYears.map((y) => {
-          const w = fiscalYearWindow(y, model);
+    // Listed customers' revenue in the window: each fiscal year of the raw list times its share of the window (helper rows), over the listed count.
+    const listedRevenue = (_h: { start: number; end: number }, col: number) =>
+      customerYears
+        .map((y) => {
           const raw = `${S("rawCustomers")}$${colLetter(RAW_CUSTOMER_COLS.firstFy + customerYears.indexOf(y))}:$${colLetter(RAW_CUSTOMER_COLS.firstFy + customerYears.indexOf(y))}`;
-          return { amountCell: `SUMIFS(${raw},${S("rawCustomers")}$${colLetter(RAW_CUSTOMER_COLS.code)}:$${colLetter(RAW_CUSTOMER_COLS.code)},"<>Residual")`, startCell: w.start, endCell: w.end };
-        }),
-        addr(h.start, col, { row: true }),
-        addr(h.end, col, { row: true }),
-      );
+          return `SUMIFS(${raw},${S("rawCustomers")}$${colLetter(RAW_CUSTOMER_COLS.code)}:$${colLetter(RAW_CUSTOMER_COLS.code)},"<>Residual")*${addr(shareRows.get(y)!, col)}`;
+        })
+        .join("+");
     rows.push({
       key: "kpi_revenue_per_customer",
       label: `Revenue per listed ${model.customers.term.toLowerCase()} ($)`,

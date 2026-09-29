@@ -536,6 +536,21 @@ export function planDebtLike(ctx: TabContext): SheetBuilder | undefined {
   b.text(r, 2, "Memo: credit card balances within funded debt (unsecured)", { style: "line" });
   b.formula(r, 3, `SUMIFS(${addr(first, 3, { row: true, col: true })}:${addr(last, 3, { row: true, col: true })},${addr(first, 4, { row: true, col: true })}:${addr(last, 4, { row: true, col: true })},"Debt",${addr(first, 2, { row: true, col: true })}:${addr(last, 2, { row: true, col: true })},"*redit card*")`, { style: "line", fmt: FMT.currency, expect: cards / K, label: "credit cards" });
   r++;
+  // The 5.6 standard items no source balance covers: n.a. and Open, each also a question in open-questions.md.
+  if (dl.checklist?.length) {
+    r++;
+    b.section(r++, "Standard list: not in the sources (open until diligence clears them)", [[3, lastCol]]);
+    for (const x of dl.checklist) {
+      b.text(r, 2, x.item, { style: "line" });
+      b.na(r, 3, "n.a.", { style: "line" });
+      b.text(r, 4, x.memo ? "Memo" : "Debt-like", { align: { horizontal: "center" } });
+      b.text(r, 5, "Not in the sources");
+      b.cell(r, 6, { v: "Open", role: "input", align: { horizontal: "center" } });
+      b.text(r, 7, "n.a.", { align: { horizontal: "center" } });
+      b.text(r, 8, x.memo ? "Memo only: never deducted; confirm with the seller" : "Confirm none outstanding at close (open-questions.md)");
+      r++;
+    }
+  }
   r++;
   b.note(r, 2, `Note: deferred revenue and customer deposits stay in NWC under the AMB default and appear here only as a memo (check C19). ${asset ? "On an asset purchase every debt item is retained by the Seller and settled from proceeds at close with a written payoff letter." : "Cash-free, debt-free: every item is repaid at or before closing; payoff letters and lien releases at close."}`);
   b.print({ area: `B2:${addr(r, lastCol)}`, landscape: true, fitToWidth: 1, fitToHeight: 0, titlesRow: "5:6" });

@@ -197,7 +197,8 @@ function excelSerialOfDate(date: string): number {
 // --- Summary ---------------------------------------------------------------------------------------
 
 const K = 1000;
-const NOTES_WIDTH = 32;
+// 32 for the notes and 7 for the Print toggle, which takes the column's right side (toggleAtRightEnd).
+const NOTES_WIDTH = 39;
 /** The Summary's labels (KPI and operating-fact names such as "Service calls on which an agreement is offered") fit one line at 40. */
 const SUMMARY_LABEL_WIDTH = 40;
 
@@ -324,7 +325,7 @@ export function planSummary(ctx: TabContext): SheetBuilder {
   // Balance sheet and deal facts at the as-of date, in the latest window's column.
   const n = model.namedOutputs;
   const facts: { label: string; f: string; expect: number | string; fmt: string; note?: string }[] = [];
-  if (model.customers) facts.push({ label: `Top 10 ${model.customers.term.toLowerCase()}s, % of revenue`, f: `${S("concentration")}$D$${rowOf("concentration", "top10")}`, expect: n.Top10Share_LTM!, fmt: FMT.pct1 });
+  if (model.customers) facts.push({ label: `Top 10 ${model.customers.term.toLowerCase()}s, % of revenue`, f: `${S("concentration")}$D$${rowOf("concentration", "top10")}`, expect: model.customers.concentration.top10Share, fmt: FMT.pct1 });
   if (model.nwc) facts.push({ label: "Adjusted NWC, latest", f: `${S("nwc")}${colLetter(nwcLayout(model).latestCol)}${rowOf("nwc", "adjustedNwc")}`, expect: (n.NWC_Latest ?? 0) / K, fmt: FMT.currency, note: model.nwc.pegBasis === "n.a." ? "No peg: year-end balance sheets only" : `Peg basis: ${model.nwc.pegBasis}` });
   if (model.debtLike) facts.push({ label: "Funded debt, latest", f: `${S("debtLike")}$C$${rowOf("debtLike", "fundedDebt")}`, expect: model.debtLike.fundedDebt / K, fmt: FMT.currency, note: model.dealForm === "asset_purchase" ? "Seller's; paid from proceeds at close" : "Repaid at or before closing" });
   facts.push({ label: "Mode", f: `IF(${A("mainStreetMode")}=1,"Main Street","Lower middle market")`, expect: model.mode.mode === "mainStreet" ? "Main Street" : "Lower middle market", fmt: FMT.body, note: `$${Math.round(model.mode.measure / K).toLocaleString("en-US")}K PF Adj. EBITDA vs. $1.0M threshold` });

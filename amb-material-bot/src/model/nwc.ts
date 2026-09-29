@@ -123,13 +123,39 @@ export const isCreditCard = (item: string): boolean => /credit card/i.test(item)
 /** Deferred revenue and customer deposits, the balances DeferredRevenueTreatment moves between NWC and debt-like. */
 export const isCustomerMoney = (item: string): boolean => /deferred revenue|customer deposit/i.test(item);
 
+/**
+ * The guide 5.6 standard debt-like list. An item a source balance already
+ * covers (by its name) is not repeated; every other one is listed as Open, so
+ * diligence sees what has not been cleared. Personal guarantees are a memo.
+ */
+const STANDARD_DEBT_LIKE: { item: string; match: RegExp; memo?: boolean }[] = [
+  { item: "Funded bank debt", match: /bank|term loan|note payable|\bsba\b/i },
+  { item: "Lines of credit and revolvers", match: /line of credit|revolv/i },
+  { item: "Credit-card balances", match: /credit card/i },
+  { item: "SBA loans", match: /\bsba\b/i },
+  { item: "PPP or EIDL balances", match: /\bppp\b|\beidl\b/i },
+  { item: "Vehicle and equipment loans", match: /vehicle|equipment|truck/i },
+  { item: "Capital leases", match: /capital lease|finance lease/i },
+  { item: "Shareholder loans", match: /shareholder|officer loan|owner loan|due to (owner|member)/i },
+  { item: "Accrued interest", match: /accrued interest|interest payable/i },
+  { item: "Unpaid bonuses and payroll taxes", match: /bonus|payroll/i },
+  { item: "Accrued income taxes", match: /income tax/i },
+  { item: "Tax liens", match: /lien/i },
+  { item: "Deferred capex", match: /deferred (capex|maintenance)/i },
+  { item: "Aged payables over 90 days", match: /aged payable|over 90/i },
+  { item: "Related-party payables", match: /related.part|affiliate/i },
+  { item: "Known litigation", match: /litigation|lawsuit/i },
+  { item: "Personal guarantees", match: /guarantee/i, memo: true },
+];
+
 export function debtLikeSummary(ds: FinancialDataset, latestBs: { values: BalanceSheetValues; asOf: string } | undefined, deferredAsDebtLike = false): DebtLikeSummary | undefined {
   if (!latestBs) return undefined;
   const items = ds.debtLikeItems?.length
     ? ds.debtLikeItems.map((i) => ({ item: i.item, balance: i.balance, treatment: deferredAsDebtLike && i.treatment === "nwc" && isCustomerMoney(i.item) ? ("debt_like" as const) : i.treatment, status: i.status, payoffLetter: i.payoffLetter, note: i.note, accounts: i.accounts }))
     : [{ item: "Debt per balance sheet (accounts not itemised)", balance: latestBs.values.debt, treatment: "debt" as const, status: "estimated", note: "Itemise from the loan statements", accounts: [] as string[] }];
   const sum = (t: DebtLikeSummary["items"][number]["treatment"]) => items.filter((i) => i.treatment === t).reduce((s, i) => s + i.balance, 0);
-  return { items, fundedDebt: sum("debt"), debtLike: sum("debt_like"), inNwc: sum("nwc"), asOf: latestBs.asOf };
+  const checklist = STANDARD_DEBT_LIKE.filter((x) => !items.some((i) => x.match.test(i.item))).map((x) => ({ item: x.item, memo: !!x.memo }));
+  return { items, fundedDebt: sum("debt"), debtLike: sum("debt_like"), inNwc: sum("nwc"), asOf: latestBs.asOf, checklist };
 }
 
 /** Indirect cash flow between consecutive year-end balance sheets, with capex and distributions derived (guide 5.1 row 18). */

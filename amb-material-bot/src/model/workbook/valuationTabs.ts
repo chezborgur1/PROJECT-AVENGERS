@@ -142,7 +142,11 @@ export function planValuation(ctx: TabContext): SheetBuilder | undefined {
     r++;
   };
   const basis = vd.basis;
-  b.section(r++, `Earnings basis (${period.label}${pfCol ? `, pro forma ${pfCol.label}` : ""})`, spans);
+  b.section(r, "Earnings basis", spans);
+  // One set of base figures, not a Low case: the block carries its own one-column header over them (QA round 3 F21).
+  b.cell(r, 3, { v: period.label, role: "text", font: { bold: true }, align: { horizontal: "right" } });
+  if (pfCol) b.note(r, notesCol, `Ladder figures at ${pfCol.label} (pro forma)`);
+  r++;
   row("basisRevenue", "Total Revenue", "lineFirst", (i) => (i === 0 ? { f: pnl("revenue"), expect: basis.revenue / K } : undefined), FMT.currency, "P&L Summary");
   row("basisReported", "Reported EBITDA", "line", (i) => (i === 0 ? { f: ladder("reported_ebitda"), expect: basis.reportedEbitda / K } : undefined), FMT.body, "Adj. EBITDA ladder");
   row("basisAdj", "Adj. EBITDA", "line", (i) => (i === 0 ? { f: ladder("adj_ebitda"), expect: basis.adjEbitda / K } : undefined), FMT.body);
@@ -187,7 +191,10 @@ export function planValuation(ctx: TabContext): SheetBuilder | undefined {
   row("earnings", basisLabel, "lineFirst", (i) => ({ f: earnings(i), expect: vd.cases[cases[i]!].sde / K }), FMT.currency, earningsNote);
   row("multiple", "(x) Valuation Multiple", "line", (i) => ({ f: A_AT(mainStreet ? "sdeMultiples" : "ebitdaMultiples", i), expect: vd.cases[cases[i]!].multiple }), FMT.multiple, model.assumptions!.multiplesSource);
   row("businessValuation", "Business Valuation", "subtotal", (i) => ({ f: `${addr(b.r("earnings"), 3 + i)}*${addr(b.r("multiple"), 3 + i)}`, expect: vd.cases[cases[i]!].businessValuation / K }), FMT.currency);
-  row("deferredCapex", "(+) Deferred Capex / Renovation", "line", () => ({ f: `${A("deferredCapex")}/${K}`, expect: vd.cases.low.deferredCapex / K }), FMT.body, "Assumptions");
+  // The deferred capex and the financing terms are per case, from the scenario block where there is one (guide 5.5).
+  const byCase = (key: string, i: number) => (scenarios ? A_AT(`scenario_${key}`, i) : A(key));
+  const caseSource = scenarios ? "Assumptions, scenario block" : "Assumptions";
+  row("deferredCapex", "(+) Deferred Capex / Renovation", "line", (i) => ({ f: `${byCase("deferredCapex", i)}/${K}`, expect: vd.cases[cases[i]!].deferredCapex / K }), FMT.body, caseSource);
   row("totalInvestment", "Total Investment", "keyTotal", (i) => ({ f: `ROUND((${addr(b.r("businessValuation"), 3 + i)}+${addr(b.r("deferredCapex"), 3 + i)})*${K},-1)/${K}`, expect: vd.cases[cases[i]!].totalInvestment / K }), FMT.currency, "Rounded to the nearest $10");
   row("impliedSde", "Implied SDE Multiple", "line", (i) => ({ f: `IFERROR(${addr(b.r("totalInvestment"), 3 + i)}/${addr(b.r("basisSde"), 3)},"n.a.")`, expect: vd.cases[cases[i]!].impliedSdeMultiple }), FMT.multiple);
   row("impliedAdj", "Implied Adj. EBITDA Multiple", "line", (i) => ({ f: `IFERROR(${addr(b.r("totalInvestment"), 3 + i)}/${addr(b.r("basisAdj"), 3)},"n.a.")`, expect: vd.cases[cases[i]!].impliedAdjEbitdaMultiple }), FMT.multiple);
@@ -196,12 +203,19 @@ export function planValuation(ctx: TabContext): SheetBuilder | undefined {
   b.text(r++, 2, "Financing: SBA-only illustration", { style: "subsection" });
   const fin = (i: number) => vd.cases[cases[i]!].financing;
   row("purchasePrice", "Purchase Price", "lineFirst", (i) => ({ f: addr(b.r("totalInvestment"), 3 + i), expect: fin(i).purchasePrice / K }), FMT.currency, "= Total Investment");
-  row("equityInjection", "(-) Equity Injection", "line", (i) => ({ f: `${addr(b.r("purchasePrice"), 3 + i)}*${A("equityInjectionPct")}`, expect: fin(i).equityInjection / K }), FMT.body, "Assumptions: SBA 7(a) minimum 10%");
-  row("loanPrincipal", "Loan Principal", "subtotal", (i) => ({ f: `MAX(0,${addr(b.r("purchasePrice"), 3 + i)}-${addr(b.r("equityInjection"), 3 + i)})`, expect: fin(i).loanPrincipal / K }), FMT.currency, "Never below zero (check C28)");
-  row("term", "Term (Years)", "line", () => ({ f: A("loanTermYears"), expect: fin(0).termYears }), FMT.term, "Assumptions");
-  row("rate", "Interest Rate", "line", () => ({ f: A("loanRate"), expect: fin(0).rate }), FMT.rate, "Assumptions");
+  // "(-)" rows are negative, as on the ladder and the equity bridge below.
+  row("equityInjection", "(-) Equity Injection", "line", (i) => ({ f: `-${addr(b.r("purchasePrice"), 3 + i)}*${byCase("equityInjectionPct", i)}`, expect: -fin(i).equityInjection / K }), FMT.body, `${caseSource}: SBA 7(a) minimum 10%`);
+  row("loanPrincipal", "Loan Principal", "subtotal", (i) => ({ f: `MAX(0,${addr(b.r("purchasePrice"), 3 + i)}+${addr(b.r("equityInjection"), 3 + i)})`, expect: fin(i).loanPrincipal / K }), FMT.currency, "Never below zero (check C28)");
+  row("term", "Term (Years)", "line", (i) => ({ f: byCase("loanTermYears", i), expect: fin(i).termYears }), FMT.term, caseSource);
+  row("rate", "Interest Rate", "line", (i) => ({ f: byCase("loanRate", i), expect: fin(i).rate }), FMT.rate, caseSource);
   row("debtService", "Annual Debt Service", "line", (i) => ({ f: `-PMT(${addr(b.r("rate"), 3 + i)}/12,${addr(b.r("term"), 3 + i)}*12,${addr(b.r("loanPrincipal"), 3 + i)})*12`, expect: fin(i).annualDebtService / K }), FMT.body, "= -PMT(rate/12, term × 12, principal) × 12");
-  row("cfads", "Cash Flow Available for Debt Service", "line", (i) => ({ f: mainStreet ? `${addr(b.r("earnings"), 3 + i)}+${ladder("s2")}+${ladder("s3")}` : `${ladder("pf_adj_ebitda")}-${A("capitalReserve")}/${K}`, expect: fin(i).cashFlowAvailable / K }), FMT.body, mainStreet ? "The case's SDE less market replacement compensation and the capital reserve" : "PF Adj. EBITDA less maintenance capex");
+  if (mainStreet) {
+    // The ladder's [S2] and [S3], moved by the case's own replacement salary and reserve on the scenario block (equal by default).
+    const moved = (ladderKey: string, key: string, times: string) => (i: number) => (scenarios ? `${ladder(ladderKey)}-(${A_AT(`scenario_${key}`, i)}-${A(key)})${times}/${K}` : ladder(ladderKey));
+    row("cfadsS2", "(-) Market Replacement Compensation", "line", (i) => ({ f: moved("s2", "replacementSalary", `*(1+${A("burdenPct")})`)(i), expect: (fin(i).marketReplacement ?? 0) / K }), FMT.body, scenarios ? "Ladder [S2] at the case's replacement salary" : "Adj. EBITDA ladder [S2]");
+    row("cfadsS3", "(-) Capital Reserve", "line", (i) => ({ f: moved("s3", "capitalReserve", "")(i), expect: (fin(i).capitalReserve ?? 0) / K }), FMT.body, scenarios ? "Ladder [S3] at the case's reserve" : "Adj. EBITDA ladder [S3]");
+  }
+  row("cfads", "Cash Flow Available for Debt Service", "line", (i) => ({ f: mainStreet ? `${addr(b.r("earnings"), 3 + i)}+${addr(b.r("cfadsS2"), 3 + i)}+${addr(b.r("cfadsS3"), 3 + i)}` : `${ladder("pf_adj_ebitda")}-${A("capitalReserve")}/${K}`, expect: fin(i).cashFlowAvailable / K }), FMT.body, mainStreet ? "The case's SDE less the two deductions above" : "PF Adj. EBITDA less maintenance capex");
   row("dscr", "DSCR (SBA loan only)", "keyRate", (i) => ({ f: `IFERROR(${addr(b.r("cfads"), 3 + i)}/${addr(b.r("debtService"), 3 + i)},"n.a.")`, expect: fin(i).dscr }), FMT.multiple2);
   b.cell(b.r("dscr"), 2, { style: "keyRate", align: { horizontal: "left" } });
   // The hurdle claim names the binding (lowest) case, live, so it cannot outlast a change of inputs.

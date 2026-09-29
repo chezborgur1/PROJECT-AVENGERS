@@ -810,21 +810,33 @@ function printRaw(b: SheetBuilder): SheetBuilder {
     lastCol = Math.max(lastCol, c);
   }
   for (let c = 1; c <= lastCol; c++) {
+    // The header row counts too, in bold, so an added column's header ("Departure type (added)") is never cut.
+    const header = b.plan.cells.get(`3:${c}`);
+    const headerPx = typeof header?.v === "string" ? textWidthPx(header.v, true) : 0;
     const texts = [...b.plan.cells].filter(([k, spec]) => Number(k.split(":")[0]) >= 4 && Number(k.split(":")[1]) === c && typeof spec.v === "string" && spec.v !== "").map(([, spec]) => spec);
-    if (!texts.length) continue;
-    const widest = Math.max(...texts.map((spec) => textWidthPx(String(spec.v))));
+    if (!texts.length && !headerPx) continue;
+    const widest = Math.max(headerPx, ...texts.map((spec) => textWidthPx(String(spec.v))));
     const width = Math.min(RAW_TEXT_MAX, Math.max(b.plan.widths.get(c) ?? 0, Math.ceil((widest + 4 - 5) / 7) + 1));
     b.width(c, width);
     for (const spec of texts) if (wrappedLines(String(spec.v), width) > 1) spec.align = { ...spec.align, wrap: true };
   }
+  // The title (row 1) and the source line (row 2) print inside the print width: the last column takes up what they overrun.
+  const printedPx = Array.from({ length: lastCol }, (_, i) => (b.plan.widths.get(i + 1) ?? 8.43) * 7 + 5).reduce((a, x) => a + x, 0);
+  const needPx = Math.max(...[1, 2].map((r) => b.plan.cells.get(`${r}:1`)).map((spec) => (typeof spec?.v === "string" ? (textWidthPx(spec.v, !!spec.font?.bold) * (spec.font?.size ?? 9)) / 9 : 0)));
+  if (needPx > printedPx) b.width(lastCol, (b.plan.widths.get(lastCol) ?? 8.43) + Math.ceil((needPx - printedPx) / 7));
   b.print({ area: `A1:${addr(lastRow, lastCol)}`, landscape: true, fitToWidth: 1, fitToHeight: 0, titlesRow: "3:3" });
   return b;
 }
 
-function rawSheet(key: "rawPnl" | "rawPnlAnnual" | "rawBs" | "rawBank" | "rawCustomers" | "rawPayroll", title: string, headers: string[], widths: number[]): SheetBuilder {
+/**
+ * A raw tab: a short title in A1, the file it was pasted from (and anything
+ * the bot added) on its own line in A2, the export's headers in row 3.
+ */
+function rawSheet(key: "rawPnl" | "rawPnlAnnual" | "rawBs" | "rawBank" | "rawCustomers" | "rawPayroll", title: string, source: string, headers: string[], widths: number[]): SheetBuilder {
   const b = new SheetBuilder(key, SHEET[key], { output: false, tabColor: COLOR.rawTab, gridlines: true });
   widths.forEach((w, i) => b.width(1 + i, w));
   b.text(1, 1, title, { font: { bold: true, size: 11 } });
+  b.text(2, 1, source, { font: { italic: true } });
   headers.forEach((h, i) => b.cell(3, 1 + i, { style: "header", v: h, role: "text", align: { horizontal: i < 2 ? "left" : "center" } }));
   b.freeze(4, 1);
   return b;
@@ -862,7 +874,7 @@ export function planRawPnl(model: ModelOutput): SheetBuilder {
   const rows = (model.databook?.pnl ?? []).filter((x) => !x.annualOnly);
   const fyCols = model.columns.filter((c) => c.ref.kind === "fiscal_year" && !c.projected);
   const monthHeaders = months.length ? months : fyCols.map((c) => c.label);
-  const b = rawSheet("rawPnl", `Raw - P&L as exported (${rows[0] ? SOURCE_LABELS[rows[0].source] : "no source"}: ${rows[0]?.file ?? ""})`, ["Account", "Section", ...monthHeaders.map((m) => (months.length ? "" : m)), "Total"], [40, 24, ...monthHeaders.map(() => 11), 12]);
+  const b = rawSheet("rawPnl", "Raw - P&L as exported", rows[0] ? `${SOURCE_LABELS[rows[0].source]}: ${rows[0].file}` : "No source", ["Account", "Section", ...monthHeaders.map((m) => (months.length ? "" : m)), "Total"], [40, 24, ...monthHeaders.map(() => 11), 12]);
   if (months.length) months.forEach((m, i) => b.cell(3, 3 + i, { style: "monthHeader", v: serialOfMonthStart(m), fmt: FMT.monthHeader, role: "text" }));
   let r = 4;
   for (const row of rows) {
@@ -890,7 +902,7 @@ export function planRawPnlAnnual(model: ModelOutput, ds: FinancialDataset): Shee
   if (!years.length) return undefined;
   const lines = ds.lines.filter((l) => l.statement === "pnl" && years.includes(l.year));
   const files = [...new Set(lines.map((l) => `${SOURCE_LABELS[l.source]}: ${path.basename(l.file)}`))];
-  const b = rawSheet("rawPnlAnnual", `Raw - P&L as exported, fiscal years not on the monthly grid (${files.join("; ")})`, ["Account", "Section", ...years.map((y) => `FY${y}`)], [40, 24, ...years.map(() => 12)]);
+  const b = rawSheet("rawPnlAnnual", "Raw - P&L as exported, fiscal years not on the monthly grid", files.join("; "), ["Account", "Section", ...years.map((y) => `FY${y}`)], [40, 24, ...years.map(() => 12)]);
   const byKey = new Map<string, { account: string; section: string; amounts: Record<number, number> }>();
   for (const l of lines) {
     const key = `${l.account}|${l.section ?? ""}`;
@@ -912,7 +924,7 @@ export function planRawPnlAnnual(model: ModelOutput, ds: FinancialDataset): Shee
 export function planRawBs(model: ModelOutput): SheetBuilder {
   const rows = model.databook?.bs ?? [];
   const dates = [...new Set(rows.flatMap((x) => Object.keys(x.byMonth)))].sort();
-  const b = rawSheet("rawBs", `Raw - Balance sheet as exported (${rows[0] ? SOURCE_LABELS[rows[0].source] : "no source"}: ${rows[0]?.file ?? ""})`, ["Account", "Section", ...dates.map(() => "")], [48, 40, ...dates.map(() => 12)]);
+  const b = rawSheet("rawBs", "Raw - Balance sheet as exported", rows[0] ? `${SOURCE_LABELS[rows[0].source]}: ${rows[0].file}` : "No source", ["Account", "Section", ...dates.map(() => "")], [48, 40, ...dates.map(() => 12)]);
   dates.forEach((m, i) => b.cell(3, 3 + i, { style: "monthHeader", v: serialOfMonthStart(m), fmt: FMT.monthHeader, role: "text" }));
   let r = 4;
   for (const row of rows) {
@@ -940,17 +952,18 @@ export function planRawBank(ds: FinancialDataset): SheetBuilder | undefined {
   if (!ds.depositsByMonth) return undefined;
   const tx = ds.bankTransactions;
   if (tx?.length) {
-    const b = rawSheet("rawBank", `Raw - Bank transactions as exported (${[...new Set(tx.map((t) => t.file))].join(", ")}); Classification added: only Operating deposits count as revenue collected`, ["Date", "Description", "Amount", "Classification"], [12, 44, 14, 16]);
+    const bankFmt = rawFormat(tx.map((t) => t.amount));
+    const b = rawSheet("rawBank", "Raw - Bank transactions as exported", `${[...new Set(tx.map((t) => t.file))].join(", ")}; Classification added: only Operating deposits count as revenue collected`, ["Date", "Description", "Amount", "Classification"], [12, 44, 14, 16]);
     tx.forEach((t, i) => {
       const r = 4 + i;
       b.cell(r, RAW_BANK_COLS.date, { v: excelSerial(t.date), fmt: FMT.date, role: "input", align: { horizontal: "left" } });
       b.text(r, RAW_BANK_COLS.description, t.description);
-      b.num(r, RAW_BANK_COLS.amount, cents(t.amount), { fmt: FMT.cents });
+      b.num(r, RAW_BANK_COLS.amount, cents(t.amount), { fmt: bankFmt });
       b.cell(r, RAW_BANK_COLS.classification, { v: t.classification, role: "input" });
     });
     return printRaw(b);
   }
-  const b = rawSheet("rawBank", "Raw - Bank deposits by month (operating deposits; transfers, loan proceeds and owner contributions excluded)", ["Month", "Operating deposits", "Excluded", "Total deposits"], [14, 18, 14, 16]);
+  const b = rawSheet("rawBank", "Raw - Bank deposits by month", "Operating deposits; transfers, loan proceeds and owner contributions excluded", ["Month", "Operating deposits", "Excluded", "Total deposits"], [14, 18, 14, 16]);
   let r = 4;
   for (const m of Object.keys(ds.depositsByMonth).sort()) {
     const d = ds.depositsByMonth[m]!;
@@ -982,7 +995,7 @@ export function customerYears(years: number[], list?: FinancialDataset["customer
 export function planRawCustomers(ds: FinancialDataset, years: number[]): SheetBuilder | undefined {
   const list = ds.customers;
   if (!list) return undefined;
-  const b = rawSheet("rawCustomers", `Raw - Customers (${list.source}: ${list.file}). Names stay on this tab only.`, ["Code", "Name", "Type", "Segment", "Start date", "End date", "Loss reason", "Contract basis", ...years.map((y) => `FY${y} revenue`)], [9, 30, 18, 14, 11, 11, 14, 18, ...years.map(() => 13)]);
+  const b = rawSheet("rawCustomers", "Raw - Customer list as exported", `${list.file}; codes added. Names stay on this tab only.`, ["Code", "Name", "Type", "Segment", "Start date", "End date", "Loss reason", "Contract basis", ...years.map((y) => `FY${y} revenue`)], [9, 30, 18, 14, 11, 11, 14, 18, ...years.map(() => 13)]);
   let r = 4;
   const date = (d?: string) => (d ? { v: excelSerialOf(d), fmt: FMT.date, role: "input" as const } : { v: null });
   for (const c of list.customers) {
@@ -1039,7 +1052,8 @@ export function planRawPayroll(ds: FinancialDataset, years: number[]): SheetBuil
   const addedHeaders = ["ID (added)", "Owner? (added)", "Departure type (added)", "FTE (added)"];
   const b = rawSheet(
     "rawPayroll",
-    `Raw - Payroll register as exported (${reg.source}: ${reg.file}); the last four columns are added for the formulas. Names stay on this tab only.`,
+    "Raw - Payroll register as exported",
+    `${reg.file}; the four columns after the gap are added for the formulas. Names stay on this tab only.`,
     [...exportHeaders, "", ...addedHeaders],
     [22, 24, 16, 11, 13, 14, 20, 8, 11, ...years.map(() => 12), ...(fileCosts ? years.map(() => 14) : []), 2, 9, 12, 16, 10],
   );

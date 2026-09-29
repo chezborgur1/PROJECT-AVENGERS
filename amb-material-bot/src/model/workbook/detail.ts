@@ -11,7 +11,7 @@ import { addr, colLetter, rowOf, SheetBuilder } from "../sheet.ts";
 import { FMT, WIDTH } from "../styles.ts";
 import type { ModelOutput, MonthlySeries } from "../types.ts";
 import type { TabContext } from "./assumptionsTab.ts";
-import { MONTH_START, priorColumn, valueStyle } from "./data.ts";
+import { deltaValues, MONTH_START, priorColumn, valueStyle, writeDeltas } from "./data.ts";
 import { applyPeriodWidths, ASOF, gridMonths, offGrid, periodLayout, S, SHEET, serialOfMonthStart, sumifsFormula, valueSpans, writePeriodHelpers, yearEarlierMonths, yearEarlierSumifs } from "./layout.ts";
 
 const K = 1000;
@@ -179,7 +179,7 @@ function planAnnualDetail(ctx: TabContext, key: "revenue" | "expense", name: str
 function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, subtitle: string, group: string, lines: DetailLine[], stripTitle: string): SheetBuilder {
   const { model } = ctx;
   const b = new SheetBuilder(key, name);
-  const l = periodLayout(model, 3, { deltas: false });
+  const l = periodLayout(model, 3);
   const months = gridMonths(model);
   const asOf = model.assumptions!.asOfMonth;
   const stripMonths = monthRange(addMonths(asOf, -11), asOf);
@@ -188,8 +188,11 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
   const stripFirst = hiddenCol + 1;
   const stripLast = stripFirst + 11;
   const notesCol = stripLast + 2;
-  applyPeriodWidths(b, l);
+  // The period block has no notes column of its own (the tab's notes follow the strip); the hidden prior month takes a strip
+  // width, so its text cannot spill into the printed columns beside it.
+  applyPeriodWidths(b, l, WIDTH.label, { notes: false });
   b.spacerCol(l.lastValueCol + 1);
+  b.width(hiddenCol, WIDTH.strip);
   b.hideCol(hiddenCol);
   b.widths(stripFirst, stripLast, WIDTH.strip);
   b.spacerCol(stripLast + 1);
@@ -198,6 +201,10 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
   b.text(3, l.lastValueCol - 1, "Print", { align: { horizontal: "right" } });
   b.tier1(5, [...l.groups, { from: stripFirst, to: stripLast, label: stripTitle }, { from: notesCol, to: notesCol, label: "Notes" }]);
   b.tier2(6, { from: l.firstCol, to: l.lastValueCol }, [], group);
+  if (l.deltas) {
+    b.cell(6, l.deltas.dollar, { style: "header", v: "($)", role: "text" });
+    b.cell(6, l.deltas.pct, { style: "header", v: "(%)", role: "text" });
+  }
   // Strip headers: the hidden prior month, then a chain of first-of-month serials from AsOfDate (guide 5.5).
   b.formula(6, hiddenCol, `EOMONTH(${ASOF},-13)+1`, { style: "monthHeader", fmt: FMT.monthHeader, role: "text", expect: serialOfMonthStart(priorMonth), label: "strip hidden month" });
   stripMonths.forEach((m, i) => b.formula(6, stripFirst + i, `EOMONTH(${addr(6, stripFirst + i - 1)},0)+1`, { style: "monthHeader", fmt: FMT.monthHeader, role: "text", expect: serialOfMonthStart(m), label: `strip month ${m}` }));
@@ -286,6 +293,8 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
           b.formula(rr, col, `IFERROR(${at(ln.key)}/${colLetter(prior.col)}${b.r(ln.key)}-1,"n.a.")`, { style: vs.style, fmt: vs.fmt, expect: prev ? ln.value(pv) / prev - 1 : "n.a.", label: `${ln.key} growth ${column.label}` });
         }
       }
+      // PF vs. LTM on the dollar lines (guide 5.2 N:O).
+      if (bl.kind === "dollars" && l.deltas) writeDeltas(b, rr, l, ln.kind, deltaValues(model, l, (p) => ln.value(p) / K));
       // Strip.
       for (const m of stripAllMonths) {
         const col = stripColOf(m);
@@ -371,8 +380,10 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
   b.checkCf(hr, 3, 3);
   b.note(lastPrinted, 2, "Note: strip cells link to Monthly P&L; growth is year over year in the summary block and month over month in the strip (n.a. where there is no denominator). The hidden column left of the strip holds the month before the LTM start so the first month's growth has a denominator.");
   // The period block and the strip print as separate ranges with the labels repeated, so neither shrinks under the 7 pt floor (C37).
-  // The strip range stops at its last row of figures: the checks and the note belong to the period block, and printed beside the
-  // strip they showed only a clipped piece of their text in the repeated label column.
+  // The LTM, PF and PF vs. LTM columns print with the period block: repeated at the head of the strip range they push it past
+  // one landscape page at the floor (guide 5.5 records this). The strip range stops at its last row of figures: the checks and
+  // the note belong to the period block, and printed beside the strip they showed only a clipped piece of their text in the
+  // repeated label column.
   b.print({ areas: [`B2:${addr(lastPrinted, l.lastValueCol)}`, `${addr(2, stripFirst)}:${addr(b.r("growth_total"), stripLast)}`], landscape: true, fitToWidth: 1, fitToHeight: 0, titlesRow: "2:6", titlesCol: "B:B" });
   b.furniture(ctx.codeName, ctx.asOfLabel);
   b.freeze(7, 3);

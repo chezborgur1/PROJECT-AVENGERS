@@ -64,10 +64,29 @@ function premisesFrom(ds: FinancialDataset): DealAssumptions["premisesArrangemen
 /** Pro forma methods a Main Street scenario applies per expense line (guide 5.5 scenario block). */
 export type ScenarioMethod = "3-year average" | "Latest year" | "% of sales, latest year" | "% of sales, 3-year blended" | "Contracted" | "Input";
 
+/** The per-case financing and recast inputs of the scenario block (guide 5.5); a case without its own value takes the base input. */
+export const SCENARIO_FINANCING_KEYS = ["replacementSalary", "capitalReserve", "deferredCapex", "equityInjectionPct", "loanTermYears", "loanRate"] as const;
+export type ScenarioFinancingKey = (typeof SCENARIO_FINANCING_KEYS)[number];
+
 /** One column of the Low / Mid / High block (guide 5.2A, 5.5). Mid is the base case. */
 export interface ScenarioDrivers {
   revenueGrowth: number;
   methods: { cogs: ScenarioMethod; payroll: ScenarioMethod; rent: ScenarioMethod; marketing: ScenarioMethod; otherOpex: ScenarioMethod };
+  financing?: Partial<Record<ScenarioFinancingKey, number>>;
+}
+
+/** A case's value for a scenario-block financing input: its own, else the base input it defaults to. */
+export function scenarioInput(a: Assumptions, drivers: ScenarioDrivers, key: ScenarioFinancingKey): number {
+  const own = drivers.financing?.[key];
+  if (own !== undefined) return own;
+  switch (key) {
+    case "replacementSalary":
+      return a.recast.replacementSalary;
+    case "capitalReserve":
+      return a.recast.capitalReserve;
+    default:
+      return a.deal[key];
+  }
 }
 
 /** Step sizes for the two-way grids (guide 5.5); midpoints link to the base case. */

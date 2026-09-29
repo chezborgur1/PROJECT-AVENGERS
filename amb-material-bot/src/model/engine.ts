@@ -541,6 +541,7 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
         list: ds.customers,
         period: customerPeriod,
         countWindow: latest,
+        windows: hist.filter((c) => c.ref.kind === "ytd" || (c.ref.kind === "ltm" && c.priorYear)),
         fye,
         asOfDate,
         asOfMonth: a.asOfMonth,
@@ -719,7 +720,8 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
     AdjEBITDA_LTM: ltmValues?.ladder.adjEbitda ?? null,
     PFAdjEBITDA: (pfCol ? periods[pfCol.key]! : latestValues).ladder.pfAdjEbitda,
     Customers_Latest: customers?.latestCount ?? null,
-    Top10Share_LTM: customers?.concentration.top10Share ?? null,
+    // The concentration table is priced over the customer window: an LTM name only when that window is the LTM (QA round 3 F17).
+    Top10Share_LTM: customers && customerPeriod.start === latest.start && customerPeriod.end === latest.end ? customers.concentration.top10Share : null,
     GDR_LTM: ltmRetention?.dollars.startingRevenue ? ltmRetention.dollars.gdr : null,
     NDR_LTM: ltmRetention?.dollars.startingRevenue ? ltmRetention.dollars.ndr : null,
     Headcount_Latest: headcount?.latestHeadcount ?? null,

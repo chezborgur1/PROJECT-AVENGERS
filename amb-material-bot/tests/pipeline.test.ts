@@ -115,6 +115,9 @@ describe("pipeline on the sample request (offline: no Claude)", () => {
     expect(result.openQuestions.length).toBeGreaterThan(0);
     for (const q of result.openQuestions) expect(questions).toContain(`- [ ] ${q}`);
     expect(questions).toContain("[Confirm:");
+    // The 5.6 standard debt-like items no source shows are open questions, as they are Open on the Debt-Like Items tab (QA round 3 F13).
+    expect(questions).toContain("## Debt-like items to clear (guide 5.6 standard list)");
+    expect(questions).toContain("- [ ] PPP or EIDL balances: confirm none is outstanding at close.");
     // Bot-flagged accounts stay proposed and out of Adj. EBITDA until an advisor accepts them (guide Q10).
     expect(questions).toMatch(/- \[ \] \[N6\] Vehicle expenses \(for review\), proposed: .*Not in Adj\. EBITDA until accepted/);
     // SDE adds back the owner's employer payroll taxes, accepted with the documented salary; the register detail is still asked for (F20).

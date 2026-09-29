@@ -2,7 +2,7 @@
 // (guide 5.5). Internal to AMB, never in the CIM (D5). The workbook writes
 // these as formulas on Assumptions inputs; this is the engine's copy.
 
-import type { Assumptions } from "./assumptions.ts";
+import { scenarioInput, type Assumptions, type ScenarioFinancingKey } from "./assumptions.ts";
 import type { DealForm, DealMode } from "../domain/financials.ts";
 import type { DealStructureColumn, FinancingCase, Ladder, MainStreetValuationCase, PeriodColumn, PnlLines, SellerProceeds, SensitivityGrid, SourcesAndUses, ValuationDetail, ValuationSummary } from "./types.ts";
 import { FMT } from "./styles.ts";
@@ -51,16 +51,17 @@ export interface ValuationInputs {
   scenarioLadders?: Record<"low" | "mid" | "high", Ladder>;
 }
 
-function financing(a: Assumptions, purchasePrice: number, cashFlowAvailable: number): FinancingCase {
-  const equityInjection = purchasePrice * a.deal.equityInjectionPct;
+/** The SBA-only illustration for one case; `terms` are the case's equity injection, loan term and rate (the base inputs by default). */
+function financing(terms: { equityInjectionPct: number; loanTermYears: number; loanRate: number }, purchasePrice: number, cashFlowAvailable: number): FinancingCase {
+  const equityInjection = purchasePrice * terms.equityInjectionPct;
   const loanPrincipal = Math.max(0, purchasePrice - equityInjection);
-  const ads = annualDebtService(a.deal.loanRate, a.deal.loanTermYears, loanPrincipal);
+  const ads = annualDebtService(terms.loanRate, terms.loanTermYears, loanPrincipal);
   return {
     purchasePrice,
     equityInjection,
     loanPrincipal,
-    termYears: a.deal.loanTermYears,
-    rate: a.deal.loanRate,
+    termYears: terms.loanTermYears,
+    rate: terms.loanRate,
     annualDebtService: ads,
     cashFlowAvailable,
     dscr: ads ? cashFlowAvailable / ads : 0,
@@ -80,24 +81,35 @@ export function earningsBasis(mode: DealMode, ladder: Ladder): number {
 export function valuationDetail(inp: ValuationInputs): { detail: ValuationDetail; summary: ValuationSummary } {
   const { a, mode, ladder, pnl } = inp;
   const multiples = mode === "mainStreet" ? a.sdeMultiples : a.ebitdaMultiples;
-  const caseFor = (multiple: number, caseLadder: Ladder): MainStreetValuationCase => {
+  const caseFor = (key: "low" | "mid" | "high", multiple: number, caseLadder: Ladder): MainStreetValuationCase => {
+    // Each case's financing and recast inputs come from the scenario block (guide 5.5), which defaults them to the base inputs.
+    // Without the scenario block's cases (lower-middle-market mode) every case takes the base inputs, as the Valuation tab reads them.
+    const input = (k: ScenarioFinancingKey) => scenarioInput(a, inp.scenarioLadders ? a.scenarios[key] : { ...a.scenarios[key], financing: undefined }, k);
     const earnings = earningsBasis(mode, caseLadder);
-    const cfa = cashFlowAvailable(a, mode, caseLadder);
+    const deductions =
+      mode === "mainStreet"
+        ? {
+            marketReplacement: caseLadder.marketReplacement - (input("replacementSalary") - a.recast.replacementSalary) * (1 + a.recast.burdenPct),
+            capitalReserve: caseLadder.capitalReserve - (input("capitalReserve") - a.recast.capitalReserve),
+          }
+        : undefined;
+    const cfa = deductions ? earnings + deductions.marketReplacement + deductions.capitalReserve : cashFlowAvailable(a, mode, caseLadder);
+    const deferredCapex = input("deferredCapex");
     const businessValuation = earnings * multiple;
-    const totalInvestment = roundTo(businessValuation + a.deal.deferredCapex, -1);
+    const totalInvestment = roundTo(businessValuation + deferredCapex, -1);
     return {
       sde: earnings,
       multiple,
       businessValuation,
-      deferredCapex: a.deal.deferredCapex,
+      deferredCapex,
       totalInvestment,
       impliedSdeMultiple: ladder.sde ? totalInvestment / ladder.sde : 0,
       impliedAdjEbitdaMultiple: ladder.adjEbitda ? totalInvestment / ladder.adjEbitda : 0,
-      financing: financing(a, totalInvestment, cfa),
+      financing: { ...financing({ equityInjectionPct: input("equityInjectionPct"), loanTermYears: input("loanTermYears"), loanRate: input("loanRate") }, totalInvestment, cfa), ...deductions },
     };
   };
   const sl = inp.scenarioLadders;
-  const cases = { low: caseFor(multiples[0], sl?.low ?? ladder), mid: caseFor(multiples[1], sl?.mid ?? ladder), high: caseFor(multiples[2], sl?.high ?? ladder) };
+  const cases = { low: caseFor("low", multiples[0], sl?.low ?? ladder), mid: caseFor("mid", multiples[1], sl?.mid ?? ladder), high: caseFor("high", multiples[2], sl?.high ?? ladder) };
   const implied = (c: MainStreetValuationCase) => ({
     reportedEbitda: ladder.reportedEbitda ? c.totalInvestment / ladder.reportedEbitda : 0,
     adjEbitda: ladder.adjEbitda ? c.totalInvestment / ladder.adjEbitda : 0,

@@ -173,6 +173,9 @@ function openQuestionsMd(p: { row: RequestRow; ds: FinancialDataset; model: Mode
     "",
     "## Adjustments to review",
     ...boxes(toReview, "None: every schedule row is accepted or excluded."),
+    ...(model.debtLike?.checklist?.length
+      ? ["", "## Debt-like items to clear (guide 5.6 standard list)", "Listed as Open on the Debt-Like Items tab: no source shows a balance, which is not the same as none.", ...boxes(model.debtLike.checklist.map((x) => (x.memo ? `${x.item}: confirm any the seller has given (memo only, never deducted).` : `${x.item}: confirm none is outstanding at close.`)), "None.")]
+      : []),
     "",
     "## Data issues to resolve",
     ...boxes([...stale, ...ds.warnings], "None."),

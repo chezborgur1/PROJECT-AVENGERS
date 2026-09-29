@@ -5,7 +5,7 @@
 // Low / Mid / High scenario block.
 
 import { monthEndDate, parsePeriodKey, periodLabel, type KpiSeries } from "../../domain/financials.ts";
-import type { Assumptions } from "../assumptions.ts";
+import { scenarioInput, type Assumptions, type ScenarioFinancingKey } from "../assumptions.ts";
 import { excelSerial, firstDayOf, latestFullFiscalYear } from "../periods.ts";
 import { addr, colLetter, rowOf, SheetBuilder, wrappedLines, type CellSpec } from "../sheet.ts";
 import { FMT, WIDTH } from "../styles.ts";
@@ -18,6 +18,8 @@ const SOURCE_COL = 9;
 const LAST_VALUE_COL = 7;
 /** Width of the scenario block's Low / Mid / High columns. */
 const SCENARIO_WIDTH = 16;
+/** The scenario block's Basis column (guide 5.5: Driver | Low | Mid | High | Basis | Source), after High. */
+const SCENARIO_BASIS_COL = C + 3;
 
 export interface TabContext {
   model: ModelOutput;
@@ -204,12 +206,15 @@ export function planAssumptions(ctx: TabContext): SheetBuilder {
     b.row("scenarioHeader", r);
     b.text(r, 2, "Driver", { font: { bold: true } });
     ["Low", "Mid", "High"].forEach((h, i) => b.text(r, C + i, h, { font: { bold: true }, align: { horizontal: "right" } }));
+    b.text(r, SCENARIO_BASIS_COL, "Basis", { font: { bold: true }, align: { horizontal: "left", indent: 1 } });
     for (let c = 2; c <= LAST_VALUE_COL; c++) b.cell(r, c, { border: { bottom: "thin" } });
     r++;
     const sc = a.scenarios;
+    const basis = (text: string) => b.text(r, SCENARIO_BASIS_COL, text, { align: { horizontal: "left", indent: 1, wrap: false } });
     b.row("scenarioGrowth", r);
     b.text(r, 2, "Revenue growth (%)", { align: { indent: 1 } });
     [sc.low, sc.mid, sc.high].forEach((x, i) => b.num(r, C + i, x.revenueGrowth, { fmt: FMT.pct1 }));
+    basis("Per AMB, by case");
     b.note(r, SOURCE_COL, "Mid is the base case; Low and High must differ from Mid on growth and one operating driver (check C29)");
     r++;
     const methods: { key: keyof typeof sc.mid.methods; label: string }[] = [
@@ -224,13 +229,37 @@ export function planAssumptions(ctx: TabContext): SheetBuilder {
       b.text(r, 2, m.label, { align: { indent: 1 } });
       // The longest method name takes two lines rather than being cut at the column edge.
       [sc.low, sc.mid, sc.high].forEach((x, i) => b.cell(r, C + i, { v: x.methods[m.key], role: "input", align: { horizontal: "right", wrap: wrappedLines(x.methods[m.key], SCENARIO_WIDTH) > 1 || undefined } }));
-      b.note(r, SOURCE_COL, `3-year average / Latest year / % of sales, latest year / % of sales, 3-year blended${annualOnly ? "" : `; Latest year reads ${base}`}`);
+      basis("Fixed method list (5.5)");
+      b.note(r, SOURCE_COL, `3-year average, Latest year or % of sales${annualOnly ? "" : `; Latest year reads ${base}`}`);
+      r++;
+    }
+    // The per-case recast and financing inputs (guide 5.5): each case links to the base input above until the advisor types its own,
+    // and the Valuation tab's financing rows read them by case.
+    const financing: { key: ScenarioFinancingKey; label: string; base: string; fmt: string }[] = [
+      { key: "replacementSalary", label: "Owner replacement salary ($)", base: "replacementSalary", fmt: FMT.currency },
+      { key: "capitalReserve", label: "Capital reserve ($)", base: "capitalReserve", fmt: FMT.currency },
+      { key: "deferredCapex", label: "Deferred capex / renovation ($)", base: "deferredCapex", fmt: FMT.currency },
+      { key: "equityInjectionPct", label: "Equity injection (%)", base: "equityInjectionPct", fmt: FMT.pct },
+      { key: "loanTermYears", label: "Loan term (years)", base: "loanTermYears", fmt: FMT.term },
+      { key: "loanRate", label: "Interest rate (%)", base: "loanRate", fmt: FMT.rate },
+    ];
+    for (const x of financing) {
+      b.row(`scenario_${x.key}`, r);
+      b.text(r, 2, x.label, { align: { indent: 1 } });
+      const own = [sc.low, sc.mid, sc.high].map((d) => d.financing?.[x.key]);
+      own.forEach((v, i) => {
+        if (v !== undefined) b.num(r, C + i, v, { fmt: x.fmt });
+        else b.formula(r, C + i, here(x.base), { fmt: x.fmt, role: "inSheet", expect: scenarioInput(a, [sc.low, sc.mid, sc.high][i]!, x.key), label: `scenario ${x.key} ${i}` });
+      });
+      basis(own.some((v) => v !== undefined) ? "Per AMB, by case" : "Base input above");
+      b.note(r, SOURCE_COL, "Base input above; type over a case to vary it");
       r++;
     }
     b.row("scenarioMultiple", r);
     b.text(r, 2, "Valuation multiple (x SDE)", { align: { indent: 1 } });
     // One input per multiple: the block reads the valuation multiples above rather than holding a second copy that could disagree.
     a.sdeMultiples.forEach((v, i) => b.formula(r, C + i, addr(b.r("sdeMultiples"), C + i), { fmt: FMT.multiple, role: "inSheet", expect: v, label: `scenario multiple ${i}` }));
+    basis("Valuation multiples above");
     b.note(r, SOURCE_COL, "Valuation multiples above");
     r++;
   }
