@@ -255,9 +255,12 @@ describe("the Ridgeline deck's exhibits (F23, F25, F27, F29)", () => {
     const page = (id: string) => plan.pages.find((p) => p.draft.id === id)!;
     const support = blocksOf(page("S7.2")).find((b) => b.kind === "textTable" && b.header?.title === "Adjustment support") as { spec: { rows: unknown[][] } };
     const s3 = support.spec.rows.find((r) => r[0] === "[S3]")!;
-    expect(s3.at(-1)).toBe("AMB estimate (proxy: three-year average depreciation; Form 4562 requested) (2)");
-    expect(page("S7.2").layout!.spec.notes.footnotes).toContain("[S3] is an AMB estimate (three-year average depreciation) until Form 4562 is provided.");
-    expect(page("S7.1").layout!.spec.notes.footnotes).toContain("[S3] is an AMB estimate (three-year average depreciation) until Form 4562 is provided.");
+    // Worded as the basis; what is still to come from the Seller is an open question, not buyer-facing status (QA round 3 F42).
+    expect(s3.at(-1)).toBe("AMB estimate: three-year average depreciation (2)");
+    expect(page("S7.2").layout!.spec.notes.footnotes).toContain("[S3] is an AMB estimate: three-year average depreciation.");
+    expect(page("S7.1").layout!.spec.notes.footnotes).toContain("[S3] is an AMB estimate: three-year average depreciation.");
+    const { ctx } = planned();
+    expect(ctx.openQuestions.some((q) => /^Form 4562 depreciation detail/.test(q))).toBe(true);
   });
 
   it("builds no column from placeholders alone, and lists each column left out as a question", () => {
@@ -346,7 +349,7 @@ describe("the Ridgeline deck's exhibits (F23, F25, F27, F29)", () => {
     const { plan } = planned();
     // A table at the spec's column widths sits at the left of its block and its rule stops with it (QA round 3 F35).
     expect(narrowTables(plan.pages)).toEqual([]);
-    for (const p of plan.pages)
+    for (const p of plan.pages.filter((pg) => pg.draft.kind === "content"))
       for (const x of p.layout?.placed ?? [])
         if (x.block.kind === "numTable") for (const c of x.block.spec.cols) if (c.kind === "num" && /^(FY\d{4}|LTM|PF)/.test(c.head ?? "")) expect(c.w, `${p.draft.id} ${x.block.header?.title} ${c.head}`).toBeLessThanOrEqual(0.8);
     // The chart's own height (a chart left at the default is 2.60 in); the placed box adds its header.
@@ -416,7 +419,8 @@ describe("basis of preparation (F42, F43)", () => {
   const noteOf = (date: string) => appendix.pages.find((p) => p.id === "S11.1")!.build(ctxAt(date))[0]!.spec!.notes.note ?? "";
 
   it("says the months after the latest figures are not included when the deck is dated long after them", () => {
-    expect(noteOf("2026-09-29")).toContain("Results after Dec-25, including 2026 year to date, are not included; they have been requested.");
+    expect(noteOf("2026-09-29")).toContain("Results after Dec-25, including 2026 year to date, are not included.");
+    expect(noteOf("2026-09-29")).not.toContain("requested");
     expect(noteOf("2026-02-15")).not.toContain("Results after");
   });
 

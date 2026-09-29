@@ -473,8 +473,6 @@ const DEFAULT_CHART_H = 2.6;
  */
 const labelIndent = (r: NumRow): number => (r.type === "section" || r.type === "key" || r.type === "subtotal" ? 0.05 : r.type === "sub" ? 0.29 : 0.17);
 const labelBold = (r: NumRow): boolean => r.type === "key" || r.type === "subtotal" || r.type === "section";
-/** What the cell margins (0.05 in a side) take from a ref cell's width. */
-const REF_MARGIN = 0.1;
 
 /**
  * Whether a row's footnote marker goes after its ref instead of its label:
@@ -488,7 +486,7 @@ function noteOnRef(spec: NumTableSpec, r: NumRow): boolean {
   const pt = spec.fontSize ?? 8.5;
   const w = label.w - labelIndent(r) + 0.05;
   const wraps = linesFor(`${keepMarker(r.label)}\u00a0(${r.note})`, w, pt, labelBold(r)) > linesFor(keepMarker(r.label), w, pt, labelBold(r));
-  return wraps && linesFor(`${r.ref ?? ""}\u00a0(${r.note})`, ref.w - REF_MARGIN, 8) === 1;
+  return wraps && linesFor(`${r.ref ?? ""}\u00a0(${r.note})`, ref.w, 8) === 1;
 }
 
 export function numTableRowHeights(spec: NumTableSpec): { head: number[]; rows: number[] } {
@@ -507,7 +505,7 @@ export function numTableRowHeights(spec: NumTableSpec): { head: number[]; rows: 
     spec.cols.forEach((c) => {
       const onRef = noteOnRef(spec, r);
       if (c.kind === "label") lines = Math.max(lines, linesFor(`${keepMarker(r.label)}${r.note && !onRef ? `\u00a0(${r.note})` : ""}`, c.w - labelIndent(r) + 0.05, pt, labelBold(r)));
-      else if (c.kind === "ref" && r.type !== "section") lines = Math.max(lines, linesFor(`${r.ref ?? ""}${onRef ? `\u00a0(${r.note})` : ""}`, c.w - REF_MARGIN, 8));
+      else if (c.kind === "ref" && r.type !== "section") lines = Math.max(lines, linesFor(`${r.ref ?? ""}${onRef ? `\u00a0(${r.note})` : ""}`, c.w, 8));
       else if (c.kind === "text" && r.type !== "section") lines = Math.max(lines, linesFor(r.text ?? "", c.w - 0.03, 8));
       else if (c.kind === "num") {
         if (c.left && r.type !== "section") lines = Math.max(lines, linesFor(r.vals?.[v] ?? "", c.w, pt));
@@ -796,6 +794,11 @@ export function layoutPage(spec: PageSpec): LaidOutPage {
         page = balanced;
         continue;
       }
+      const grown = !uneven && out.fill < FILL_FLOOR ? growToFill(page, out) : undefined;
+      if (grown) {
+        page = grown;
+        continue;
+      }
       if (uneven) warnings.push(`${spec.id}: columns end ${uneven.gap.toFixed(2)} in apart`);
       for (const e of empty) warnings.push(`${spec.id}: ${e.depth.toFixed(2)} in empty under columns ${e.cols} (spec 1: no empty region wider than two columns and deeper than ${EMPTY_DEPTH} in)`);
       const keys = obsKeyMismatch(page);
@@ -845,6 +848,37 @@ function balanceColumns(page: PageSpec, u: Uneven): PageSpec | undefined {
     return { ...page, rows: page.rows.map((r, j) => (j === u.row ? { ...r, columns } : r)) };
   };
   return resize(u.short, (h) => h + target) ?? resize(u.long, (h) => h - target);
+}
+
+/** Spec 9: a page fills at least this share of the content band. */
+const FILL_FLOOR = 0.8;
+
+/**
+ * A page under the fill floor with room below its last row gives the room to
+ * a chart in that row, as far as the band, CHART_H and the column balance
+ * allow (the chart's column ends at most BALANCE / 2 below the others), so
+ * the page does not end with an empty band across every column (spec 1, 9).
+ */
+function growToFill(page: PageSpec, out: LaidOutPage): PageSpec | undefined {
+  const ri = page.rows.length - 1;
+  const row = page.rows[ri]!;
+  const ends = row.columns.map((c) => {
+    const mine = out.placed.filter((p) => Math.abs(p.x - colX(c.span[0])) < 0.01);
+    return mine.length ? Math.max(...mine.map((p) => p.y + p.h)) : 0;
+  });
+  for (const [col, c] of row.columns.entries()) {
+    const i = c.blocks.map((b) => b.kind).lastIndexOf("chart");
+    if (i < 0) continue;
+    const b = c.blocks[i] as Extract<Block, { kind: "chart" }>;
+    const from = b.h ?? DEFAULT_CHART_H;
+    const others = ends.filter((_, j) => j !== col);
+    const level = others.length ? Math.max(...others) + BALANCE / 2 : BAND.bottom;
+    const by = r3(Math.min(CHART_H.max - from, BAND.bottom - ends[col]!, level - ends[col]!));
+    if (by < 0.05) continue;
+    const columns = row.columns.map((x, j) => (j === col ? { ...x, blocks: x.blocks.map((y, k) => (k === i ? { ...b, h: r3(from + by) } : y)) } : x));
+    return { ...page, rows: page.rows.map((r, j) => (j === ri ? { ...r, columns } : r)) };
+  }
+  return undefined;
 }
 
 /** The spec's floor for a table figure (spec 2: "no table figure below 8 pt"). */
@@ -1047,25 +1081,26 @@ function pointLabel(idx: number, text?: string, color: string = C.ink): string {
 
 function patchSeries(ser: string, patch: SeriesPatch): string {
   let out = ser;
-  // Point labels come first inside the series' dLbls, ahead of the series-wide settings (CT_DLbls order).
-  const points = [...(patch.hidePoints ?? []).map((i) => pointLabel(i)), ...(patch.textPoints ?? []).map((t) => pointLabel(t.idx, t.text, t.color))].join("");
-  if (points) out = out.replace(/<c:dLbls>/, `<c:dLbls>${points}`);
   if (patch.invisible) {
     out = out.replace(/<c:spPr>[\s\S]*?<\/c:spPr>/, "<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>");
     out = out.replace(/(<c:dLbls>[\s\S]*?)<c:showVal val="1"\/>/, '$1<c:showVal val="0"/>');
-    return out;
+  } else {
+    if (patch.labelColor) out = out.replace(/(<c:dLbls>[\s\S]*?<a:srgbClr val=")[0-9A-Fa-f]{6}("\/>)/, `$1${patch.labelColor}$2`);
+    if (patch.labelFormat) out = out.replace(/(<c:dLbls>\s*<c:numFmt formatCode=")[^"]*(")/, `$1${patch.labelFormat.replace(/"/g, "&quot;")}$2`);
+    if (patch.lastPoint) {
+      const { idx, color, format } = patch.lastPoint;
+      const marker = `<c:marker><c:symbol val="circle"/><c:size val="5"/><c:spPr><a:solidFill><a:srgbClr val="${color}"/></a:solidFill><a:ln><a:noFill/></a:ln></c:spPr></c:marker>`;
+      const dPt = `<c:dPt><c:idx val="${idx}"/>${marker}<c:bubble3D val="0"/></c:dPt>`;
+      const label = `<c:dLbls><c:dLbl><c:idx val="${idx}"/><c:numFmt formatCode="${format.replace(/"/g, "&quot;")}" sourceLinked="0"/><c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="800" b="1"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill><a:latin typeface="${SANS}"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr><c:dLblPos val="t"/><c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbl><c:showLegendKey val="0"/><c:showVal val="0"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbls>`;
+      out = out.replace(/<c:marker>[\s\S]*?<\/c:marker>/, (m) => `${m}${dPt}`);
+      out = /<c:dLbls>[\s\S]*?<\/c:dLbls>/.test(out) ? out.replace(/<c:dLbls>[\s\S]*?<\/c:dLbls>/, label) : out.replace(/(<c:cat>)/, `${label}$1`);
+    }
+    if (patch.whiteOutline) out = out.replace(/(<c:spPr>\s*<a:solidFill>\s*<a:srgbClr val="[0-9A-Fa-f]{6}"\/>\s*<\/a:solidFill>)/, `$1<a:ln w="9525"><a:solidFill><a:srgbClr val="${C.white}"/></a:solidFill></a:ln>`);
   }
-  if (patch.labelColor) out = out.replace(/(<c:dLbls>[\s\S]*?<a:srgbClr val=")[0-9A-Fa-f]{6}("\/>)/, `$1${patch.labelColor}$2`);
-  if (patch.labelFormat) out = out.replace(/(<c:dLbls>\s*<c:numFmt formatCode=")[^"]*(")/, `$1${patch.labelFormat.replace(/"/g, "&quot;")}$2`);
-  if (patch.lastPoint) {
-    const { idx, color, format } = patch.lastPoint;
-    const marker = `<c:marker><c:symbol val="circle"/><c:size val="5"/><c:spPr><a:solidFill><a:srgbClr val="${color}"/></a:solidFill><a:ln><a:noFill/></a:ln></c:spPr></c:marker>`;
-    const dPt = `<c:dPt><c:idx val="${idx}"/>${marker}<c:bubble3D val="0"/></c:dPt>`;
-    const label = `<c:dLbls><c:dLbl><c:idx val="${idx}"/><c:numFmt formatCode="${format.replace(/"/g, "&quot;")}" sourceLinked="0"/><c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="800" b="1"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill><a:latin typeface="${SANS}"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr><c:dLblPos val="t"/><c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbl><c:showLegendKey val="0"/><c:showVal val="0"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbls>`;
-    out = out.replace(/<c:marker>[\s\S]*?<\/c:marker>/, (m) => `${m}${dPt}`);
-    out = /<c:dLbls>[\s\S]*?<\/c:dLbls>/.test(out) ? out.replace(/<c:dLbls>[\s\S]*?<\/c:dLbls>/, label) : out.replace(/(<c:cat>)/, `${label}$1`);
-  }
-  if (patch.whiteOutline) out = out.replace(/(<c:spPr>\s*<a:solidFill>\s*<a:srgbClr val="[0-9A-Fa-f]{6}"\/>\s*<\/a:solidFill>)/, `$1<a:ln w="9525"><a:solidFill><a:srgbClr val="${C.white}"/></a:solidFill></a:ln>`);
+  // Point labels last, first inside the series' dLbls and ahead of its series-wide settings (CT_DLbls order), so the
+  // series-wide edits above never touch them.
+  const points = [...(patch.hidePoints ?? []).map((i) => pointLabel(i)), ...(patch.textPoints ?? []).map((t) => pointLabel(t.idx, t.text, t.color))].join("");
+  if (points) out = out.replace(/<c:dLbls>/, `<c:dLbls>${points}`);
   return out;
 }
 

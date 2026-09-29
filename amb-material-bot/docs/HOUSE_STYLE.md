@@ -708,6 +708,7 @@ A lint step fails the CIM on any of these in body text. Each has a fix.
 - **General note** (unnumbered, one line): `Note: Figures in USD thousands unless noted. Financials are as provided by the Seller and have not been independently audited.` (Adopted from ICP5.) Add the margin denominator whenever pass-through revenue exists, and the fiscal year-end if it is not December 31.
 - **Numbered footnotes** `(1)`, `(2)`, restarting on each page. The marker is attached to the figure or row label it qualifies, as superscript "(1)" in text and a trailing " (1)" in table labels (Elevate: MEMO's Quick Stats footnotes were not attached to their lines, R-DEL §5).
 - **Every management-provided or unverified figure gets a footnote:** `(1) Per management; not independently verified.`
+- **Copy names the footnote, the page numbers it.** Drafted copy marks a management fact `{{fn.mgmt}}`, never a typed "(1)": each page numbers the marker against its own notes band and adds the per-management note when the page lacks it, so a marker cannot point at another page's note. The copy lint rejects a typed footnote number.
 - **Cross-references** use page numbers: "see page 17". No exhibit numbers.
 - **Non-GAAP note** on the first page that shows Adj. EBITDA: `Adj. EBITDA, SDE and PF Adj. EBITDA are non-GAAP measures; see page 24 for the reconciliation to net income.`
 

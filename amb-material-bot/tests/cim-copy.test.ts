@@ -60,6 +60,10 @@ describe("copy lint", () => {
     expect(issues("The business is valued at $2.1M.")).toContain("valuation or price language (guide D5)");
     expect(issues("We expect 12% growth.")).toContain("first person outside the transaction section");
     expect(lintText("We will invite 5 buyers to a meeting.", "s10_1.process")).toEqual([]);
+    // One name per thing (QA round 3 F37).
+    expect(issues("Opex fell to 51.5% of revenue.")).toContain('"Opex": the deck says "operating expenses"');
+    expect(issues("Equipment took a smaller share of sales.")).toContain('"sales": the deck says "revenue"');
+    expect(lintText("Days sales outstanding held at 30 days.", "x")).toEqual([]);
   });
 
   it("requires a figure in titles and caps their length", () => {

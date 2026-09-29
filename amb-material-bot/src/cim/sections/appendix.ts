@@ -25,12 +25,13 @@ function definitionRows(ctx: CimContext): TextCell[][] {
   const techDept = ctx.out.headcount?.byDepartment.find((d) => /field service|service/i.test(d.department))?.department;
   return [
     ["Reported EBITDA", "Net income plus interest expense [D1], income taxes [D2] and depreciation and amortization [D3]. Includes other income and expense; non-operating items are removed as normalization adjustments."],
-    ["Normalization adjustments [N]", "Accepted adjustments that remove owner-discretionary, non-recurring and non-operating items. Positive amounts increase EBITDA."],
+    ["Normalization adjustments [N]", "Adjustments included in Adj. EBITDA that remove owner-discretionary, non-recurring and non-operating items. Positive amounts increase EBITDA."],
     ...(ctx.mainStreet
       ? [["SDE", `Seller's discretionary earnings: Reported EBITDA plus normalization adjustments plus one working owner's compensation: salary, payroll taxes and benefits ${ownerCompRung(ctx).refs}.`]]
       : []),
     ["Adj. EBITDA", ctx.mainStreet ? "SDE less market replacement compensation for the owner [S2] and a capital reserve [S3]." : "Reported EBITDA plus normalization adjustments plus owner compensation above a market replacement cost [S1] + [S2]."],
-    ["PF Adj. EBITDA", "Adj. EBITDA plus accepted pro forma adjustments [PF]; equal to Adj. EBITDA when none is accepted."],
+    // Defined only when the deck shows it: a pro forma adjustment is included (guide 3.3).
+    ...(ctx.pf ? [["PF Adj. EBITDA", "Adj. EBITDA plus the pro forma adjustments [PF] included in it."]] : []),
     ...(ctx.ltm ? [["LTM", "The twelve months ending with the as-of month."]] : []),
     ...(ctx.out.customers?.retention
       ? [
@@ -102,7 +103,9 @@ function staleNote(ctx: CimContext): string {
   if (dataAgeDays(ctx.out.asOfDate, ctx.date) <= STALE_DAYS) return "";
   const year = ctx.date.getUTCFullYear();
   const since = monthLabel(ctx.out.asOfDate.slice(0, 7));
-  return ` Results after ${since}${Number(ctx.out.asOfDate.slice(0, 4)) < year ? `, including ${year} year to date,` : ""} are not included; they have been requested.`;
+  const q = `Results after ${since}${Number(ctx.out.asOfDate.slice(0, 4)) < year ? `, including ${year} year to date` : ""}, for the deck: the basis of preparation says they are not included`;
+  if (!ctx.openQuestions.includes(q)) ctx.openQuestions.push(q);
+  return ` Results after ${since}${Number(ctx.out.asOfDate.slice(0, 4)) < year ? `, including ${year} year to date,` : ""} are not included.`;
 }
 
 const s11_1: PageModule = {

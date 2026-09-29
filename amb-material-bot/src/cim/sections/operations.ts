@@ -95,7 +95,11 @@ function peopleProse(ctx: CimContext): Block | undefined {
     const roles = staff.map((c, k) => `${countWord(c.count)} ${k === 0 ? "are " : ""}${roleNoun(c.role, c.count)}`);
     const pay = i.workforce.payBasis ? ` ${i.workforce.payBasis}${i.workforce.union === false ? "; there is no union" : i.workforce.union ? "; the workforce is unionized" : ""} (1).` : "";
     const flow = b.has(`hc.hires.${ctx.latest.key}`) ? ` ${L} saw ${b.t(`hc.hires.${ctx.latest.key}`)} hires and ${b.t(`hc.departures.${ctx.latest.key}`)} departures.` : "";
-    paragraphs.push({ lead: "Staffing.", body: `Of the ${total} employees besides the owner, ${series(roles)} (1).${pay}${flow}` });
+    // Pay by the compensation table's rows, which reconcile to the P&L wage lines (guide 4.8).
+    const group = (g: string) => `${b.t(`hc.group.${g}.avgComp`)} for ${b.t(`hc.group.${g}.label`).toLowerCase()}`;
+    const fy = ctx.fy[ctx.fy.length - 1]?.label;
+    const comp = fy && b.has("hc.group.field.avgComp") && b.has("hc.group.office.avgComp") ? ` With employer costs, pay averaged ${group("field")} and ${group("office")} in ${fy}.` : "";
+    paragraphs.push({ lead: "Staffing.", body: `Of the ${total} employees besides the owner, ${series(roles)} (1).${pay}${flow}${comp}` });
   }
   const o = i.owner;
   if (o.responsibilities.length) {

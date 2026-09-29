@@ -164,6 +164,9 @@ export interface PayGroup extends Department {
   departments: string[];
 }
 
+/** Longest pay-group name the compensation table sets on one line. */
+const GROUP_LABEL_MAX = 22;
+
 /** "Field service", "Installation" -> "Field service and installation". */
 export function joinDepartments(names: string[]): string {
   const joined = names.length === 1 ? names[0]! : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]!.toLowerCase()}`;
@@ -201,7 +204,9 @@ function sumDepartments(key: string, members: Department[]): PayGroup {
 export function payGroups(depts: Department[]): PayGroup[] {
   const field = depts.filter((d) => isFieldDepartment(d.department));
   const office = depts.filter((d) => !isFieldDepartment(d.department));
-  const groups = field.length && office.length ? [sumDepartments("field", field), sumDepartments("office", office)] : depts.map((d) => sumDepartments(d.department, [d]));
+  // A joined name too long for the table's label column on one line gives way to a short one (spec 4.1 row rhythm).
+  const named = (g: PayGroup, short: string): PayGroup => (g.department.length > GROUP_LABEL_MAX ? { ...g, department: short } : g);
+  const groups = field.length && office.length ? [named(sumDepartments("field", field), "Field staff"), named(sumDepartments("office", office), "Office staff")] : depts.map((d) => sumDepartments(d.department, [d]));
   const small = groups.filter((g) => g.count < MIN_PAY_GROUP);
   const large = groups.filter((g) => g.count >= MIN_PAY_GROUP);
   if (!small.length || !large.length) return groups;

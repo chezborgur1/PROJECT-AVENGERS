@@ -89,7 +89,7 @@ function fallback81(ctx: CimContext): NonNullable<CimCopy["s8_1"]> {
   const L = yearEnds(ctx)[yearEnds(ctx).length - 1]!.key;
   const cf = lastCashYear(ctx)?.key;
   const observations: NonNullable<CimCopy["s8_1"]>["observations"] = [];
-  if (b.has(`nwc.${L}`)) observations.push({ row: "nwc.total", lead: `Working capital of {{nwc.${L}}}`, body: `was {{nwc.pct.${L}}} of revenue, with receivables at {{dso.${L}}} of sales.` });
+  if (b.has(`nwc.${L}`)) observations.push({ row: "nwc.total", lead: `Working capital of {{nwc.${L}}}`, body: `was {{nwc.pct.${L}}} of revenue, with receivables at {{dso.${L}}} of revenue.` });
   if (cf && b.has(`fcf.${cf}`)) observations.push({ row: "cf.fcf", lead: `Free cash flow of {{fcf.${cf}}}`, body: `was {{fcfConversion.${cf}}} of Reported EBITDA after derived capital expenditure of {{capex.${cf}}}.` });
   if (observations.length < 2) observations.push({ row: "bs.equity", lead: `Equity of {{bs.equity.${L}}}`, body: `against debt of {{bs.debt.${L}}} at the same year-end.` });
   return { observations };

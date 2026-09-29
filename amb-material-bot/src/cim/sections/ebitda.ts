@@ -59,7 +59,7 @@ const s7_1: PageModule = {
         rows: [{ columns: [{ span: [1, 6], blocks: [ladder] }, { span: [7, 12], blocks: present(bridge, obs, callout) }] }],
         notes: {
           source: source(ctx.sources.financials, "general ledger detail", ctx.sources.payroll, "Seller add-back list"),
-          note: `Figures in USD thousands. ${nonGaap(ctx).split(";")[0]}. Positive adjustments increase EBITDA; accepted adjustments only. Unaudited.`,
+          note: `Figures in USD thousands. ${nonGaap(ctx).split(";")[0]}. Positive adjustments increase EBITDA; adjustments shown are those included in Adj. EBITDA. Unaudited.`,
           footnotes: ladderFootnotes(ctx),
         },
       }),
@@ -103,8 +103,8 @@ const s7_2: PageModule = {
     const b = ctx.brief;
     const byAmb = estimated ? `, ${estimated} calculated by AMB` : "";
     const title = chooseTitle(ctx, "S7.2 title", copy.title, [
-      `${accepted.length} accepted adjustments: ${documented} documented in the records${byAmb} and ${represented} by management representation`,
-      `${accepted.length} accepted adjustments: ${documented} documented${byAmb} and ${represented} resting on management representation`,
+      `${accepted.length} adjustments: ${documented} documented in the records${byAmb} and ${represented} by management representation`,
+      `${accepted.length} adjustments: ${documented} documented${byAmb} and ${represented} resting on management representation`,
     ]);
     return [
       draft(ctx, {
@@ -114,7 +114,7 @@ const s7_2: PageModule = {
         rows: [{ columns: [{ span: [1, 12], blocks: [support] }] }, { columns: [{ span: [1, 7], blocks: present(owner) }, { span: [8, 12], blocks: present(obs) }] }],
         notes: {
           source: source(ctx.sources.financials, "general ledger detail", ctx.sources.payroll, "Seller add-back list"),
-          note: `Figures in USD thousands; positive amounts increase EBITDA. Only accepted adjustments are included; memo items are not added. ${b.has("replacementCost") ? `[S2] is ${b.t("replacementCost")} a year.` : ""}`.trim(),
+          note: `Figures in USD thousands; positive amounts increase EBITDA. Adjustments shown are those included in Adj. EBITDA. ${b.has("replacementCost") ? `[S2] is ${b.t("replacementCost")} a year.` : ""}`.trim(),
           // (2) is the reserve's footnote: the owner table marks its reserve line, and a proxy's evidence cell says it is an estimate.
           footnotes: [PER_MANAGEMENT, ...((owner || reserveIsProxy(ctx)) && reserveFootnote(ctx) ? [reserveFootnote(ctx)!] : [])],
         },

@@ -12,7 +12,7 @@ import { monthLabel } from "../domain/financials.ts";
 import type { Ladder, PeriodColumn, PeriodValues } from "../model/types.ts";
 import { isFieldDepartment } from "../model/analytics.ts";
 import { cagr, describeDelta, EN_DASH, fmtBps, fmtCount, fmtGrowth, fmtMoney, fmtPct, fyRange, k, toK, wholeShares } from "../util/format.ts";
-import { accountLabel, fmtKpi, latestKpi, payGroups, revenueMix } from "./brief.ts";
+import { accountLabel, fmtKpi, joinDepartments, latestKpi, payGroups, revenueMix } from "./brief.ts";
 import type { CimContext } from "./context.ts";
 import { at, confirm, fieldDepartments, pageRef, population, resolveCopy, tableColumns } from "./context.ts";
 import type { Observation } from "./copy.ts";
@@ -542,7 +542,8 @@ export function summaryIncomeStatement(ctx: CimContext, w: number): Block {
   ];
   if (ps.some((p) => p.pnl.otherItemsNet !== 0)) rows.push(row("line", "Other income, net", "snap.other", (p) => p.pnl.otherItemsNet));
   rows.push(row("key", "Reported EBITDA", "snap.reported", (p) => p.ladder.reportedEbitda, true), ratio("% margin", "snap.repMargin", (p) => p.ladder.reportedMargin));
-  rows.push(row("key", "Adj. EBITDA", "snap.adj", (p) => p.ladder.adjEbitda, true, { note: "1" }), ratio("% margin", "snap.adjMargin", (p) => p.ladder.adjMargin));
+  // The page's Note line carries the non-GAAP statement, so the row needs no marker (spec 6.3).
+  rows.push(row("key", "Adj. EBITDA", "snap.adj", (p) => p.ladder.adjEbitda, true), ratio("% margin", "snap.adjMargin", (p) => p.ladder.adjMargin));
   return { kind: "numTable", header: { title: "Summary income statement", units: "($000s)" }, spec: { name: "Income statement", cols, rows } };
 }
 
@@ -639,7 +640,7 @@ export function serviceLines(ctx: CimContext, w: number): Block | undefined {
   const head = ["Service line", ...(buys ? ["What the customer buys"] : []), ...(pricing ? ["Pricing basis"] : []), "Obs."];
   return {
     kind: "textTable",
-    header: { title: "Service lines", units: "(per management)" },
+    header: { title: "Service lines", units: "(per management) (1)" },
     spec: { colW: [...textW, 0.38], head, rows, rowKeys: keys, obsCol: head.length - 1, aligns: [...textW.map(() => "left" as const), "center"], fontSize: 8 },
   };
 }
@@ -776,7 +777,7 @@ export function ownerCompRung(ctx: CimContext): { label: string; refs: string; i
   return { label: ids.length > 1 ? "Owner salary and payroll taxes" : "Owner compensation, as paid", refs: refList(ids), ids };
 }
 
-/** Several refs in one bracket, "[S1, S4]": the ref column holds one on a line (spec 4.1). */
+/** Several refs in one bracket, "[S1, S4]": the 0.50 in ref column holds it on one line (spec 4.1). */
 function refList(refs: string[]): string {
   return refs.length ? `[${refs.join(", ")}]` : "";
 }
@@ -792,7 +793,7 @@ export function ebitdaLadder(ctx: CimContext, w: number, maxRows = 23): Block {
   const periods = tableColumns(ctx);
   const ps = periods.map((c) => at(ctx, c));
   const cols = fitCols(
-    [{ w: 2.25, kind: "label" }, { w: 0.55, kind: "ref", head: "Ref" }, ...periodCols(periods, 0.66), { w: GAP, kind: "gap" }, ...(ctx.prior ? [{ w: 0.66, kind: "num" as const, head: yoyHead(ctx.latest), group: "Growth" }] : []), { w: 0.4, kind: "obs", head: "Obs." }],
+    [{ w: 2.25, kind: "label" }, { w: 0.5, kind: "ref", head: "Ref" }, ...periodCols(periods, 0.66), { w: GAP, kind: "gap" }, ...(ctx.prior ? [{ w: 0.66, kind: "num" as const, head: yoyHead(ctx.latest), group: "Growth" }] : []), { w: 0.4, kind: "obs", head: "Obs." }],
     w,
     [yoyHead(ctx.latest)],
   );
@@ -868,7 +869,7 @@ export function ebitdaLadder(ctx: CimContext, w: number, maxRows = 23): Block {
 export function condensedLadder(ctx: CimContext, w: number): Block {
   const periods = tableColumns(ctx);
   const ps = periods.map((c) => at(ctx, c));
-  const cols = fitCols([{ w: 2.2, kind: "label" }, { w: 0.55, kind: "ref", head: "Ref" }, ...periodCols(periods, 0.64), { w: 0.4, kind: "obs", head: "Obs." }], w);
+  const cols = fitCols([{ w: 2.2, kind: "label" }, { w: 0.5, kind: "ref", head: "Ref" }, ...periodCols(periods, 0.64), { w: 0.4, kind: "obs", head: "Obs." }], w);
   const row = (type: NumRow["type"], label: string, key: string, get: (l: Ladder) => number, extra: Partial<NumRow> = {}, dollar = false): NumRow => ({ type, label, key, vals: ps.map((p) => k(get(p.ladder), { dollar })), ...extra });
   const ratio = (label: string, key: string, get: (l: Ladder) => number): NumRow => ({ type: "ratio", label, key, vals: ps.map((p) => pc(get(p.ladder))) });
   const nRefs = tierRows(ctx, "normalization").filter((a) => Object.values(a.byColumn).some((v) => v !== 0));
@@ -935,6 +936,11 @@ export function ladderWaterfall(ctx: CimContext): Block {
   return { kind: "chart", header: { title: "Reported EBITDA to Adj. EBITDA", units: `(${ctx.latest.label}, $000s)` }, spec: { type: "waterfall", labels, steps } };
 }
 
+/** Record a question for open-questions.md once. */
+function ask(ctx: CimContext, question: string): void {
+  if (!ctx.openQuestions.includes(question)) ctx.openQuestions.push(question);
+}
+
 /**
  * "Documented (<record>)" or "Management representation (1)" (spec 4.5, guide
  * T11). The record is the general-ledger account the row cites, else the
@@ -943,8 +949,15 @@ export function ladderWaterfall(ctx: CimContext): Block {
 function evidenceText(ctx: CimContext, a: Adjustment): string {
   if (a.evidence === "management_representation") return "Management representation (1)";
   // The depreciation proxy is AMB's estimate, not a record: it says so before any parenthetical is stripped (F23).
-  if (a.category === "capital_reserve" && reserveIsProxy(ctx)) return "AMB estimate (proxy: three-year average depreciation; Form 4562 requested) (2)";
-  if (a.evidence === "pending") return "Calculated from documented figures; supporting document requested";
+  // What is still to come from the Seller is an open question, not a status the buyer reads (guide 3.3).
+  if (a.category === "capital_reserve" && reserveIsProxy(ctx)) {
+    ask(ctx, "Form 4562 depreciation detail for the fiscal years shown, to replace the depreciation proxy behind the capital reserve [S3]");
+    return "AMB estimate: three-year average depreciation (2)";
+  }
+  if (a.evidence === "pending") {
+    ask(ctx, `The supporting document for [${a.ref}] ${a.description}`);
+    return "Calculated from documented figures";
+  }
   const parts = a.sourceDocument.split(";").map((p) => p.replace(/\([^)]*\)/g, "").trim());
   const account = parts.find((p) => /account /i.test(p));
   if (account) {
@@ -958,11 +971,11 @@ function evidenceText(ctx: CimContext, a: Adjustment): string {
 /** Whether the capital reserve [S3] is the depreciation proxy rather than equipment spending from Form 4562. */
 export const reserveIsProxy = (ctx: CimContext): boolean => ctx.ds.recastInputs?.capitalReserve?.basis === "da_proxy";
 
-/** The footnote the reserve's markers point at: an AMB estimate until Form 4562 is provided, else its source. */
+/** The footnote the reserve's markers point at: the AMB estimate's basis (open-questions.md asks for Form 4562), else its source. */
 export function reserveFootnote(ctx: CimContext): string | undefined {
   const cr = ctx.ds.recastInputs?.capitalReserve;
   if (!cr) return undefined;
-  return reserveIsProxy(ctx) ? "[S3] is an AMB estimate (three-year average depreciation) until Form 4562 is provided." : `${cr.source}.`;
+  return reserveIsProxy(ctx) ? "[S3] is an AMB estimate: three-year average depreciation." : `${cr.source}.`;
 }
 
 /** Adjustment support (spec 4.5): one row per accepted [N], [S] and [PF] row, with its basis and evidence in words. */
@@ -1003,7 +1016,7 @@ export function ownerCompensation(ctx: CimContext, w: number): Block | undefined
   if (!rs) return undefined;
   const periods = ctx.fy;
   const ps = periods.map((c) => at(ctx, c));
-  const cols = fitCols([{ w: 2.5, kind: "label" }, { w: 0.55, kind: "ref", head: "Ref" }, ...periods.map((c): NumCol => ({ w: 0.66, kind: "num", head: c.label })), { w: 0.36, kind: "obs", head: "Obs." }], w);
+  const cols = fitCols([{ w: 2.5, kind: "label" }, { w: 0.5, kind: "ref", head: "Ref" }, ...periods.map((c): NumCol => ({ w: 0.66, kind: "num", head: c.label })), { w: 0.36, kind: "obs", head: "Obs." }], w);
   const k$ = (v: number, dollar = false) => k(v, { dollar });
   const burden = rs.replacementSalary * rs.burdenPct;
   const rows: NumRow[] = [
@@ -1310,7 +1323,7 @@ export function fieldWagesTie(ctx: CimContext): string | undefined {
   if (!accounts.length || !booked || Math.abs(field.wages - booked) > 0.01 * booked) return undefined;
   const names = accounts.map((a) => accountLabel(a).toLowerCase());
   const lines = names.length === 1 ? names[0]! : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]!}`;
-  return `${field.department} wages of ${fmtMoney(booked)} in ${fy.label} are the P&L ${lines}; the table adds employer taxes and benefits.`;
+  return `${joinDepartments(field.departments)} wages (${fmtMoney(booked)}, ${fy.label}) are the P&L ${lines}; the table adds employer costs.`;
 }
 
 /** Headcount roll-forward by fiscal year with departures by type (S5.3). */

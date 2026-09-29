@@ -7,8 +7,9 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
-import { notesLineCount, obsKeyMismatch, PptxGenJS, withoutObsLetter, type Block, type PageSpec } from "../src/cim/design.ts";
+import { chart, Deck, notesLineCount, obsKeyMismatch, PptxGenJS, withoutObsLetter, type Block, type PageSpec } from "../src/cim/design.ts";
 import { fitNotes, numberFootnotes } from "../src/cim/sections/common.ts";
 import { CONVERSION_ATTEMPTS, chartFrames, emptyChartFrames, renderOutputs, type ChartFrame } from "../src/cim/render.ts";
 import { IntakeWireSchema, loadIntakeFile, stripNulls } from "../src/ingest/intake.ts";
@@ -331,16 +332,17 @@ describe("compensation reconciles to the P&L wage lines (F31)", () => {
   it("groups field departments against office and management, as the P&L books their wages", () => {
     const ctx = context();
     const groups = payGroups(ctx.out.headcount!.byDepartment);
-    expect(groups.map((g) => [g.key, g.department])).toEqual([
-      ["field", "Field service and installation"],
-      ["office", "Office and management"],
+    // A joined name too long for one line of the label column gives way to a short one; the departments stay listed.
+    expect(groups.map((g) => [g.key, g.department, g.departments])).toEqual([
+      ["field", "Field staff", ["Field service", "Installation"]],
+      ["office", "Office and management", ["Office", "Management"]],
     ]);
     // Register wages of the field row are the P&L technician wages: service $513.3K plus install $135.6K.
     const technician = Object.entries(at(ctx, ctx.fy.at(-1)!).accountLines).find(([a]) => /technician wages/i.test(a))!;
     expect(groups[0]!.wages).toBeCloseTo(technician[1], 0);
     const block = headcountByDepartment(ctx, 5)!;
     expect(block.kind === "numTable" && block.spec.rows.map((r) => r.key)).toEqual(["dept.field", "dept.office", "dept.total"]);
-    expect(fieldWagesTie(ctx)).toBe("Field service and installation wages of $648.9K in FY2025 are the P&L technician wages; the table adds employer taxes and benefits.");
+    expect(fieldWagesTie(ctx)).toBe("Field service and installation wages ($648.9K, FY2025) are the P&L technician wages; the table adds employer costs.");
     // The brief quotes pay only by those rows, so prose and table cannot disagree.
     expect(ctx.brief.has("hc.group.field.pctRevenue")).toBe(true);
     expect(ctx.brief.list().some((f) => /^hc\.dept\..*\.(avgComp|pctRevenue)$/.test(f.key))).toBe(false);
@@ -402,5 +404,22 @@ describe("notes band keeps the unaudited basis and periods longest (F36)", () =>
     expect(fitted.note).toContain("have not been independently audited.");
     expect(fitted.note).toContain("are non-GAAP measures");
     expect(fitted.source).toContain("FY2023–FY2025");
+  });
+});
+
+describe("waterfall colours and thin-bar labels (F39)", () => {
+  it("colours totals, increases and decreases by role and lifts a thin step's figure above its bar", async () => {
+    const deck = new Deck("t");
+    const slide = deck.pptx.addSlide();
+    chart(deck, slide, 1, 1, 6, { type: "waterfall", labels: ["Reported EBITDA", "Normalization", "Owner pay", "SDE", "Replacement", "Adj. EBITDA"], steps: [{ value: 320, total: true }, { value: 28 }, { value: 214 }, { value: 562, total: true }, { value: -109 }, { value: 386, total: true }] });
+    const zip = await JSZip.loadAsync(await deck.write());
+    const xml = await zip.file(Object.keys(zip.files).find((f) => /charts\/chart\d+\.xml$/.test(f))!)!.async("string");
+    const sers = xml.match(/<c:ser>[\s\S]*?<\/c:ser>/g)!;
+    const fill = (s: string) => /<c:spPr>\s*<a:solidFill>\s*<a:srgbClr val="([0-9A-F]{6})"/.exec(s)?.[1];
+    expect([fill(sers[1]!), fill(sers[2]!), fill(sers[3]!)]).toEqual(["7B0000", "DCC7C4", "5E5552"]);
+    expect(xml).not.toContain("B5727A");
+    // The 28 step is under 6% of the axis: its own label is removed and the carrier series prints "28" at its base, above the bar.
+    expect(sers[2]).toContain('<c:dLbl><c:idx val="1"/><c:delete val="1"/></c:dLbl>');
+    expect(sers[4]).toMatch(/<c:dLbl><c:idx val="1"\/><c:numFmt formatCode="&quot;28&quot;"[\s\S]*?<c:dLblPos val="inBase"\/><c:showLegendKey val="0"\/><c:showVal val="1"\/>/);
   });
 });

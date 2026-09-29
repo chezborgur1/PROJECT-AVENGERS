@@ -251,7 +251,7 @@ function financialReportingRow(ctx: CimContext): TextCell[] {
     ctx.ds.payroll ? "the payroll register" : "",
     ctx.ds.customers ? `the ${ctx.ds.customers.term.toLowerCase()} list` : "",
   ].filter(Boolean);
-  const addressed = `The data room holds ${records.slice(0, -1).join(", ")} and ${records[records.length - 1]} for reconciliation; federal tax returns are ${confirm(ctx, "requested", "Federal tax returns for the fiscal years shown, for the data room")}.`;
+  const addressed = `${records.length > 1 ? `${records.slice(0, -1).join(", ")} and ${records[records.length - 1]}` : records[0]} support the reconciliation; federal tax returns for the years shown are ${confirm(ctx, "available", "Federal tax returns for the fiscal years shown")}.`.replace(/^./, (c) => c.toUpperCase());
   return ["Financial reporting", shows, addressed];
 }
 

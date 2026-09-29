@@ -28,12 +28,13 @@ Advisory Services (sell-side M&A for Main Street / lower middle market).
 ## Rules
 - The workbook formulas and `src/model/engine.ts` must stay in lockstep. `verifyWorkbook` evaluates every formula and compares it with the engine; the pipeline refuses to deliver a workbook that fails it. If you change one, change the other and run the tests.
 - Projection cells are formulas driven by the Assumptions sheet. Never write computed numbers into projection columns.
-- The CIM reads figures from `ModelOutput` only, through brief tokens; never type a figure into copy.
+- The CIM reads figures from `ModelOutput` only, through brief tokens; never type a figure into copy. Two figures in one clause must count the same population (a brief figure's `population`, e.g. listed customers billed in FY2025 vs active at Dec-25); the copy lint checks it.
+- Copy marks a management fact `{{fn.mgmt}}`, never a typed "(1)": each page numbers it against its own footnotes (`numberFootnotes` in `src/cim/sections/common.ts`).
 - The CIM must never contain invented facts. Missing information becomes `[Confirm: ...]` and lands in `open-questions.md`.
 - The CIM never carries a valuation, multiple, asking price or offer structure. Those stay on the model's internal tabs.
 - CIM hard bans (guide 2.10, 4.4; `design.ts` has no primitive for the shapes, `copy.ts` lints the words): numbered badges, rounded card grids, stat tiles, letter-spaced caps kickers, decorative shapes, icon rows, accent stripes, full-width header bars, centred body text, stock phrases, labels as titles, em dashes in prose.
 - Only `accepted` adjustments enter the ladder and the CIM.
 - Every printed workbook tab sets 9 pt body text at 7 pt or more (`fitPrintWidth` in `src/model/sheet.ts`); C37 proves it on the written file, and the master check reads "(render check pending)" until it has run.
-- CIM titles wrap without a widow (`titleWrap`, measured in Georgia Bold 20), and the columns of a row end within 0.50 in (`layoutPage` resizes a chart to balance them; anything left is a build note in `run-summary.md`).
+- CIM titles wrap without a widow (`titleWrap`, measured in Georgia Bold 20), and the columns of a row end within 0.50 in (`layoutPage` resizes a chart to balance them, and grows one to lift a page under the 80% fill floor; anything left is a build note in `run-summary.md`).
 - Real client data (source files, outputs, the live request list, `.qbo-tokens.json`, `.env`) is git-ignored. Keep it that way. Samples must stay fictional; `tests/ingest-sample.test.ts` fails if the Ridgeline folder and the fixture diverge.
 - Claude calls go through `src/util/claude.ts` (structured outputs + server-side refusal fallback).

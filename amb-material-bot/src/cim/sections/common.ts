@@ -68,7 +68,8 @@ export function numberFootnotes(blocks: Block[], footnotes: string[]): string[] 
     t.replace(NAMED_MARKER, (m, name: string) => {
       const text = NAMED_FOOTNOTES[name];
       if (!text) return m;
-      const i = list.indexOf(text);
+      // A page's own wording may extend the note ("Per management; … Hours are the owner's estimate."): it is still that note.
+      const i = list.findIndex((f) => f.startsWith(text));
       return `(${(i < 0 ? list.push(text) : i + 1)})`;
     });
   for (const b of blocks) mapBlockText(b, number);
@@ -111,8 +112,8 @@ const sentencesOf = (t: string): string[] => t.split(/(?<=\.)(?<!\b(?:Adj|Inc|No
 
 /** Sentences the Note line never gives up: the units line that opens it, the fiscal year-end (guide 4.6) and the rounding clause of a table that does not foot as shown. */
 const REQUIRED_NOTE = /^(Figures in USD|Fiscal year ends)|totals may not sum due to rounding/i;
-/** Sentences the Note line gives up last, after the source line's periods: the unaudited basis and the non-GAAP statement (guide 4.6). */
-const LAST_NOTE = /not been independently audited|non-GAAP measure/i;
+/** Sentences the Note line gives up last, after the source line's periods: the unaudited basis, the non-GAAP statement (guide 4.6) and a table's bridge to the P&L (guide 4.8). */
+const LAST_NOTE = /not been independently audited|non-GAAP measure|are the P&L /i;
 
 /** Period clauses a source part may lose when the band is full; the tables' own headings still name the periods. */
 const SOURCE_PERIOD = [/ and LTM [A-Z][a-z]{2}-\d{2}/g, /, FY\d{4}(–FY\d{4})?/g, / as of [A-Z][a-z]{2}-\d{2}/g];
