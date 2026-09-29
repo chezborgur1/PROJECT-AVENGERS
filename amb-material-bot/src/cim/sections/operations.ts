@@ -10,7 +10,7 @@ import { pageCopy, PER_MANAGEMENT, standardNote } from "../context.ts";
 import type { CimCopy } from "../copy.ts";
 import type { Block, Paragraph, TextCell } from "../design.ts";
 import { r3, spanW } from "../design.ts";
-import { facilities, fieldWagesTie, headcountByDepartment, headcountRollForward, keyObservations, observationsBlock, organization, rolesAtAsOf, tenureAtDeparture, usable } from "../exhibits.ts";
+import { askOwnerTable, facilities, fieldWagesTie, headcountByDepartment, headcountRollForward, keyObservations, observationsBlock, organization, ownerTableFilled, rolesAtAsOf, tenureAtDeparture, usable } from "../exhibits.ts";
 import { chooseTitle, draft, present, source } from "./common.ts";
 import type { PageModule, SectionModule } from "./types.ts";
 
@@ -282,7 +282,14 @@ const s5_4: PageModule = {
   id: "S5.4",
   name: "Owner role and transition",
   status: "A",
-  absent: (ctx) => (ctx.intake?.owner.responsibilities.length ? undefined : "No owner responsibilities in the intake notes"),
+  absent: (ctx) => {
+    if (!ctx.intake?.owner.responsibilities.length) return "No owner responsibilities in the intake notes";
+    // Most of the table would be placeholders: the duties stay in the buyer table's owner row, the gaps are asked (verification F29).
+    const { filled, cells, enough } = ownerTableFilled(ctx);
+    if (enough) return undefined;
+    askOwnerTable(ctx, "the owner responsibilities table is left out until the Seller gives these");
+    return `The notes fill ${filled} of the owner responsibilities table's ${cells} cells (hours, successor, transition support); the duties are named in the buyer table and the gaps are open questions`;
+  },
   mergeInto: (ctx) => (ctx.present.has("S1.4") ? "S1.4" : undefined),
   budget: [0, 1],
   build: () => [],

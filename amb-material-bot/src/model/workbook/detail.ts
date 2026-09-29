@@ -184,7 +184,12 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
   const asOf = model.assumptions!.asOfMonth;
   const stripMonths = monthRange(addMonths(asOf, -11), asOf);
   const priorMonth = addMonths(asOf, -12);
-  const hiddenCol = l.lastValueCol + 2;
+  // The strip opens with the LTM and PF columns (guide 5.5 tier 1: "LTM" over the two LTM columns, "PF", then the twelve
+  // months), each a link to the summary block, so the strip's printed range carries them too (verification F11).
+  const head = l.cols.filter((c) => c.column.group === "LTM" || c.column.group === "PF");
+  const headFirst = l.lastValueCol + 2;
+  const headLast = headFirst + head.length - 1;
+  const hiddenCol = head.length ? headLast + 2 : l.lastValueCol + 2;
   const stripFirst = hiddenCol + 1;
   const stripLast = stripFirst + 11;
   const notesCol = stripLast + 2;
@@ -192,6 +197,10 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
   // width, so its text cannot spill into the printed columns beside it.
   applyPeriodWidths(b, l, WIDTH.label, { notes: false });
   b.spacerCol(l.lastValueCol + 1);
+  if (head.length) {
+    b.widths(headFirst, headLast, WIDTH.value);
+    b.spacerCol(headLast + 1);
+  }
   b.width(hiddenCol, WIDTH.strip);
   b.hideCol(hiddenCol);
   b.widths(stripFirst, stripLast, WIDTH.strip);
@@ -199,7 +208,11 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
   b.width(notesCol, WIDTH.notes);
   b.anatomy({ subtitle, lastCol: notesCol, toggleCol: l.lastValueCol, masterToggle: ctx.masterToggle });
   b.text(3, l.lastValueCol - 1, "Print", { align: { horizontal: "right" } });
-  b.tier1(5, [...l.groups, { from: stripFirst, to: stripLast, label: stripTitle }, { from: notesCol, to: notesCol, label: "Notes" }]);
+  const headGroups = ["LTM", "PF"].flatMap((g) => {
+    const cols = head.map((h, i) => ({ h, col: headFirst + i })).filter((x) => x.h.column.group === g);
+    return cols.length ? [{ from: cols[0]!.col, to: cols[cols.length - 1]!.col, label: g }] : [];
+  });
+  b.tier1(5, [...l.groups, ...headGroups, { from: stripFirst, to: stripLast, label: stripTitle }, { from: notesCol, to: notesCol, label: "Notes" }]);
   b.tier2(6, { from: l.firstCol, to: l.lastValueCol }, [], group);
   if (l.deltas) {
     b.cell(6, l.deltas.dollar, { style: "header", v: "($)", role: "text" });
@@ -210,7 +223,7 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
   stripMonths.forEach((m, i) => b.formula(6, stripFirst + i, `EOMONTH(${addr(6, stripFirst + i - 1)},0)+1`, { style: "monthHeader", fmt: FMT.monthHeader, role: "text", expect: serialOfMonthStart(m), label: `strip month ${m}` }));
   b.cell(6, notesCol, { style: "header", v: null, role: "text" });
 
-  const spans: [number, number][] = [...valueSpans(l), [stripFirst, stripLast]];
+  const spans: [number, number][] = [...valueSpans(l), ...(head.length ? [[headFirst, headLast] as [number, number]] : []), [stripFirst, stripLast]];
   const blocks: { title: string; suffix: string; kind: "dollars" | "pct" | "growth" }[] = [
     { title: `${group} ($000s)`, suffix: "", kind: "dollars" },
     { title: `${group} % Total Revenue`, suffix: "_pct", kind: "pct" },
@@ -301,10 +314,9 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
         const colL = colLetter(col);
         const i = stripIdx(m);
         const at = (k: string) => `${colL}${b.r(k)}`;
-        if (m === priorMonth && !priorOnGrid) {
-          b.na(rr, col, "n.a.", { style: bl.kind === "dollars" ? vs.style : "ratio" });
-          continue;
-        }
+        // The hidden column holds only what the first month's growth divides by. Text there is never written: LibreOffice
+        // spills a right-aligned "n.a." out of a hidden column into the printed one beside it (verification F11).
+        if (m === priorMonth && (!priorOnGrid || bl.kind === "growth")) continue;
         if (bl.kind === "dollars") {
           const f = ln.key === "recurring" ? recurringKeys.map((k) => at(k)).join("+") : monthlyCell(ln.monthlyKey, m);
           b.formula(rr, col, f, { style: vs.style, fmt: vs.fmt, expect: ln.month(series, i) / K, label: `${ln.key} ${m}` });
@@ -312,10 +324,6 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
           const rev = series.revenue![i]!;
           b.formula(rr, col, `IFERROR(${at(ln.key)}/${revenueMonthly(m)},"n.a.")`, { style: vs.style, fmt: vs.fmt, expect: rev ? ln.month(series, i) / rev : "n.a.", label: `${ln.key} pct ${m}` });
         } else {
-          if (m === priorMonth) {
-            b.na(rr, col, "n.a.", { style: "ratio" });
-            continue;
-          }
           const prevM = addMonths(m, -1);
           if (prevM === priorMonth && !priorOnGrid) {
             b.na(rr, col, "n.a.", { style: "ratio" });
@@ -350,10 +358,7 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
       }
       for (const m of stripAllMonths) {
         const col = stripColOf(m);
-        if (m === priorMonth) {
-          b.na(rr, col, "n.a.", { style: "keyTotal", fmt: FMT.pct });
-          continue;
-        }
+        if (m === priorMonth) continue;
         const prevM = addMonths(m, -1);
         if (prevM === priorMonth && !priorOnGrid) {
           b.na(rr, col, "n.a.", { style: "keyTotal", fmt: FMT.pct });
@@ -367,6 +372,16 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
     }
   }
 
+  // The strip's LTM and PF head: every cell a link to the summary block's cell on its row, header labels included.
+  for (let rr = 6; rr <= b.r("growth_total"); rr++) {
+    head.forEach((h, i) => {
+      const src = b.get(rr, h.col);
+      if (!src || (src.f === undefined && (src.v === undefined || src.v === null || src.v === ""))) return;
+      const expect = src.f !== undefined ? src.expect : (src.v as number | string);
+      b.formula(rr, headFirst + i, `${colLetter(h.col)}${rr}`, { style: src.style, fmt: src.fmt, role: src.role, font: src.font, align: src.align, expect, label: `strip head ${h.column.label} row ${rr}` });
+    });
+  }
+
   // Checks C34 and C35: the strip against the grid for the same months, and the header chain against AsOfDate.
   const cr = b.r("stripCheck");
   b.text(cr, 2, "Check: strip less Monthly P&L (C34)", { style: "check" });
@@ -378,13 +393,12 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
   b.text(hr, 2, "Check: strip months to as-of date (C35)", { style: "check" });
   b.formula(hr, 3, `ABS(${addr(6, stripFirst)}-(EOMONTH(${ASOF},-12)+1))+ABS(${addr(6, stripLast)}-(EOMONTH(${ASOF},-1)+1))`, { style: "check", fmt: FMT.check, expect: 0, label: "C35" });
   b.checkCf(hr, 3, 3);
-  b.note(lastPrinted, 2, "Note: strip cells link to Monthly P&L; growth is year over year in the summary block and month over month in the strip (n.a. where there is no denominator). The hidden column left of the strip holds the month before the LTM start so the first month's growth has a denominator.");
+  b.note(lastPrinted, 2, "Note: strip cells link to Monthly P&L; growth is year over year in the summary block and month over month in the strip (n.a. where there is no denominator). The LTM and PF columns at the head of the strip link to the summary block; the hidden column left of the strip holds the month before the LTM start so the first month's growth has a denominator.");
   // The period block and the strip print as separate ranges with the labels repeated, so neither shrinks under the 7 pt floor (C37).
-  // The LTM, PF and PF vs. LTM columns print with the period block: repeated at the head of the strip range they push it past
-  // one landscape page at the floor (guide 5.5 records this). The strip range stops at its last row of figures: the checks and
-  // the note belong to the period block, and printed beside the strip they showed only a clipped piece of their text in the
-  // repeated label column.
-  b.print({ areas: [`B2:${addr(lastPrinted, l.lastValueCol)}`, `${addr(2, stripFirst)}:${addr(b.r("growth_total"), stripLast)}`], landscape: true, fitToWidth: 1, fitToHeight: 0, titlesRow: "2:6", titlesCol: "B:B" });
+  // The strip range opens with its LTM and PF head (guide 5.5); it is still narrower than the period block, so the scale holds.
+  // It stops at its last row of figures: the checks and the note belong to the period block, and printed beside the strip they
+  // showed only a clipped piece of their text in the repeated label column.
+  b.print({ areas: [`B2:${addr(lastPrinted, l.lastValueCol)}`, `${addr(2, head.length ? headFirst : stripFirst)}:${addr(b.r("growth_total"), stripLast)}`], landscape: true, fitToWidth: 1, fitToHeight: 0, titlesRow: "2:6", titlesCol: "B:B" });
   b.furniture(ctx.codeName, ctx.asOfLabel);
   b.freeze(7, 3);
   return b;

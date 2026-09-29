@@ -25,7 +25,7 @@ import { CHART_COLOR } from "./chartData.ts";
 import { readCharts } from "./charts.ts";
 import { roundTo } from "./deal.ts";
 import { excelSerial } from "./periods.ts";
-import { clippedTexts, expectations } from "./sheet.ts";
+import { clippedTexts, expectations, hiddenSpills } from "./sheet.ts";
 import { COLOR } from "./styles.ts";
 import type { ModelOutput } from "./types.ts";
 import { planOptionsUsedFor, planWorkbook, type PlanOptions, type WorkbookPlan } from "./workbook.ts";
@@ -448,6 +448,7 @@ export async function verifyWorkbook(file: string, model: ModelOutput, options?:
   for (const p of plan.plans) {
     // Printed text that runs into a filled neighbour is cut at the cell edge in print (C37, guide 5.11).
     for (const c of clippedTexts(p)) lint.push({ cell: `'${p.name}'!${c.cell}`, issue: `text cut at its cell edge in print: "${c.text.slice(0, 40)}"` });
+    for (const c of hiddenSpills(p)) lint.push({ cell: `'${p.name}'!${c.cell}`, issue: `text in a hidden column spills into print: "${c.text.slice(0, 40)}"` });
     // Every formula on an output tab carries the engine's value, so none is evaluated for errors only (the row-2 title and the Print toggle are furniture).
     if (p.output) {
       for (const [key, spec] of p.cells) {

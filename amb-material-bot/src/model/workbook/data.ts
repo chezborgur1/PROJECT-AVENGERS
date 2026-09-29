@@ -11,7 +11,7 @@ import { formationText, totalDifference } from "../exportTotals.ts";
 import { excelSerial } from "../periods.ts";
 import type { DatabookRow, DatabookTotal, ModelOutput, TotalTerm } from "../types.ts";
 import type { TabContext } from "./assumptionsTab.ts";
-import { adjMonthStart, applyPeriodWidths, ASOF, gridMonths, headerLabel, LATEST_FY, offGrid, FYE, periodLayout, S, SHEET, serialOfMonthStart, sumifsFormula, valueSpans, writeMonthHeaders, writePeriodHelpers, type PeriodLayout } from "./layout.ts";
+import { adjMonthStart, applyPeriodWidths, ASOF, gridMonths, headerLabel, LATEST_FY, offGrid, FYE, periodLayout, S, SHEET, serialOfMonthStart, sumifsFormula, valueSpans, writeMonthHeaders, writePeriodHelpers, yearEarlierMonths, yearEarlierSumifs, type PeriodLayout } from "./layout.ts";
 
 /** Month columns start here on Monthly P&L and Databook so the guide's `SUMIFS(Databook!<month col>, ...)` reads the same letter. */
 export const MONTH_START = 17;
@@ -311,6 +311,16 @@ export function planMonthly(ctx: TabContext): SheetBuilder | undefined {
         continue;
       }
       if (spec.kind === "ratio") {
+        // No prior column in the block (the prior-year YTD and LTM, the oldest year), but the grid on this tab holds the window
+        // a year earlier: growth against those months, as the P&L Summary computes it (verification F10). n.a. only when the
+        // months are missing.
+        const earlier = prior ? undefined : yearEarlierMonths(model, column);
+        if (earlier) {
+          const prev = earlier.reduce((sum, m) => sum + (series.revenue?.[months.indexOf(m)] ?? 0), 0);
+          const base = yearEarlierSumifs({ valuesRow: monthRow("revenue"), monthsRow: monthHeaderRow, startCell: addr(helpers.start, col, { row: true }), endCell: addr(helpers.end, col, { row: true }) });
+          b.formula(rr, col, `IFERROR(${inSheet("revenue")}/${base}-1,"n.a.")`, { style: vs.style, fmt: vs.fmt, expect: prev ? pv.pnl.revenue / prev - 1 : "n.a.", label: `${spec.key} ${column.label}` });
+          continue;
+        }
         if (!prior) {
           b.na(rr, col, "n.a.", { style: vs.style });
           continue;

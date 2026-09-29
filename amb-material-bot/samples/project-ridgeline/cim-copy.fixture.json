@@ -105,7 +105,7 @@
       "rows": [
         {
           "consideration": "Owner involvement",
-          "shows": "The owner works about {{owner.hours}} hours a week on estimating large replacements, commercial relationships, vendor terms and hiring {{fn.mgmt}}. Dispatch and day-to-day scheduling already sit with the operations manager.",
+          "shows": "The owner works about {{owner.hours}} hours a week on estimating large replacements, commercial relationships, vendor terms and hiring {{fn.mgmt}}. Commercial service, {{line.commercial.share0.FY2025}} of revenue, rests on his relationships; dispatch and scheduling already sit with the operations manager.",
           "addressed": "The owner will stay up to {{owner.transitionMonths}} months after closing and introduce the commercial customers {{fn.mgmt}}. Adj. EBITDA already deducts {{replacementCost}} for a general manager, so the earnings shown pay for his replacement."
         },
         {
@@ -126,14 +126,29 @@
       ],
       "observations": [
         {
-          "row": "owner.total",
-          "lead": "About {{owner.hours}} hours a week {{fn.mgmt}}",
-          "body": "cover estimating, commercial relationships, vendor terms and hiring; who takes each after closing is [Confirm: successor for each owner duty]."
+          "row": "ev.documented",
+          "lead": "Documented add-backs of {{adj.documented.latest}}",
+          "body": "are {{adj.documentedShare.latest}} of the {{adj.addBacks.latest}} added back in FY2025; each cites its account on {{page:S7.2}}."
         },
         {
-          "row": "owner.Commercial relationships",
-          "lead": "Commercial service, {{line.commercial.share0.FY2025}} of revenue,",
-          "body": "rests on the owner's relationships; he will introduce these customers during a transition of up to {{owner.transitionMonths}} months {{fn.mgmt}}."
+          "row": "ev.documented",
+          "lead": "The settled customer dispute [N2], {{adj.N2.FY2024}},",
+          "body": "falls in FY2024 only, which is why add-backs peak that year."
+        },
+        {
+          "row": "ev.calculated",
+          "lead": "The owner's payroll taxes [S4]",
+          "body": "are calculated at statutory rates on his salary as paid [S1], the documented add-back above."
+        },
+        {
+          "row": "ev.representation",
+          "lead": "Management representations are {{adj.repShare.latest}} of add-backs:",
+          "body": "the owner's vehicle and family phones and meals ({{adj.repOnly.refs}})."
+        },
+        {
+          "row": "ev.deductions",
+          "lead": "Deductions of {{adj.deductions.latest}}",
+          "body": "are nearly level: replacement pay [S2] and the reserve [S3] are one amount for every year."
         }
       ]
     },

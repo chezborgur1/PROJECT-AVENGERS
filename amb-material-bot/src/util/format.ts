@@ -123,6 +123,23 @@ export function fmtBps(from: number, to: number, dp = 1): string {
   return `${bps < 0 ? MINUS : "+"}${Math.abs(bps).toLocaleString("en-US")} bps`;
 }
 
+/**
+ * A signed figure read back from a printed cell: "+80", "−80" (U+2212), "–80"
+ * (the prose minus), "(80)" and "1,450" all parse; the zero mark "–" and text
+ * give NaN. Chart series read off a table beside them go through this, so a
+ * minus the table prints can never lose its sign (QA round 3 F40, R1).
+ */
+export function parseSigned(cell: string): number {
+  const t = cell.trim().replace(/\s*(bps|%)$/, "");
+  if (t === EN_DASH || t === "") return Number.NaN;
+  const paren = /^\((.*)\)$/.exec(t);
+  const body = (paren ? paren[1]! : t).replace(/,/g, "");
+  const m = /^([+\-\u2212\u2013]?)(\d+(?:\.\d+)?)$/.exec(body);
+  if (!m) return Number.NaN;
+  const v = Number(m[2]);
+  return paren || (m[1] && m[1] !== "+") ? -v : v;
+}
+
 /** Growth as a table figure with the n.m. rule: from a zero or negative base, or to zero, the cell reads "n.m.". */
 export function fmtGrowth(from: number, to: number, dp = 1): string {
   if (from <= 0 || to === 0) return "n.m.";

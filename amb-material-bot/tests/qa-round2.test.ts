@@ -277,9 +277,12 @@ describe("the Ridgeline deck's exhibits (F23, F25, F27, F29)", () => {
     expect(service.spec.head).not.toContain("Pricing basis");
     expect(ctx.openQuestions.some((q) => /pricing basis of each service line/.test(q))).toBe(true);
     expect(collectOpenQuestions(ctx, plan).some((q) => /pricing basis of each service line/.test(q))).toBe(true);
-    const owner = tables.find((t) => t.header?.title === "Owner responsibilities and transition")!;
-    expect(owner.spec.head).toEqual(["Responsibility", "Transition support", "Obs."]);
+    // The notes fill 1 of the owner table's 12 cells: the table is left out, not built from placeholders (verification F29),
+    // and each of its columns is asked.
+    expect(tables.find((t) => t.header?.title === "Owner responsibilities and transition")).toBeUndefined();
     expect(ctx.openQuestions.some((q) => /Who assumes each of the owner's duties/.test(q))).toBe(true);
+    expect(ctx.openQuestions.some((q) => /^Hours a week the owner spends on each duty/.test(q))).toBe(true);
+    expect(ctx.openQuestions.some((q) => /^What transition support the owner gives for each duty \(Estimating large replacements, Vendor terms, Hiring\)/.test(q))).toBe(true);
   });
 
   it("fills every body page to the 80% floor, which the plan reports when a page falls short (F26)", () => {

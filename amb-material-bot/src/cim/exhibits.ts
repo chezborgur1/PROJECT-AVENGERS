@@ -11,14 +11,14 @@ import type { Adjustment, KpiSeries } from "../domain/financials.ts";
 import { monthLabel } from "../domain/financials.ts";
 import type { Ladder, PeriodColumn, PeriodValues } from "../model/types.ts";
 import { isFieldDepartment } from "../model/analytics.ts";
-import { cagr, customerNoun, describeDelta, EN_DASH, fmtBps, fmtCount, fmtGrowth, fmtMoney, fmtPct, fyRange, k, toK, wholeShares } from "../util/format.ts";
-import { accountLabel, fmtKpi, joinDepartments, latestKpi, payGroups, revenueMix } from "./brief.ts";
+import { cagr, customerNoun, describeDelta, EN_DASH, fmtBps, fmtCount, fmtGrowth, fmtMoney, fmtPct, fyRange, k, MINUS, parseSigned, toK, wholeShares } from "../util/format.ts";
+import { accountLabel, evidenceGroup, fmtKpi, joinDepartments, ladderAdjustments, latestKpi, payGroups, revenueMix } from "./brief.ts";
 import type { CimContext } from "./context.ts";
 import { at, confirm, fieldDepartments, pageRef, population, resolveCopy, tableColumns } from "./context.ts";
 import type { Observation } from "./copy.ts";
 import { withCustomerNoun } from "./copy.ts";
 import type { Block, ExhibitHeader, NumCol, NumRow, NumTableSpec, ObsItem, TextCell, TextTableSpec } from "./design.ts";
-import { cellText, GAP, r3, spanW } from "./design.ts";
+import { cellText, GAP, r3, spanW, textWidth } from "./design.ts";
 
 // ---------------------------------------------------------------------------
 // Cell and column helpers
@@ -735,7 +735,7 @@ export function costShiftChart(table: Block, max = 6): Block | undefined {
   const span = /Δ ([^)]+)\)/.exec(table.header?.units ?? "")?.[1];
   const moves = table.spec.rows
     .filter((r) => r.type === "line" && r.vals)
-    .map((r) => ({ label: r.label, bps: Number(r.vals![r.vals!.length - 1]!.replace(EN_DASH, "-").replace(/[^0-9.+-]/g, "")) }))
+    .map((r) => ({ label: r.label, bps: parseSigned(r.vals![r.vals!.length - 1]!) }))
     .filter((m) => Number.isFinite(m.bps) && m.bps !== 0)
     .sort((a, b) => Math.abs(b.bps) - Math.abs(a.bps))
     .slice(0, max);
@@ -743,7 +743,7 @@ export function costShiftChart(table: Block, max = 6): Block | undefined {
   return {
     kind: "chart",
     header: { title: "Largest changes in cost ratios", units: span ? `(bps, ${span})` : "(bps)" },
-    spec: { type: "hbar", labels: moves.map((m) => m.label), values: moves.map((m) => m.bps), format: `#,##0;"${EN_DASH}"#,##0` },
+    spec: { type: "hbar", labels: moves.map((m) => m.label), values: moves.map((m) => m.bps), format: `"+"#,##0;"${MINUS}"#,##0;"${EN_DASH}"` },
   };
 }
 
@@ -892,23 +892,105 @@ export function condensedLadder(ctx: CimContext, w: number): Block {
 }
 
 /**
- * Earnings build (S1.2 rail, QA round 3 F28): Reported EBITDA, the net
+ * Earnings build (S1.2, QA round 3 F28): Reported EBITDA, the net
  * adjustments, Adj. EBITDA with its margin and, in Main Street mode, SDE,
- * over the table periods. Five rows from the ladder the S7 pages itemize.
+ * over the table periods, with their growth and a one-line basis per row.
+ * It runs the width of the column it is given: at the period columns alone
+ * it left a four-column hole beside it on p5 (verification F28). The basis
+ * column is dropped, and then the growth, when the column is too narrow.
  */
 export function earningsBuild(ctx: CimContext, w: number): Block {
   const periods = tableColumns(ctx);
   const ps = periods.map((c) => at(ctx, c));
-  const cols = fitCols([{ w: 2.0, kind: "label" }, ...periodCols(periods, 0.62)], w);
-  const row = (type: NumRow["type"], label: string, key: string, get: (l: Ladder) => number, dollar = false): NumRow => ({ type, label, key, vals: ps.map((p) => k(get(p.ladder), { dollar })) });
+  const base: NumCol[] = [{ w: 2.0, kind: "label" }, ...periodCols(periods, 0.62)];
+  const growth = growthCols(ctx);
+  const withGrowth = growth.length ? [...base, { w: GAP, kind: "gap" as const }, ...growth] : base;
+  // The basis column takes what is left, in the body size: one line per row, or it is left out.
+  const room = r3(w - widthOf(withGrowth));
+  const l = at(ctx, ctx.latest).ladder;
+  const tiers = new Set(ctx.out.adjustments.filter((a) => a.row.status === "accepted").map((a) => a.row.tier));
+  const adjusted = [tiers.has("normalization") ? "normalization" : "", tiers.has("owner_compensation") ? "owner compensation" : "", tiers.has("pro_forma") && l.totalProForma ? "pro forma" : ""].filter(Boolean);
+  const basis: Record<string, string[]> = {
+    "eb.reported": ["Net income plus interest, taxes and depreciation", "Per the financial statements"],
+    "eb.adjustments": [...(adjusted.length ? [`${listOf(adjusted)}, itemized on ${pageRef("S7.1")}`] : []), `Each itemized with its evidence on ${pageRef("S7.1")}`, `Itemized on ${pageRef("S7.1")}`],
+    "eb.adj": l.capitalReserve ? ["After the capital reserve [S3] for equipment", "After the capital reserve [S3]"] : [""],
+    "eb.adjMargin": ["Adj. EBITDA as a share of revenue", ""],
+    "eb.sde": l.capitalReserve ? ["Before replacement pay [S2] and the reserve [S3]", "Adj. EBITDA before [S2] and [S3]"] : ["Adj. EBITDA before replacement pay [S2]", "Adj. EBITDA before [S2]"],
+  };
+  // A page token prints as a two-digit page number.
+  const fits = (t: string) => textWidth(t.replace(/\{\{page:[^}]+\}\}/g, "page 00"), 9) + 0.16 <= room;
+  const text = room >= 1.8 ? (key: string) => (basis[key] ?? [""]).find(fits) ?? "" : undefined;
+  const cols = fitCols(text ? [...withGrowth, { w: room, kind: "text", head: "Basis" }] : room >= 0 ? withGrowth : base, w);
+  const row = (type: NumRow["type"], label: string, key: string, get: (l: Ladder) => number, dollar = false): NumRow => ({
+    type,
+    label,
+    key,
+    vals: [...ps.map((p) => k(get(p.ladder), { dollar })), ...growthCells(ctx, cols, (p) => get(p.ladder))],
+    ...(text ? { text: text(key) } : {}),
+  });
   const rows: NumRow[] = [
-    row("line", "Reported EBITDA", "eb.reported", (l) => l.reportedEbitda, true),
-    row("line", `(+) Adjustments, net (${pageRef("S7.1")})`, "eb.adjustments", (l) => l.adjEbitda - l.reportedEbitda),
-    row("key", "Adj. EBITDA", "eb.adj", (l) => l.adjEbitda, true),
-    { type: "ratio", label: "% margin", key: "eb.adjMargin", vals: ps.map((p) => pc(p.ladder.adjMargin)) },
+    row("line", "Reported EBITDA", "eb.reported", (x) => x.reportedEbitda, true),
+    row("line", "(+) Adjustments, net", "eb.adjustments", (x) => x.adjEbitda - x.reportedEbitda),
+    row("key", "Adj. EBITDA", "eb.adj", (x) => x.adjEbitda, true),
+    { type: "ratio", label: "% margin", key: "eb.adjMargin", vals: [...ps.map((p) => pc(p.ladder.adjMargin)), ...ratioGrowthCells(ctx, cols, (p) => p.ladder.adjMargin)], ...(text ? { text: text("eb.adjMargin") } : {}) },
   ];
-  if (ctx.mainStreet) rows.push(row("line", "Seller's discretionary earnings", "eb.sde", (l) => l.sde));
+  if (ctx.mainStreet) rows.push(row("line", "Seller's discretionary earnings", "eb.sde", (x) => x.sde));
   return { kind: "numTable", header: { title: "Earnings build", units: "($000s)" }, spec: { name: "Earnings", cols, rows } };
+}
+
+/** "a", "a and b", "a, b and c", capitalised. */
+function listOf(items: string[]): string {
+  const s = items.length > 1 ? `${items.slice(0, -1).join(", ")} and ${items.at(-1)}` : items[0]!;
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/**
+ * Adjustments by evidence (S1.4, verification F29): the add-backs to Reported
+ * EBITDA grouped by what they rest on (documented, calculated from
+ * documented figures, management representation, AMB estimate), the
+ * deductions on one line and the net to Adj. EBITDA, with the items each
+ * group holds, largest first. It
+ * takes the owner table's place on the buyer page when the notes leave most
+ * of that table blank, and answers the add-back quality test with figures.
+ * Undefined when there are no add-backs or the groups do not sum to the
+ * ladder's net adjustments.
+ */
+export function adjustmentsByEvidence(ctx: CimContext, w: number): Block | undefined {
+  const periods = tableColumns(ctx).filter((c) => c.ref.kind !== "pf");
+  const ps = periods.map((c) => at(ctx, c));
+  const rows0 = ladderAdjustments(ctx.out, periods);
+  if (!rows0.some((a) => a.addBack)) return undefined;
+  const sum = (list: typeof rows0, c: PeriodColumn) => list.reduce((s, a) => s + (a.byColumn[c.key] ?? 0), 0);
+  // The groups must add to the ladder's net, or the table would show a total no other page prints.
+  if (periods.some((c, i) => Math.abs(sum(rows0, c) - (ps[i]!.ladder.adjEbitda - ps[i]!.ladder.reportedEbitda)) > 1)) return undefined;
+  const base: NumCol[] = [{ w: 2.3, kind: "label" }, ...periodCols(periods, 0.62)];
+  const room = r3(w - widthOf(base) - GAP - 0.4);
+  const cols = fitCols([...base, { w: GAP, kind: "gap" }, { w: Math.max(1.0, room), kind: "text", head: "Items" }, { w: 0.4, kind: "obs", head: "Obs." }], w);
+  // Largest first, each by its description without the qualifier the support page carries ("Capital reserve", not "Capital reserve (maintenance capex)").
+  const latestOf = (a: (typeof rows0)[number]) => Math.abs(a.byColumn[periods[periods.length - 1]!.key] ?? 0);
+  const short = (d: string) => d.replace(/\s*\([^)]*\)\s*$/, "").trim();
+  const items = (list: typeof rows0) => [...list].sort((a, b) => latestOf(b) - latestOf(a)).map((a) => `${short(a.row.description)}\u00a0[${a.row.ref}]`).join("; ");
+  const line = (type: NumRow["type"], label: string, key: string, list: typeof rows0, sign = 1, dollar = false): NumRow => ({ type, label, key, vals: periods.map((c) => k(sign * sum(list, c), { dollar })), text: type === "line" ? items(list) : "" });
+  const groups: { id: ReturnType<typeof evidenceGroup>; label: string }[] = [
+    { id: "documented", label: "Documented in the records" },
+    { id: "calculated", label: "Calculated from documented figures" },
+    { id: "representation", label: "Management representation" },
+    { id: "estimate", label: "AMB estimate" },
+  ];
+  const addBacks = rows0.filter((a) => a.addBack);
+  const deductions = rows0.filter((a) => !a.addBack);
+  const rows: NumRow[] = [];
+  let first = true;
+  for (const g of groups) {
+    const list = addBacks.filter((a) => evidenceGroup(a.row, ctx.ds) === g.id);
+    if (!list.length) continue;
+    rows.push(line("line", g.label, `ev.${g.id}`, list, 1, first));
+    first = false;
+  }
+  rows.push(line("subtotal", "Total add-backs", "ev.addBacks", addBacks, 1, true));
+  if (deductions.length) rows.push(line("line", `(${EN_DASH}) Deductions`, "ev.deductions", deductions));
+  rows.push(line("key", "Adjustments, net", "ev.net", rows0, 1, true));
+  return { kind: "numTable", header: { title: "Adjustments by evidence", units: "($000s)" }, spec: { name: "Adjustments", cols, rows, fontSize: 8 } };
 }
 
 /** The bridge from Reported EBITDA to Adj. EBITDA for the latest window as a waterfall (S7.1). */
@@ -1488,18 +1570,54 @@ export function facilities(ctx: CimContext, w: number, withSuppliers = true): Bl
  * question. Transition support is blank where the notes name none for a
  * duty: the owner's overall transition stands on the total line.
  */
+/** The owner table's data columns: hours, successor and transition support, with the question each gap raises. */
+function ownerFields(ctx: CimContext) {
+  type R = NonNullable<CimContext["intake"]>["owner"]["responsibilities"][number];
+  return [
+    { head: "Hrs/wk", w: 0.5, align: "right" as const, get: (r: R) => (r.hoursPerWeek !== undefined ? String(r.hoursPerWeek) : undefined), ask: (d: string) => confirm(ctx, "hours", `Hours a week the owner spends on "${d}"`), whole: "Hours a week the owner spends on each duty" },
+    { head: "Who assumes it post-close", w: 0, align: "left" as const, get: (r: R) => r.assumedBy, ask: (d: string) => confirm(ctx, "successor", `Who assumes "${d}" after closing`), whole: "Who assumes each of the owner's duties after closing" },
+    { head: "Transition support", w: 0, align: "left" as const, get: (r: R) => r.transitionSupport, ask: (d: string) => confirm(ctx, "support", `What transition support the owner gives for "${d}"`), whole: "What transition support the owner gives for each duty" },
+  ];
+}
+
+/**
+ * Whether the notes fill enough of the owner table to build it: at least half
+ * its data cells (hours, successor, transition support for each duty). A
+ * table of placeholders with one fact in it reads as a gap list, not an
+ * exhibit (verification F29); the duties then stand in the buyer table's
+ * owner-involvement row, and each unfilled column becomes an open question.
+ */
+export function ownerTableFilled(ctx: CimContext): { filled: number; cells: number; enough: boolean } {
+  const rs = ctx.intake?.owner.responsibilities ?? [];
+  const fields = ownerFields(ctx);
+  const cells = rs.length * fields.length;
+  const filled = rs.reduce((n, r) => n + fields.filter((f) => f.get(r) !== undefined).length, 0);
+  return { filled, cells, enough: cells > 0 && filled * 2 >= cells };
+}
+
+/** The open questions the owner table's gaps raise, one per column the notes leave short, recorded once. */
+export function askOwnerTable(ctx: CimContext, why: string): void {
+  const rs = ctx.intake?.owner.responsibilities ?? [];
+  for (const f of ownerFields(ctx)) {
+    const missing = rs.filter((r) => f.get(r) === undefined).map((r) => r.responsibility);
+    if (!missing.length) continue;
+    const q = `${f.whole} (${missing.join(", ")}): ${why}`;
+    if (!ctx.openQuestions.includes(q)) ctx.openQuestions.push(q);
+  }
+}
+
 export function ownerResponsibilities(ctx: CimContext, w: number): Block | undefined {
   const o = ctx.intake?.owner;
   if (!o?.responsibilities.length) return undefined;
+  if (!ownerTableFilled(ctx).enough) {
+    askOwnerTable(ctx, "the owner responsibilities table is left out until the Seller gives these");
+    return undefined;
+  }
   // A column prints when the notes fill at least one of its cells, its gaps as [Confirm: …] placeholders that
   // open-questions.md carries, so the table reads as a draft to finish rather than an exhibit with blank cells (QA round 3
   // F29). A column the notes leave wholly empty is left out and asked as one question: a column of placeholders alone is
   // not an exhibit (QA round 2 F23).
-  const fields = [
-    { head: "Hrs/wk", w: 0.5, align: "right" as const, get: (r: (typeof o.responsibilities)[number]) => (r.hoursPerWeek !== undefined ? String(r.hoursPerWeek) : undefined), ask: (d: string) => confirm(ctx, "hours", `Hours a week the owner spends on "${d}"`), whole: "Hours a week the owner spends on each duty" },
-    { head: "Who assumes it post-close", w: 0, align: "left" as const, get: (r: (typeof o.responsibilities)[number]) => r.assumedBy, ask: (d: string) => confirm(ctx, "successor", `Who assumes "${d}" after closing`), whole: "Who assumes each of the owner's duties after closing" },
-    { head: "Transition support", w: 0, align: "left" as const, get: (r: (typeof o.responsibilities)[number]) => r.transitionSupport, ask: (d: string) => confirm(ctx, "support", `What transition support the owner gives for "${d}"`), whole: "What transition support the owner gives for each duty" },
-  ];
+  const fields = ownerFields(ctx);
   const shown = fields.filter((f) => o.responsibilities.some((r) => f.get(r) !== undefined));
   for (const f of fields) {
     const q = `${f.whole} (${o.responsibilities.map((r) => r.responsibility).join(", ")}): the column is left out of the owner responsibilities table until the Seller gives it`;

@@ -872,6 +872,36 @@ export function clippedTexts(p: SheetPlan): { cell: string; text: string }[] {
   return out;
 }
 
+/**
+ * Text in a hidden column of a printed row that would spill into a printed
+ * column beside it: LibreOffice overflows a right-aligned "n.a." out of a
+ * hidden column into the empty visible cell to its left (verification F11),
+ * so the page prints a clipped fragment no cell in the print area holds.
+ */
+export function hiddenSpills(p: SheetPlan): { cell: string; text: string }[] {
+  const lastPrinted = Math.max(0, ...p.print.areas.map((a) => Number(/(\d+)$/.exec(a)?.[1] ?? 0)));
+  const holds = (r: number, c: number) => {
+    const o = p.cells.get(cellKey(r, c));
+    return !!o && (o.f !== undefined || (o.v !== undefined && o.v !== null && o.v !== ""));
+  };
+  const visible = (c: number, step: number) => {
+    let k = c + step;
+    while (k > 0 && p.hiddenCols.has(k)) k += step;
+    return k;
+  };
+  const out: { cell: string; text: string }[] = [];
+  for (const [key, spec] of p.cells) {
+    const [r, c] = key.split(":").map(Number) as [number, number];
+    const text = typeof spec.v === "string" ? spec.v : typeof spec.expect === "string" ? spec.expect : undefined;
+    if (!text || r < 5 || r > lastPrinted || !p.hiddenCols.has(c)) continue;
+    const style = STYLES[spec.style ?? "text"];
+    const h = spec.align?.horizontal ?? style?.align?.horizontal ?? (typeof spec.v === "string" ? "left" : "right");
+    const into = [...(h === "right" || h === "center" ? [visible(c, -1)] : []), ...(h === "left" || h === "center" ? [visible(c, 1)] : [])];
+    if (into.some((k) => k > 0 && inPrintArea(p, k) && !holds(r, k))) out.push({ cell: addr(r, c), text });
+  }
+  return out;
+}
+
 // Advance widths of Arial (metric twin of Helvetica and Liberation Sans) in 1/1000 em, ASCII 32-126, regular and bold.
 const ARIAL = [278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, 556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556, 1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556, 333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556, 556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584];
 const ARIAL_BOLD = [278, 333, 474, 556, 556, 889, 722, 238, 333, 333, 389, 584, 278, 333, 278, 278, 556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 333, 333, 584, 584, 584, 611, 975, 722, 722, 722, 722, 667, 611, 778, 722, 278, 556, 722, 611, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 333, 278, 333, 584, 556, 333, 556, 611, 556, 611, 556, 333, 611, 611, 278, 278, 556, 278, 889, 611, 611, 611, 611, 389, 556, 333, 611, 556, 778, 556, 556, 500, 389, 280, 389, 584];

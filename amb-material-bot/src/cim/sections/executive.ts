@@ -11,11 +11,13 @@ import { lowerFirst } from "../../util/format.ts";
 import type { Block, TextCell } from "../design.ts";
 import { blockHeight, CONTENT_H, r3, SPACE, spanW } from "../design.ts";
 import {
+  adjustmentsByEvidence,
   condensedLadder,
   earningsBuild,
   keyObservations,
   observationsBlock,
   ownerResponsibilities,
+  ownerTableFilled,
   quickStatsFinancial,
   quickStatsOperating,
   revenueAdjPanels,
@@ -131,8 +133,8 @@ const s1_2: PageModule = {
     const rows: TextCell[][] = copy.considerations.map((c) => [{ lead: resolveCopy(ctx, c.lead, "S1.2"), body: resolveCopy(ctx, c.evidence, "S1.2") }, pageNo(c.page)]);
     // Body size from the type scale (spec 2): the list is never padded with a larger font to fill the column (spec 1).
     const list: Block = { kind: "textTable", header: { title: "Investment considerations", units: "(each proved on the page shown)" }, spec: { colW: [r3(lw - 0.55), 0.55], head: ["Consideration and evidence", "Page"], rows, aligns: ["left", "right"], fontSize: 9, firstBold: false } };
-    // Under the list, the earnings build the considerations cite, at its own width, so the page is not left airy (spec 1, 9).
-    const build = earningsBuild(ctx, Math.min(lw, 4.6));
+    // Under the list, the earnings build the considerations cite, across the list's width, so no hole is left beside it (spec 1, 9).
+    const build = earningsBuild(ctx, lw);
     const b = ctx.brief;
     const growth = b.has("rev.cagr") ? `grew at a ${b.t("rev.cagr")} CAGR to` : b.has("rev.yoy") ? `${verb(b.value("rev.yoy"))} ${b.t("rev.yoy")} to` : "reached";
     // Alternates in the same words, so a line break never leaves the period alone on the title's last line.
@@ -271,7 +273,9 @@ const s1_4: PageModule = {
     rows.push(financialReportingRow(ctx));
     const table: Block = { kind: "textTable", header: { title: "Considerations for buyers", units: `(${ctx.latest.label} unless noted)` }, spec: { colW: [1.7, 5.4, r3(w - 7.1)], head: ["Consideration", "What the data shows", "How it is addressed"], rows, fontSize: 8.5 } };
     const owner = ctx.present.has("S5.4") && ctx.carried.get("S1.4")?.includes("S5.4") ? ownerResponsibilities(ctx, usable(1, 8)) : undefined;
-    const obs = owner ? observationsBlock("owner responsibilities", keyObservations(ctx, "S1.4", copy.observations, [owner])) : undefined;
+    // When the notes leave the owner table mostly blank (S5.4 omitted), the add-back quality test's figures take its place (verification F29).
+    const exhibit = owner ?? adjustmentsByEvidence(ctx, usable(1, 8));
+    const obs = exhibit ? observationsBlock(owner ? "owner responsibilities" : "adjustments by evidence", keyObservations(ctx, "S1.4", copy.observations, [exhibit])) : undefined;
     const b = ctx.brief;
     const n = rows.length;
     // The two tests a buyer asks about first, each named by its figure; the adjustments stand in for either one missing.
@@ -286,11 +290,12 @@ const s1_4: PageModule = {
         id: "S1.4",
         section: SECTION,
         title,
-        rows: [{ columns: [{ span: [1, 12], blocks: [table] }] }, { columns: [{ span: [1, 8], blocks: present(owner) }, { span: [9, 12], blocks: present(obs) }] }],
+        rows: [{ columns: [{ span: [1, 12], blocks: [table] }] }, { columns: [{ span: [1, 8], blocks: present(exhibit) }, { span: [9, 12], blocks: present(obs) }] }],
         notes: {
           source: source(ctx.sources.financials, ctx.sources.customers, ctx.sources.bank, "Management"),
           note: `Figures in USD unless noted. Adjustment references are defined on ${pageRef("S7.2")}.`,
           footnotes: [`${PER_MANAGEMENT}${ctx.intake?.owner.hoursPerWeek ? " Hours are the owner's estimate of a typical week." : ""}`],
+          ...(exhibit && !owner ? { note: `Figures in USD unless noted. Adjustment references are defined on ${pageRef("S7.2")}; adjustments shown are those included in Adj. EBITDA.` } : {}),
         },
         carries: owner ? ["S5.4"] : [],
       }),
@@ -319,10 +324,17 @@ function fallbackBuyer(ctx: CimContext): NonNullable<CimCopy["s1_4"]> {
     });
   }
   rows.push({ consideration: "Add-back quality", shows: `Adjustments total {{adjTotal.latest}} in ${ctx.latest.label}, from Reported EBITDA of {{repEbitda.latest}} to Adj. EBITDA of {{adjEbitda.latest}}.`, addressed: `Each adjustment is listed with its basis and evidence on ${pageRef("S7.2")}.${ctx.brief.has("adj.repOnly.bps") ? ` Excluding the {{adj.repOnly.latest}} resting on management representation ({{adj.repOnly.refs}}) lowers the ${ctx.latest.label} Adj. EBITDA margin by {{adj.repOnly.bps}}.` : ""}` });
-  return {
-    rows,
-    observations: [{ row: "owner.total", lead: ctx.intake?.owner.hoursPerWeek ? "About {{owner.hours}} hours a week of owner duties {{fn.mgmt}}" : "The owner's responsibilities", body: `pass to ${confirm(ctx, "successors", "Who takes each owner responsibility after closing")} after closing.` }, { row: "owner.total", lead: `Market replacement compensation of {{s2.latest}}`, body: "is already deducted in Adj. EBITDA for a general manager." }],
-  };
+  // The observations key to the exhibit the page carries: the owner table when the notes fill it, else the adjustments by evidence.
+  if (ctx.intake?.owner.responsibilities.length && ownerTableFilled(ctx).enough) {
+    return {
+      rows,
+      observations: [{ row: "owner.total", lead: ctx.intake?.owner.hoursPerWeek ? "About {{owner.hours}} hours a week of owner duties {{fn.mgmt}}" : "The owner's responsibilities", body: `pass to ${confirm(ctx, "successors", "Who takes each owner responsibility after closing")} after closing.` }, { row: "owner.total", lead: `Market replacement compensation of {{s2.latest}}`, body: "is already deducted in Adj. EBITDA for a general manager." }],
+    };
+  }
+  const observations: NonNullable<CimCopy["s1_4"]>["observations"] = [];
+  if (b.has("adj.documented.latest")) observations.push({ row: "ev.documented", lead: `Documented add-backs of {{adj.documented.latest}}`, body: `are {{adj.documentedShare.latest}} of the {{adj.addBacks.latest}} added back in ${ctx.latest.label}; each cites its account or record on ${pageRef("S7.2")}.` });
+  if (b.has("adj.deductions.latest")) observations.push({ row: "ev.deductions", lead: `Deductions of {{adj.deductions.latest}}`, body: `reduce Reported EBITDA in ${ctx.latest.label}, each with its basis on ${pageRef("S7.2")}.` });
+  return { rows, observations };
 }
 
 export const S1: SectionModule = { id: "S1", name: SECTION, pages: [s1_1, s1_2, s1_3, s1_4] };

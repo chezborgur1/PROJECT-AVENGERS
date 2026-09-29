@@ -719,14 +719,99 @@ export function noteRounding(spec: PageSpec): void {
   spec.notes = { ...spec.notes, note: note ? `${note.replace(/\.$/, "")}; ${ROUNDING_CLAUSE}.` : `Totals may not sum due to rounding.` };
 }
 
+/**
+ * The width a placed block covers on the page: a table sits at the left of
+ * its column at the spec's widths, so it covers its exhibit rule (the table,
+ * or its title when that runs further); a spacer covers nothing; every other
+ * block spans its column.
+ */
+export function footprintW(b: Block, w: number): number {
+  if (b.kind === "spacer") return 0;
+  if (b.kind === "numTable" || b.kind === "textTable") {
+    const table = b.kind === "numTable" ? b.spec.cols.reduce((s, c) => s + c.w, 0) : b.spec.colW.reduce((s, c) => s + c, 0);
+    return b.header ? ruleWidth(b, w) : r3(Math.min(w, table));
+  }
+  return w;
+}
+
+/** An empty rectangle of the content band, in inches. */
+export interface EmptyRegion {
+  x0: number;
+  x1: number;
+  y0: number;
+  y1: number;
+}
+
+/** How much of the grid's column area (gutters excluded) lies between x0 and x1. */
+export function columnArea(x0: number, x1: number): number {
+  let a = 0;
+  for (let k = 1; k <= 12; k++) a += Math.max(0, Math.min(x1, colX(k) + COL_W) - Math.max(x0, colX(k)));
+  return r3(a);
+}
+
+/** Resolution of the empty-region scan, in inches. */
+const EMPTY_GRID = 0.05;
+
+/**
+ * The largest empty rectangle of the content band wider than two grid columns
+ * and at least EMPTY_DEPTH deep, or undefined (spec 1: no empty region
+ * larger than two columns by 1.5 in). Width is counted in column area, the
+ * gutters left out: the gutter beside a hairline is always blank, so a region
+ * is larger than two columns only when it reaches into a third one
+ * (`columnArea`). Blocks cover their footprint
+ * (`footprintW`), so the space beside a table narrower than its column
+ * counts as well as the space under a column's last block (verification F28:
+ * the p5 hole right of the earnings build went unreported).
+ */
+export function emptyRegion(placed: PlacedBlock[], minDepth = EMPTY_DEPTH): EmptyRegion | undefined {
+  const nx = Math.round(CONTENT_W / EMPTY_GRID);
+  const ny = Math.round(CONTENT_H / EMPTY_GRID);
+  const full = Array.from({ length: ny }, () => new Uint8Array(nx));
+  for (const p of placed) {
+    const fw = footprintW(p.block, p.w);
+    if (fw <= 0 || p.h <= 0) continue;
+    const i0 = Math.max(0, Math.floor((p.x - MARGIN) / EMPTY_GRID + 1e-6));
+    const i1 = Math.min(nx, Math.ceil((p.x + fw - MARGIN) / EMPTY_GRID - 1e-6));
+    const j0 = Math.max(0, Math.floor((p.y - BAND.top) / EMPTY_GRID + 1e-6));
+    const j1 = Math.min(ny, Math.ceil((p.y + p.h - BAND.top) / EMPTY_GRID - 1e-6));
+    for (let j = j0; j < j1; j++) full[j]!.fill(1, i0, i1);
+  }
+  const needD = Math.ceil(minDepth / EMPTY_GRID - 1e-6);
+  const depth = new Int32Array(nx);
+  let best: (EmptyRegion & { area: number }) | undefined;
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) depth[i] = full[j]![i] ? 0 : depth[i]! + 1;
+    // Runs of cells empty for at least needD rows above this one; the rectangle is the run by its shallowest cell.
+    let i = 0;
+    while (i < nx) {
+      if (depth[i]! < needD) {
+        i++;
+        continue;
+      }
+      let k = i;
+      let d = depth[i]!;
+      while (k < nx && depth[k]! >= needD) d = Math.min(d, depth[k++]!);
+      const x0 = r3(MARGIN + i * EMPTY_GRID);
+      const x1 = r3(Math.min(RIGHT, MARGIN + k * EMPTY_GRID));
+      if (columnArea(x0, x1) > 2 * COL_W + 0.02 && (!best || (k - i) * d > best.area)) {
+        best = { x0, x1, y0: r3(BAND.top + (j + 1 - d) * EMPTY_GRID), y1: r3(BAND.top + (j + 1) * EMPTY_GRID), area: (k - i) * d };
+      }
+      i = k;
+    }
+  }
+  if (!best) return undefined;
+  const { area: _area, ...region } = best;
+  return region;
+}
+
 export function layoutPage(spec: PageSpec): LaidOutPage {
   const warnings: string[] = [];
   let uneven: Uneven | undefined;
-  // Empty space under the last row's columns: a region wider than two grid columns and deeper than 1.5 in breaks spec 1.
-  let empty: { cols: string; depth: number }[] = [];
+  // An empty region wider than two grid columns and deeper than 1.5 in breaks spec 1: under a column or beside a narrow table.
+  let empty: EmptyRegion | undefined;
   const attempt = (page: PageSpec): LaidOutPage => {
     uneven = undefined;
-    empty = [];
+    empty = undefined;
     const placed: PlacedBlock[] = [];
     const hairlines: LaidOutPage["hairlines"] = [];
     let y = BAND.top;
@@ -762,16 +847,10 @@ export function layoutPage(spec: PageSpec): LaidOutPage {
           hairlines.push({ x: hairlineX(cols[i]!.span[1]), y0: tops, y1: isLast ? BAND.bottom : r3(rowBottom) });
         }
       }
-      if (ri === page.rows.length - 1) {
-        for (const c of cols) {
-          const last = placed.filter((p) => p.x === c.x && p.y >= tops).at(-1);
-          const depth = r3(BAND.bottom - (last ? last.y + last.h : tops));
-          if (c.w > spanW(1, 2) + 0.01 && depth >= EMPTY_DEPTH) empty.push({ cols: `${c.span[0]}-${c.span[1]}`, depth });
-        }
-      }
       y = r3(rowBottom + SPACE.row);
     });
     const bottom = r3(y - SPACE.row);
+    empty = emptyRegion(placed);
     const area = placed.reduce((s, p) => s + p.w * p.h, 0);
     return {
       spec: page,
@@ -800,7 +879,8 @@ export function layoutPage(spec: PageSpec): LaidOutPage {
         continue;
       }
       if (uneven) warnings.push(`${spec.id}: columns end ${uneven.gap.toFixed(2)} in apart`);
-      for (const e of empty) warnings.push(`${spec.id}: ${e.depth.toFixed(2)} in empty under columns ${e.cols} (spec 1: no empty region wider than two columns and deeper than ${EMPTY_DEPTH} in)`);
+      const e = empty as EmptyRegion | undefined;
+      if (e) warnings.push(`${spec.id}: ${(e.x1 - e.x0).toFixed(2)} by ${(e.y1 - e.y0).toFixed(2)} in empty at x ${e.x0.toFixed(2)}${EN_DASH}${e.x1.toFixed(2)}, y ${e.y0.toFixed(2)}${EN_DASH}${e.y1.toFixed(2)} (spec 1: no empty region wider than two columns and deeper than ${EMPTY_DEPTH} in)`);
       const keys = obsKeyMismatch(page);
       if (keys) warnings.push(`${spec.id}: observation letters disagree with the tables (${keys})`);
       return out;

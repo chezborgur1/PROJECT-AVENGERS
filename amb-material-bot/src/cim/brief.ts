@@ -7,11 +7,39 @@
 // hours, fleet) are in the brief too, so the literal-figure lint can tell a
 // sourced number from an invented one.
 
-import type { FinancialDataset, KpiSeries } from "../domain/financials.ts";
+import type { Adjustment, FinancialDataset, KpiSeries } from "../domain/financials.ts";
 import { monthEndDate, monthLabel, parsePeriodKey } from "../domain/financials.ts";
 import type { ModelOutput, PeriodColumn, PeriodValues } from "../model/types.ts";
 import { isFieldDepartment } from "../model/analytics.ts";
 import { cagr, customerNoun, describeDelta, fmtCount, fmtDollars, fmtMoney, fmtPct, growth, indefinite, wholeShares } from "../util/format.ts";
+
+/** The evidence an accepted adjustment rests on, as the support page names it (spec 4.5, guide T11). */
+export type EvidenceGroup = "documented" | "calculated" | "estimate" | "representation";
+
+/**
+ * Which evidence group an adjustment falls in: management representation;
+ * AMB's estimate (the capital reserve read from depreciation); a figure
+ * calculated from documented ones (evidence still pending); else documented.
+ * The support page's Evidence column and the S1.4 evidence table read this.
+ */
+export function evidenceGroup(a: Adjustment, ds: FinancialDataset): EvidenceGroup {
+  if (a.evidence === "management_representation") return "representation";
+  if (a.category === "capital_reserve" && ds.recastInputs?.capitalReserve?.basis === "da_proxy") return "estimate";
+  if (a.evidence === "pending") return "calculated";
+  return "documented";
+}
+
+/**
+ * The accepted adjustments between Reported EBITDA and Adj. EBITDA (every
+ * tier but the definitional and pro forma ones), each as an add-back or a
+ * deduction by the sign of its total over `cols`.
+ */
+export function ladderAdjustments(out: ModelOutput, cols: PeriodColumn[]): { row: Adjustment; byColumn: Record<string, number>; addBack: boolean }[] {
+  return out.adjustments
+    .filter((a) => a.row.status === "accepted" && a.row.tier !== "definitional" && a.row.tier !== "pro_forma")
+    .map((a) => ({ ...a, addBack: cols.reduce((s, c) => s + (a.byColumn[c.key] ?? 0), 0) > 0 }))
+    .filter((a) => cols.some((c) => (a.byColumn[c.key] ?? 0) !== 0));
+}
 
 export interface Figure {
   key: string;
@@ -342,6 +370,21 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
     b.add("adj.repOnly.refs", repRows.map((r) => r.row.ref).join(", "), null, "Refs of those add-backs");
     if (revenue > 0) b.add("adj.repOnly.bps", `${Math.round((amount / revenue) * 10_000)} bps`, amount / revenue, `Those add-backs as a share of ${latest.label} revenue: the Adj. EBITDA margin without them is lower by this much`);
   }
+
+  // Add-backs and deductions by the evidence they rest on, as the S1.4 evidence table sums them (verification F29).
+  const byEvidence = ladderAdjustments(out, [latest]);
+  const sumOf = (pick: (a: (typeof byEvidence)[number]) => boolean) => byEvidence.filter(pick).reduce((s, a) => s + (a.byColumn[latest.key] ?? 0), 0);
+  const addBacks = sumOf((a) => a.addBack);
+  if (addBacks > 0) {
+    b.add("adj.addBacks.latest", fmtMoney(addBacks), addBacks, `Accepted add-backs to Reported EBITDA, ${latest.label}`);
+    const documented = sumOf((a) => a.addBack && evidenceGroup(a.row, ds) === "documented");
+    b.add("adj.documented.latest", fmtMoney(documented), documented, `Accepted add-backs documented in the records, ${latest.label}`);
+    b.add("adj.documentedShare.latest", fmtPct(documented / addBacks, 0), documented / addBacks, `Documented add-backs as a share of all add-backs, ${latest.label}`);
+    const rep = sumOf((a) => a.addBack && evidenceGroup(a.row, ds) === "representation");
+    b.add("adj.repShare.latest", fmtPct(rep / addBacks, 0), rep / addBacks, `Add-backs resting on management representation as a share of all add-backs, ${latest.label}`);
+  }
+  const deductions = -sumOf((a) => !a.addBack);
+  if (deductions > 0) b.add("adj.deductions.latest", fmtMoney(deductions), deductions, `Accepted deductions from Reported EBITDA (replacement pay, reserve, non-operating income), ${latest.label}`);
 
   // --- Revenue lines and accounts ------------------------------------------------------------
   const lines = P(latest).revenueLines;

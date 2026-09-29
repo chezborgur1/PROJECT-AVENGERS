@@ -102,7 +102,9 @@ describe("planner: full Ridgeline dataset", () => {
     const { plan } = await ridgelineDeal();
     expect(stateOf(plan, "S4.3")).toMatchObject({ state: "merged", host: "S4.2" });
     expect(stateOf(plan, "S6.2")).toMatchObject({ state: "merged", host: "S2.2" });
-    expect(stateOf(plan, "S5.4")).toMatchObject({ state: "merged", host: "S1.4" });
+    // The owner table merges onto S1.4 when the notes fill half its cells; Ridgeline's fill 1 of 12, so it is omitted (verification F29).
+    expect(stateOf(plan, "S5.4")).toMatchObject({ state: "omitted" });
+    expect(stateOf(plan, "S5.4")?.reason).toMatch(/fill 1 of the owner responsibilities table's 12 cells/);
     expect(stateOf(plan, "S7.3")).toMatchObject({ state: "merged", host: "S7.2" });
     expect(stateOf(plan, "S8.2")).toMatchObject({ state: "merged", host: "S8.1" });
     // The process and contact take the term table's place on the overview (QA round 1 F43).

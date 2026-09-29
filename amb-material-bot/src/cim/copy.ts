@@ -77,7 +77,8 @@ export const CimCopySchema = z.object({
       rows: z
         .array(BuyerConsideration)
         .describe("Buyer considerations; Owner involvement, Customer concentration (when a customer list exists) and Add-back quality are required. The deck adds the Financial reporting row itself"),
-      observations: observations(2, 3, "the owner responsibilities table", "s1_4.observations"),
+      // The owner table when the notes fill half of it, else the adjustments by evidence table (verification F29).
+      observations: observations(2, 5, "the owner responsibilities table, or the adjustments by evidence table when the notes leave the owner table mostly blank", "s1_4.observations"),
     })
     .optional(),
   s2_2: z.object({ title: Title, observations: observations(2, 4, "the revenue by service line table and the service-line table", "s2_2.observations") }).optional(),
