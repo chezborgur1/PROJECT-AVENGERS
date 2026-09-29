@@ -6,6 +6,10 @@
 // first eleven months, an <a:pPr> before every run of a multi-run paragraph,
 // table frames whose shape ids collide with the shapes drawn before them, and
 // content-type overrides for twenty slide masters the deck does not hold.
+// Behind the S6.4 chart, the workbook Excel opens on Edit Data named shared
+// strings that do not exist (blank month labels are left out of the list the
+// cells count through), and every gap and zero was an empty <v>; the logos'
+// alt text was the builder's local file path.
 // `Deck.write` normalizes the package (src/cim/ooxml.ts) and `officeDefects`,
 // which always runs here, proves it; the Open XML SDK validator
 // (tools/openxml-validate) runs when `dotnet` is installed and is skipped
@@ -20,9 +24,9 @@ import { describe, expect, it } from "vitest";
 import { buildContext } from "../src/cim/context.ts";
 import { renderDeck } from "../src/cim/deck.ts";
 import type { ChartSpec } from "../src/cim/design.ts";
-import { C, chart, Deck, observations, prose, rect, textTable } from "../src/cim/design.ts";
+import { C, chart, Deck, LOGO_ALT, LOGO_COLOUR, observations, prose, rect, textTable } from "../src/cim/design.ts";
 import { draftCimCopy } from "../src/cim/narrative.ts";
-import { normalizeChartXml, normalizeContentTypesXml, normalizeSlideXml, officeDefects } from "../src/cim/ooxml.ts";
+import { chartCells, chartWorkbookDefects, normalizeChartWorkbook, normalizeChartXml, normalizeContentTypesXml, normalizeSlideXml, officeDefects } from "../src/cim/ooxml.ts";
 import { planDeck } from "../src/cim/planner.ts";
 import { defaultAssumptions } from "../src/model/assumptions.ts";
 import { runModel } from "../src/model/engine.ts";
@@ -84,6 +88,25 @@ const chartParts = async (buf: Buffer) => {
   return Promise.all(names.map((f) => zip.file(f)!.async("string")));
 };
 
+/** The chart a test picks and the workbook behind it (its Edit Data), with that workbook's sheet cells as text by address. */
+async function chartWorkbook(buf: Buffer, pick: (chartXml: string) => boolean) {
+  const zip = await JSZip.loadAsync(buf);
+  for (const f of Object.keys(zip.files).filter((n) => /^ppt\/charts\/chart\d+\.xml$/.test(n))) {
+    const xml = await zip.file(f)!.async("string");
+    if (!pick(xml)) continue;
+    const rels = await zip.file(f.replace("charts/", "charts/_rels/") + ".rels")!.async("string");
+    const target = /Target="\.\.\/embeddings\/([^"]+)"/.exec(rels)![1]!;
+    const xlsx = await zip.file(`ppt/embeddings/${target}`)!.async("uint8array");
+    const book = await JSZip.loadAsync(xlsx);
+    const sst = [...((await book.file("xl/sharedStrings.xml")!.async("string")).matchAll(/<si>[\s\S]*?<\/si>/g))].map((m) => [...m[0].matchAll(/<t\b[^>]*>([^<]*)<\/t>/g)].map((t) => t[1]).join(""));
+    const sheet = await book.file("xl/worksheets/sheet1.xml")!.async("string");
+    const cells = new Map<string, string>();
+    for (const c of sheet.matchAll(/<c r="([A-Z]+\d+)"( t="s")?>(?:<v>([^<]*)<\/v>)?<\/c>/g)) cells.set(c[1]!, c[2] ? (sst[Number(c[3])] ?? `#${c[3]}`) : (c[3] ?? ""));
+    return { chart: xml, xlsx, book, sheet, cells };
+  }
+  throw new Error("no chart matches");
+}
+
 describe("what PowerPoint repairs in pptxgenjs's own output", () => {
   it("finds every trigger in a deck written by pptxgenjs alone", async () => {
     const raw = (await everyExhibit().pptx.write({ outputType: "nodebuffer" })) as Buffer;
@@ -96,6 +119,19 @@ describe("what PowerPoint repairs in pptxgenjs's own output", () => {
     expect(defects).toMatch(/shape id [\d, ]+ used more than once/);
     expect(defects).toMatch(/override\(s\) for parts the deck does not hold \(ppt\/slideMasters\/slideMaster2\.xml/);
     expect(defects).toMatch(/folder entr/);
+    // The workbooks behind the charts (Edit Data): the 36-month chart's labels past the first blank name the wrong shared
+    // string or one that does not exist, gaps and zeros are empty <v>, and the table's ref ends in an apostrophe.
+    expect(defects).toMatch(/cell\(s\) name a shared string past the \d+ it holds/);
+    expect(defects).toMatch(/cell\(s\) Edit Data would show differently from the chart \(A3 holds "[^"]+" where the chart shows ""/);
+    expect(defects).toMatch(/cell\(s\) with an empty <v>/);
+    expect(defects).toMatch(/xl\/tables\/table1\.xml has the ref "A1:[A-Z]+\d+'", not a cell range/);
+    expect(defects).toMatch(/xl\/styles\.xml has no cell formats/);
+  });
+
+  it("finds a picture whose alt text is its file path, as pptxgenjs writes it when given none", async () => {
+    const deck = new Deck("t");
+    deck.pptx.addSlide().addImage({ path: LOGO_COLOUR, x: 1, y: 1, w: 1, h: 0.33 });
+    expect((await officeDefects(await deck.write())).join("\n")).toMatch(/alt text is a file path ".*amb-logo-tight\.png"/);
   });
 
   it("finds a stacked bar with labels outside the end, which pptxgenjs lets through", async () => {
@@ -123,12 +159,40 @@ describe("Deck.write", () => {
     expect(stack).toContain('<c:dLblPos val="inEnd"/>');
   });
 
+  it("writes the workbook behind each chart as the chart shows it: every label in place, gaps empty, zeros kept, no table", async () => {
+    const buf = await everyExhibit().write();
+    // The 36-month bars and trailing line: quarter starts labelled, other months blank, the line's first eleven months gaps.
+    const combo = await chartWorkbook(buf, (x) => x.includes("<c:lineChart>") && x.includes('<c:ptCount val="36"/>'));
+    const labels = months(36).map((l) => (/^(Jan|Apr|Jul|Oct)-/.test(l) ? l.replace("-", "\u2011") : undefined));
+    labels.forEach((l, i) => expect(combo.cells.get(`A${i + 2}`), `A${i + 2}`).toBe(l));
+    expect(combo.cells.get("B1")).toBe("Monthly");
+    expect(combo.cells.get("C1")).toBe("Trailing 12-month average");
+    monthlyValues(36).forEach((v, i) => expect(Number(combo.cells.get(`B${i + 2}`))).toBe(v));
+    trailingOf(monthlyValues(36)).forEach((v, i) => expect(combo.cells.get(`C${i + 2}`), `C${i + 2}`).toBe(v === null ? undefined : String(v)));
+    expect(combo.sheet).not.toMatch(/<v><\/v>|<v\/>/);
+    expect(Object.keys(combo.book.files).some((f) => f.startsWith("xl/tables/"))).toBe(false);
+    expect(await combo.book.file("[Content_Types].xml")!.async("string")).not.toContain("table");
+    expect(await combo.book.file("xl/styles.xml")!.async("string")).toMatch(/<cellXfs count="1"><xf /);
+    // The waterfall: a base of zero is a zero, not an empty cell.
+    const bridge = await chartWorkbook(buf, (x) => x.includes("<c:v>Increase</c:v>"));
+    expect(bridge.cells.get("A2")).toBe("Reported EBITDA");
+    expect(bridge.cells.get("B2")).toBe("0");
+    expect(bridge.cells.get("C2")).toBe("320");
+    for (const w of [combo, bridge]) expect(await chartWorkbookDefects("wb", w.chart, w.xlsx)).toEqual([]);
+  });
+
   it("writes the Ridgeline deck with none of them, [Content_Types].xml first and no folder entries", async () => {
     const buf = await ridgelineDeck();
     expect(await officeDefects(buf)).toEqual([]);
     const zip = await JSZip.loadAsync(buf);
     expect(Object.keys(zip.files)[0]).toBe("[Content_Types].xml");
     expect(Object.values(zip.files).some((f) => f.dir)).toBe(false);
+    // Every logo is named, not given the machine's path to the file.
+    const slides = await Promise.all(Object.keys(zip.files).filter((f) => /^ppt\/slides\/slide\d+\.xml$/.test(f)).map((f) => zip.file(f)!.async("string")));
+    const descr = slides.flatMap((x) => [...x.matchAll(/<p:pic>[\s\S]*?<p:cNvPr\b[^>]*?descr="([^"]*)"/g)].map((m) => m[1]));
+    expect(descr.length).toBe(slides.length);
+    expect(new Set(descr)).toEqual(new Set([LOGO_ALT]));
+    expect(slides.join("")).not.toContain(REPO);
   }, 60_000);
 });
 
@@ -161,6 +225,59 @@ describe("the normalizers", () => {
     expect(out).toContain('<c:strCache><c:ptCount val="2"/><c:pt idx="0"><c:v></c:v></c:pt>');
     expect(out).toContain('<c:ptCount val="2"/><c:pt idx="1"><c:v>5</c:v></c:pt></c:numCache>');
     expect(normalizeChartXml(out)).toBe(out);
+  });
+
+  it("place a chart's cached labels and values in the cells its formulas name, a blank label and a gap in none", () => {
+    const xml =
+      '<c:ser><c:tx><c:strRef><c:f>Sheet1!$B$1</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>R&amp;D</c:v></c:pt></c:strCache></c:strRef></c:tx>' +
+      '<c:cat><c:multiLvlStrRef><c:f>Sheet1!$A$2:$A$4</c:f><c:multiLvlStrCache><c:ptCount val="3"/><c:lvl><c:pt idx="0"><c:v>Jan</c:v></c:pt><c:pt idx="1"><c:v></c:v></c:pt><c:pt idx="2"><c:v>Mar</c:v></c:pt></c:lvl></c:multiLvlStrCache></c:multiLvlStrRef></c:cat>' +
+      '<c:val><c:numRef><c:f>Sheet1!$B$2:$B$4</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="3"/><c:pt idx="0"><c:v>0</c:v></c:pt><c:pt idx="2"><c:v>7.5</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>';
+    const { sheets, problems } = chartCells(xml);
+    expect(problems).toEqual([]);
+    expect([...sheets.get("Sheet1")!]).toEqual([
+      ["B1", { kind: "s", text: "R&amp;D" }],
+      ["A2", { kind: "s", text: "Jan" }],
+      ["A3", null],
+      ["A4", { kind: "s", text: "Mar" }],
+      ["B2", { kind: "n", text: "0" }],
+      ["B3", null],
+      ["B4", { kind: "n", text: "7.5" }],
+    ]);
+    expect(chartCells(xml.replace("Sheet1!$B$2:$B$4", "Sheet1!$B$2:$C$4")).problems).toEqual(["formula Sheet1!$B$2:$C$4 does not hold 1 level(s) of one row or column"]);
+  });
+
+  it("rewrite a chart's workbook from the chart, idempotently", async () => {
+    const raw = (await everyExhibit().pptx.write({ outputType: "nodebuffer" })) as Buffer;
+    const { chart: xml, xlsx } = await chartWorkbook(raw, (x) => x.includes("<c:lineChart>") && x.includes('<c:ptCount val="36"/>'));
+    const chartXml = normalizeChartXml(xml);
+    expect((await chartWorkbookDefects("raw", chartXml, xlsx)).length).toBeGreaterThan(0);
+    const once = await normalizeChartWorkbook(xlsx, chartXml);
+    expect(await chartWorkbookDefects("once", chartXml, once)).toEqual([]);
+    const twice = await normalizeChartWorkbook(once, chartXml);
+    const [a, b] = await Promise.all([once, twice].map(async (x) => (await JSZip.loadAsync(x)).file("xl/worksheets/sheet1.xml")!.async("string")));
+    expect(b).toBe(a);
+  });
+
+  it("check a listed table's header and place a missing dimension where CT_Worksheet puts it", async () => {
+    const chartXml = '<c:tx><c:strRef><c:f>Sheet1!$B$1</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>Sales</c:v></c:pt></c:strCache></c:strRef></c:tx><c:val><c:numRef><c:f>Sheet1!$B$2:$B$2</c:f><c:numCache><c:ptCount val="1"/><c:pt idx="0"><c:v>5</c:v></c:pt></c:numCache></c:numRef></c:val>';
+    const main = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const rel = (id: string, type: string, target: string) => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${type}" Target="${target}"/>`;
+    const book = new JSZip();
+    const put = (f: string, xml: string) => book.file(f, xml, { createFolders: false });
+    put("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="r"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/tables/table1.xml" ContentType="t"/></Types>');
+    put("xl/workbook.xml", `<workbook ${main}><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>`);
+    put("xl/_rels/workbook.xml.rels", `<Relationships>${rel("rId1", "worksheet", "worksheets/sheet1.xml")}</Relationships>`);
+    put("xl/worksheets/sheet1.xml", `<?xml version="1.0"?><worksheet ${main}><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row><row r="2"><c r="B2"><v>5</v></c></row></sheetData><tableParts count="1"><tablePart r:id="rId1"/></tableParts></worksheet>`);
+    put("xl/worksheets/_rels/sheet1.xml.rels", `<Relationships>${rel("rId1", "table", "../tables/table1.xml")}</Relationships>`);
+    put("xl/tables/table1.xml", `<table ${main} id="1" name="T" displayName="T" ref="A1:B2"><tableColumns count="2"><tableColumn id="1" name="Column1"/><tableColumn id="2" name="Sales"/></tableColumns></table>`);
+    put("xl/sharedStrings.xml", `<sst ${main} count="2" uniqueCount="2"><si><t></t></si><si><t>Sales</t></si></sst>`);
+    put("xl/styles.xml", `<styleSheet ${main}><cellXfs count="1"><xf numFmtId="0"/></cellXfs></styleSheet>`);
+    const xlsx = await book.generateAsync({ type: "uint8array" });
+    expect(await chartWorkbookDefects("wb", chartXml, xlsx)).toEqual(["wb: xl/tables/table1.xml's header row does not hold its column names (Column1)"]);
+    const fixed = await JSZip.loadAsync(await normalizeChartWorkbook(xlsx, chartXml));
+    expect(await fixed.file("xl/worksheets/sheet1.xml")!.async("string")).toBe(`<?xml version="1.0"?><worksheet ${main}><dimension ref="B1:B2"/><sheetData><row r="1"><c r="B1" t="s"><v>0</v></c></row><row r="2"><c r="B2"><v>5</v></c></row></sheetData></worksheet>`);
+    expect(Object.keys(fixed.files).filter((f) => f.includes("table"))).toEqual([]);
+    expect(await chartWorkbookDefects("fixed", chartXml, await fixed.generateAsync({ type: "uint8array" }))).toEqual([]);
   });
 
   it("declare content types for the parts the deck holds only", () => {
@@ -219,6 +336,14 @@ describe("the Open XML SDK validator", () => {
     fs.writeFileSync(every, await everyExhibit().write());
     fs.writeFileSync(ridgeline, await ridgelineDeck());
     for (const file of [every, ridgeline]) {
+      const { errors, out } = errorsOf(file);
+      expect(errors, out.slice(0, 4000)).toEqual([]);
+    }
+    // The workbooks behind the combo and the waterfall, as Excel opens them on Edit Data.
+    const buf = fs.readFileSync(every);
+    for (const [name, pick] of [["combo", (x: string) => x.includes("<c:lineChart>") && x.includes('<c:ptCount val="36"/>')], ["bridge", (x: string) => x.includes("<c:v>Increase</c:v>")]] as const) {
+      const file = path.join(dir, `${name}.xlsx`);
+      fs.writeFileSync(file, (await chartWorkbook(buf, pick)).xlsx);
       const { errors, out } = errorsOf(file);
       expect(errors, out.slice(0, 4000)).toEqual([]);
     }

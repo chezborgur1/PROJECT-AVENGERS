@@ -67,6 +67,8 @@ const ASSETS = path.resolve(import.meta.dirname, "assets");
 export const LOGO_COLOUR = path.join(ASSETS, "amb-logo-tight.png");
 export const LOGO_WHITE = path.join(ASSETS, "amb-logo-white-tight.png");
 export const LOGO_ASPECT = 3.073; // tight crop 1862 x 606 px
+/** The logo's alt text: pptxgenjs otherwise writes the image's file path, a local path in a deck sent to buyers. */
+export const LOGO_ALT = "AMB Advisory Services logo";
 
 // ---------------------------------------------------------------------------
 // Grid and bands (spec 1)
@@ -1809,7 +1811,7 @@ export function drawFooter(slide: Slide, code: string, section: string | undefin
   text(slide, "Strictly private and confidential", { x: 4.0, y: BAND.footY, w: 5.333, h: BAND.footH, valign: "middle", align: "center", fontSize: 7.5, color: C.muted });
   const lh = 0.22;
   const lw = r3(lh * LOGO_ASPECT);
-  slide.addImage({ path: LOGO_COLOUR, x: r3(12.3 - lw), y: r3(BAND.footY + (BAND.footH - lh) / 2), w: lw, h: lh });
+  slide.addImage({ path: LOGO_COLOUR, altText: LOGO_ALT, x: r3(12.3 - lw), y: r3(BAND.footY + (BAND.footH - lh) / 2), w: lw, h: lh });
   text(slide, String(num), { x: 12.35, y: BAND.footY, w: r3(RIGHT - 12.35), h: BAND.footH, valign: "middle", align: "right", fontSize: 8, color: C.ink });
 }
 
@@ -1826,7 +1828,7 @@ export function drawCover(slide: Slide, c: CoverSpec): void {
   slide.background = { color: C.maroon };
   rect(slide, 0, 0, PAGE.w, PAGE.h, C.maroon);
   const lw = 2.4;
-  slide.addImage({ path: LOGO_WHITE, x: 0.7, y: 0.62, w: lw, h: r3(lw / LOGO_ASPECT) });
+  slide.addImage({ path: LOGO_WHITE, altText: LOGO_ALT, x: 0.7, y: 0.62, w: lw, h: r3(lw / LOGO_ASPECT) });
   text(slide, c.codename, { x: 0.7, y: 3.05, w: 11.0, h: 0.85, fontFace: SERIF, fontSize: 40, color: C.white, valign: "bottom" });
   hline(slide, 0.72, 4.05, 2.0, C.gold, 1);
   text(slide, "Confidential Information Memorandum", { x: 0.7, y: 4.18, w: 9.0, h: 0.32, fontSize: 16, color: C.white });
