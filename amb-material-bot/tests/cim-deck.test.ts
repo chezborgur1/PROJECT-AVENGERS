@@ -10,7 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { CimCopy } from "../src/cim/copy.ts";
-import { lintText } from "../src/cim/copy.ts";
+import { customerNounVariant, lintText } from "../src/cim/copy.ts";
 import type { CimContext } from "../src/cim/context.ts";
 import { buildContext } from "../src/cim/context.ts";
 import { buildCim } from "../src/cim/deck.ts";
@@ -190,6 +190,14 @@ describe("page contract", () => {
           expect(lintText(text, p.draft.id).filter((i) => hard.test(i.issue)), `${p.draft.id}: ${text}`).toEqual([]);
           expect(text, p.draft.id).not.toMatch(/\{\{|\}\}|asking price/i);
         }
+      }
+    });
+
+    it(`${name}: one noun for customers on every page, titles, tables and notes included (QA round 3 F37)`, async () => {
+      const { plan, ctx } = await make();
+      for (const p of plan.pages.filter((x) => x.draft.spec)) {
+        const strings = [...pageStrings(blocksOf(p), p.draft.spec!.title), p.draft.spec!.notes.note ?? "", ...(p.draft.spec!.notes.footnotes ?? [])];
+        for (const text of strings) expect(customerNounVariant(text, ctx.brief.customerNoun), `${p.draft.id}: ${text}`).toBeUndefined();
       }
     });
   }

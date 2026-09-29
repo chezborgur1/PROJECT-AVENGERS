@@ -50,9 +50,10 @@ describe("print legibility (guide 5.11)", () => {
       const p = plans.find((x) => x.name === name)!;
       expect(p.widths.get(2), name).toBeLessThanOrEqual(48);
     }
-    // A label longer than the column wraps; it is never cut.
+    // A printed label longer than the column wraps; it is never cut. The grey helper rows sit below the print area.
     const pnl = plans.find((x) => x.name === "P&L Summary")!;
-    const long = [...pnl.cells.entries()].find(([k, c]) => k.endsWith(":2") && typeof c.v === "string" && c.v.length * 0.9 > pnl.widths.get(2)! && c.style !== "section" && c.style !== "note");
+    const lastPrinted = Math.max(...pnl.print.areas.map((a) => Number(/(\d+)$/.exec(a)![1])));
+    const long = [...pnl.cells.entries()].find(([k, c]) => k.endsWith(":2") && Number(k.split(":")[0]) <= lastPrinted && typeof c.v === "string" && c.v.length * 0.9 > pnl.widths.get(2)! && c.style !== "section" && c.style !== "note");
     if (long) expect(long[1].align?.wrap, String(long[1].v)).toBe(true);
   });
 

@@ -11,7 +11,7 @@ import type { FinancialDataset, KpiSeries } from "../domain/financials.ts";
 import { monthEndDate, monthLabel, parsePeriodKey } from "../domain/financials.ts";
 import type { ModelOutput, PeriodColumn, PeriodValues } from "../model/types.ts";
 import { isFieldDepartment } from "../model/analytics.ts";
-import { cagr, describeDelta, fmtCount, fmtDollars, fmtMoney, fmtPct, growth, indefinite, wholeShares } from "../util/format.ts";
+import { cagr, customerNoun, describeDelta, fmtCount, fmtDollars, fmtMoney, fmtPct, growth, indefinite, wholeShares } from "../util/format.ts";
 
 export interface Figure {
   key: string;
@@ -32,6 +32,8 @@ const TOKEN = /\{\{(?!page:|fn\.)([A-Za-z0-9_.:-]+)\}\}/g;
 
 export class Brief {
   private readonly figures = new Map<string, Figure>();
+  /** The noun the deck uses for customers, from the customer list's term (QA round 3 F37); the copy lint holds prose to it. */
+  customerNoun = "customer";
 
   add(key: string, text: string, value: number | null, label: string, population?: string): void {
     this.figures.set(key, { key, text, value, label, ...(population ? { population } : {}) });
@@ -206,7 +208,7 @@ export function payGroups(depts: Department[]): PayGroup[] {
   const office = depts.filter((d) => !isFieldDepartment(d.department));
   // A joined name too long for the table's label column on one line gives way to a short one (spec 4.1 row rhythm).
   const named = (g: PayGroup, short: string): PayGroup => (g.department.length > GROUP_LABEL_MAX ? { ...g, department: short } : g);
-  const groups = field.length && office.length ? [named(sumDepartments("field", field), "Field staff"), named(sumDepartments("office", office), "Office staff")] : depts.map((d) => sumDepartments(d.department, [d]));
+  const groups = field.length && office.length ? [named(sumDepartments("field", field), "Field employees"), named(sumDepartments("office", office), "Office employees")] : depts.map((d) => sumDepartments(d.department, [d]));
   const small = groups.filter((g) => g.count < MIN_PAY_GROUP);
   const large = groups.filter((g) => g.count >= MIN_PAY_GROUP);
   if (!small.length || !large.length) return groups;
@@ -218,6 +220,7 @@ export function payGroups(depts: Department[]): PayGroup[] {
 
 export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: BriefPeriods): Brief {
   const b = new Brief();
+  b.customerNoun = customerNoun(ds.customers?.term).one;
   const { fy, latest, prior, ltm, pf } = periods;
   const cols = [...fy, ...(ltm ? [ltm] : []), ...(pf ? [pf] : [])];
   const P = (c: PeriodColumn): PeriodValues => out.periods[c.key]!;
@@ -393,6 +396,7 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
     b.add("cust.top10Over5Years", fmtCount(tenured), tenured, "Top-10 customers served for five years or more");
     const minTenure = Math.min(...t10.map((r) => r.tenureYears));
     if (Number.isFinite(minTenure)) b.add("cust.top10MinTenure", `${Math.floor(minTenure)} years`, minTenure, "Shortest tenure among the top 10 (whole years)");
+    const N = customerNoun(cu.term);
     const residual = cu.mixByType.find((m) => m.count === 0);
     const coded = cu.mixByType.filter((m) => m.count > 0);
     const codedRev = coded.reduce((s, m) => s + m.revenue, 0);
@@ -401,41 +405,41 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
     b.add("cust.billedCount", fmtCount(codedCount), codedCount, `Listed ${cu.term.toLowerCase()}s billed at any time in ${cu.period.label}`, billed);
     b.add("cust.codedRevenue", fmtMoney(codedRev), codedRev, `Revenue from listed ${cu.term.toLowerCase()}s billed in ${cu.period.label}`, billed);
     b.add("cust.codedShare", fmtPct(codedRev / conc.total), codedRev / conc.total, `Listed ${cu.term.toLowerCase()}s billed in ${cu.period.label} as % of revenue`, billed);
-    b.add("cust.codedShare0", fmtPct(codedRev / conc.total, 0), codedRev / conc.total, "Listed (coded) accounts as % of revenue, whole percent: the scope of every retention figure", billed);
+    b.add("cust.codedShare0", fmtPct(codedRev / conc.total, 0), codedRev / conc.total, `Listed (coded) ${N.many} as % of revenue, whole percent: the scope of every retention figure`, billed);
     b.add("cust.top10ShareOfCoded", fmtPct(t10rev / codedRev, 0), t10rev / codedRev, "Top 10 as % of coded-customer revenue");
     if (residual) b.add("cust.residualShare", fmtPct(residual.revenue / conc.total), residual.revenue / conc.total, `${residual.type} as % of revenue`);
     const typeSlugs = slugs(coded.map((m) => m.type));
     coded.forEach((m, i) => {
       const s = typeSlugs[i]!;
       b.add(`cust.type.${s}.label`, m.type, null, `Customer type ${s}`);
-      b.add(`cust.type.${s}.count`, fmtCount(m.count), m.count, `${m.type}: accounts billed in ${cu.period.label}`, `${billed}, ${m.type}`);
+      b.add(`cust.type.${s}.count`, fmtCount(m.count), m.count, `${m.type}: ${N.many} billed in ${cu.period.label}`, `${billed}, ${m.type}`);
       b.add(`cust.type.${s}.revenue`, fmtMoney(m.revenue), m.revenue, `${m.type}: revenue`, `${billed}, ${m.type}`);
       b.add(`cust.type.${s}.share`, fmtPct(m.revenuePct), m.revenuePct, `${m.type}: % of revenue`, `${billed}, ${m.type}`);
-      b.add(`cust.type.${s}.avg`, fmtMoney(m.avgRevenue), m.avgRevenue, `${m.type}: average revenue per account`);
+      b.add(`cust.type.${s}.avg`, fmtMoney(m.avgRevenue), m.avgRevenue, `${m.type}: average revenue per ${N.one}`);
     });
     for (const [fyKey, r] of Object.entries(cu.retention?.byFiscalYear ?? {})) {
       const k = `FY${fyKey}`;
-      b.add(`cust.start.${k}`, fmtCount(r.counts.startingCount), r.counts.startingCount, `Accounts at the start of ${k}`);
-      b.add(`cust.new.${k}`, fmtCount(r.counts.newCustomers), r.counts.newCustomers, `New accounts in ${k}`);
-      b.add(`cust.lost.${k}`, fmtCount(r.counts.lostCustomers), r.counts.lostCustomers, `Accounts lost in ${k}`);
+      b.add(`cust.start.${k}`, fmtCount(r.counts.startingCount), r.counts.startingCount, `${N.Many} at the start of ${k}`);
+      b.add(`cust.new.${k}`, fmtCount(r.counts.newCustomers), r.counts.newCustomers, `New ${N.many} in ${k}`);
+      b.add(`cust.lost.${k}`, fmtCount(r.counts.lostCustomers), r.counts.lostCustomers, `${N.Many} lost in ${k}`);
       const fyEnd = out.columns.find((c) => c.ref.kind === "fiscal_year" && c.ref.fiscalYear === Number(fyKey))?.end;
-      b.add(`cust.end.${k}`, fmtCount(r.counts.endingCount), r.counts.endingCount, `Accounts at the end of ${k}`, fyEnd ? `active at ${monthLabel(fyEnd)}` : undefined);
-      b.add(`cust.churn.${k}`, fmtPct(r.counts.churn), r.counts.churn, `Account churn in ${k} (lost ÷ average accounts)`);
+      b.add(`cust.end.${k}`, fmtCount(r.counts.endingCount), r.counts.endingCount, `${N.Many} at the end of ${k}`, fyEnd ? `active at ${monthLabel(fyEnd)}` : undefined);
+      b.add(`cust.churn.${k}`, fmtPct(r.counts.churn), r.counts.churn, `${N.One} churn in ${k} (lost ÷ average ${N.many})`);
       if (r.dollars.startingRevenue > 0) {
         b.add(`cust.gdr.${k}`, fmtPct(r.dollars.gdr), r.dollars.gdr, `Gross dollar retention in ${k}`);
         b.add(`cust.ndr.${k}`, fmtPct(r.dollars.ndr), r.dollars.ndr, `Net dollar retention in ${k}`);
-        b.add(`cust.upsell.${k}`, fmtMoney(r.dollars.upsell), r.dollars.upsell, `Revenue growth from continuing accounts in ${k}`);
-        b.add(`cust.downsell.${k}`, fmtMoney(r.dollars.downsell), r.dollars.downsell, `Revenue decline from continuing accounts that spent less in ${k}`);
-        b.add(`cust.netExpansion.${k}`, fmtMoney(r.dollars.upsell - r.dollars.downsell), r.dollars.upsell - r.dollars.downsell, `Net revenue change from continuing accounts (upsell less downsell) in ${k}`);
-        b.add(`cust.churnRevenue.${k}`, fmtMoney(r.dollars.churn), r.dollars.churn, `Prior-year revenue of accounts lost in ${k}`);
-        b.add(`cust.newRevenue.${k}`, fmtMoney(r.dollars.newRevenue), r.dollars.newRevenue, `Revenue from accounts won in ${k}`);
-        // What the customer list billed in the year beyond the bridge's ending revenue: the lost accounts' revenue before they left.
+        b.add(`cust.upsell.${k}`, fmtMoney(r.dollars.upsell), r.dollars.upsell, `Revenue growth from continuing ${N.many} in ${k}`);
+        b.add(`cust.downsell.${k}`, fmtMoney(r.dollars.downsell), r.dollars.downsell, `Revenue decline from continuing ${N.many} that spent less in ${k}`);
+        b.add(`cust.netExpansion.${k}`, fmtMoney(r.dollars.upsell - r.dollars.downsell), r.dollars.upsell - r.dollars.downsell, `Net revenue change from continuing ${N.many} (upsell less downsell) in ${k}`);
+        b.add(`cust.churnRevenue.${k}`, fmtMoney(r.dollars.churn), r.dollars.churn, `Prior-year revenue of ${N.many} lost in ${k}`);
+        b.add(`cust.newRevenue.${k}`, fmtMoney(r.dollars.newRevenue), r.dollars.newRevenue, `Revenue from ${N.many} won in ${k}`);
+        // What the customer list billed in the year beyond the bridge's ending revenue: the lost customers' revenue before they left.
         const billed = (ds.customers?.customers ?? []).reduce((s, c) => s + (c.revenueByFiscalYear[Number(fyKey)] ?? 0), 0);
         const lostBilled = billed - r.dollars.endingRevenue;
-        if (lostBilled > 0) b.add(`cust.lostBilled.${k}`, fmtMoney(lostBilled), lostBilled, `Revenue billed in ${k} by accounts lost during ${k}, which the ending revenue of the bridge leaves out`);
+        if (lostBilled > 0) b.add(`cust.lostBilled.${k}`, fmtMoney(lostBilled), lostBilled, `Revenue billed in ${k} by ${N.many} lost during ${k}, which the ending revenue of the bridge leaves out`);
       }
     }
-    if (cu.retention) b.add("cust.medianTenure", `${cu.retention.medianTenureYears.toFixed(1)} years`, cu.retention.medianTenureYears, "Median tenure of active accounts");
+    if (cu.retention) b.add("cust.medianTenure", `${cu.retention.medianTenureYears.toFixed(1)} years`, cu.retention.medianTenureYears, `Median tenure of active ${N.many}`);
     const nm = out.namedOutputs;
     if (nm.GDR_LTM !== null) b.add("cust.gdr.latest", fmtPct(nm.GDR_LTM), nm.GDR_LTM, `Gross dollar retention, ${latest.label}`);
     if (nm.NDR_LTM !== null) b.add("cust.ndr.latest", fmtPct(nm.NDR_LTM), nm.NDR_LTM, `Net dollar retention, ${latest.label}`);
@@ -548,6 +552,8 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
   if (mo) {
     const revs = mo.series.revenue ?? [];
     const adj = mo.series.adj_ebitda ?? [];
+    // Each full fiscal year's quarters, so a quarter's growth reads against the same quarter a year earlier.
+    const quartersOf = new Map<number, number[]>();
     for (const c of fy) {
       const idx = mo.months.map((m, i) => (m.fiscalYear === c.fiscalYear ? i : -1)).filter((i) => i >= 0);
       if (idx.length !== 12) continue;
@@ -571,6 +577,14 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
         b.add(`q${q + 1}.${c.key}`, fmtMoney(v), v, `Fiscal Q${q + 1} revenue, ${c.label}`);
         b.add(`q${q + 1}.share.${c.key}`, fmtPct(v / yr), v / yr, `Fiscal Q${q + 1} share of ${c.label} revenue`);
       });
+      quartersOf.set(c.fiscalYear!, quarters);
+      const before = quartersOf.get(c.fiscalYear! - 1);
+      const g = before ? quarters.map((v, q) => growth(before[q]!, v)) : [];
+      if (g.length && g.every(Number.isFinite)) {
+        g.forEach((v, q) => b.add(`q${q + 1}.yoy.${c.key}`, fmtPct(v), v, `Fiscal Q${q + 1} revenue growth on the same quarter of FY${c.fiscalYear! - 1}`));
+        b.add(`q.yoyLow.${c.key}`, fmtPct(Math.min(...g)), Math.min(...g), `Slowest quarter's revenue growth in ${c.label}, on the same quarter a year earlier`);
+        b.add(`q.yoyHigh.${c.key}`, fmtPct(Math.max(...g)), Math.max(...g), `Fastest quarter's revenue growth in ${c.label}, on the same quarter a year earlier`);
+      }
     }
     const seas = mo.series.seasonality_index ?? [];
     const lastIdx = mo.months.length - 1;

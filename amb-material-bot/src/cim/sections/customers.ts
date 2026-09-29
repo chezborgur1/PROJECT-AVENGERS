@@ -12,6 +12,7 @@ import { spanW } from "../design.ts";
 import { cohortTable, customerMix, customerMixChart, keyCustomers, keyObservations, observationsBlock, retentionCounts, retentionDollars, top10, usable, winsLosses } from "../exhibits.ts";
 import { chooseTitle, draft, present, source } from "./common.ts";
 import type { PageModule, SectionModule } from "./types.ts";
+import { customerNoun } from "../../util/format.ts";
 
 const SECTION = "Customers";
 
@@ -34,7 +35,7 @@ const s4_1: PageModule = {
     const top = ctx.carried.get("S4.1")?.includes("S4.4") ? top10(ctx, spanW(7, 12)) : undefined;
     const obs = observationsBlock(top ? "the top-10 list" : "the customer mix", keyObservations(ctx, "S4.1", copy.observations, present(top, mix)));
     const b = ctx.brief;
-    const title = chooseTitle(ctx, "S4.1 title", copy.title, `${b.t("cust.billedCount")} listed accounts billed ${b.t("cust.codedRevenue")} in ${ctx.out.customers?.period.label ?? ctx.latest.label}; the largest is ${b.t("cust.largestShare")} of revenue and the top 10 ${b.t("cust.top10Share")}`);
+    const title = chooseTitle(ctx, "S4.1 title", copy.title, `${b.t("cust.billedCount")} ${population(ctx)} billed ${b.t("cust.codedRevenue")} in ${ctx.out.customers?.period.label ?? ctx.latest.label}; the largest is ${b.t("cust.largestShare")} of revenue and the top 10 ${b.t("cust.top10Share")}`);
     return [
       draft(ctx, {
         id: "S4.1",
@@ -57,10 +58,11 @@ const s4_1: PageModule = {
 };
 
 function fallback41(ctx: CimContext): NonNullable<CimCopy["s4_1"]> {
+  const { one } = customerNoun(ctx.ds.customers?.term);
   return {
     observations: [
-      { row: "top.C-001", lead: "The largest account, {{cust.largestId}}, is {{cust.largestShare}} of revenue", body: "at {{cust.largestRevenue}} in the latest year." },
-      { row: "top.top10", lead: "The top 10 are {{cust.top10Share}} of revenue", body: "and {{cust.top10ShareOfCoded}} of listed-account revenue." },
+      { row: "top.C-001", lead: `The largest ${one}, {{cust.largestId}}, is {{cust.largestShare}} of revenue`, body: "at {{cust.largestRevenue}} in the latest year." },
+      { row: "top.top10", lead: "The top 10 are {{cust.top10Share}} of revenue", body: `and {{cust.top10ShareOfCoded}} of listed-${one} revenue.` },
       { row: "mix.residual", lead: "{{cust.residualShare}} of revenue is not listed by customer,", body: `because the list does not name ${residualName(ctx) ?? "those customers"} one by one.` },
     ],
   };
@@ -106,12 +108,12 @@ const s4_2: PageModule = {
     const cohorts = ctx.carried.get("S4.2")?.includes("S4.3") ? cohortTable(ctx, rw) : undefined;
     const chart = cohorts ? undefined : winsLosses(ctx);
     const obs = observationsBlock("the retention tables", keyObservations(ctx, "S4.2", copy.observations, present(counts, dollars, cohorts)));
-    // The retention figures cover the listed accounts only; the callout sets them against the revenue they do not cover (QA round 1 F32).
+    // The retention figures cover the listed customers only; the callout sets them against the revenue they do not cover (QA round 1 F32).
     // The retention page's callout states the tables' scope, so it is a note, not a takeaway (spec 6.5).
     const takeaway: Block | undefined = copy.takeaway ? { kind: "callout", lead: "Note:", body: resolveCopy(ctx, copy.takeaway, "S4.2 takeaway") } : undefined;
     const b = ctx.brief;
     const L = ctx.fy[ctx.fy.length - 1]!.key;
-    const title = chooseTitle(ctx, "S4.2 title", copy.title, `Listed accounts rose to ${b.maybe(`cust.end.${L}`) ?? b.t("cust.count")} with net dollar retention of ${b.maybe(`cust.ndr.${L}`) ?? "n.a."} in ${ctx.fy[ctx.fy.length - 1]!.label}`);
+    const title = chooseTitle(ctx, "S4.2 title", copy.title, `${capFirst(population(ctx))} rose to ${b.maybe(`cust.end.${L}`) ?? b.t("cust.count")} with net dollar retention of ${b.maybe(`cust.ndr.${L}`) ?? "n.a."} in ${ctx.fy[ctx.fy.length - 1]!.label}`);
     return [
       draft(ctx, {
         id: "S4.2",
@@ -120,7 +122,7 @@ const s4_2: PageModule = {
         rows: [{ columns: [{ span: [1, 6], blocks: present(counts, dollars) }, { span: [7, 12], blocks: present(chart, cohorts, obs, takeaway) }] }],
         notes: {
           source: source(ctx.sources.customers),
-          note: `${capFirst(population(ctx))} (coded) only${residualName(ctx) ? `; ${residualName(ctx)} are not listed individually` : ""}. Revenue in USD thousands. Churn is lost ÷ average accounts; GDR and NDR are defined on ${pageRef("S11.1")}.${b.has(`cust.lostBilled.${L}`) ? ` Ending revenue leaves out ${b.t(`cust.lostBilled.${L}`)} billed in ${ctx.fy[ctx.fy.length - 1]!.label} by accounts lost during the year.` : ""}`,
+          note: `${capFirst(population(ctx))} (coded) only${residualName(ctx) ? `; ${residualName(ctx)} are not listed individually` : ""}. Revenue in USD thousands. Churn is lost ÷ average ${customerNoun(ctx.ds.customers?.term).many}; GDR and NDR are defined on ${pageRef("S11.1")}.${b.has(`cust.lostBilled.${L}`) ? ` Ending revenue leaves out ${b.t(`cust.lostBilled.${L}`)} billed in ${ctx.fy[ctx.fy.length - 1]!.label} by ${customerNoun(ctx.ds.customers?.term).many} lost during the year.` : ""}`,
         },
         carries: cohorts ? ["S4.3"] : [],
       }),
@@ -132,12 +134,14 @@ const s4_2: PageModule = {
 function fallback42(ctx: CimContext): NonNullable<CimCopy["s4_2"]> {
   const L = ctx.fy[ctx.fy.length - 1]!.key;
   const scoped = ctx.brief.has("cust.codedShare") && ctx.brief.has("cust.residualShare");
+  const { one, Many } = customerNoun(ctx.ds.customers?.term);
+  const listed = population(ctx);
   return {
-    ...(scoped ? { takeaway: "Listed accounts are {{cust.codedShare}} of revenue; the other {{cust.residualShare}} is not listed individually, so these tables measure retention for the listed accounts only." } : {}),
+    ...(scoped ? { takeaway: `${capFirst(listed)} are {{cust.codedShare}} of revenue; the other {{cust.residualShare}} is not listed individually, so these tables measure retention for the ${listed} only.` } : {}),
     observations: [
-      { row: "rc.end", lead: `Accounts rose from {{cust.start.${L}}} to {{cust.end.${L}}}`, body: `with {{cust.new.${L}}} won and {{cust.lost.${L}}} lost in ${ctx.fy[ctx.fy.length - 1]!.label}.` },
+      { row: "rc.end", lead: `${Many} rose from {{cust.start.${L}}} to {{cust.end.${L}}}`, body: `with {{cust.new.${L}}} won and {{cust.lost.${L}}} lost in ${ctx.fy[ctx.fy.length - 1]!.label}.` },
       { row: "rd.gdr", lead: `Gross dollar retention was {{cust.gdr.${L}}}`, body: `and net dollar retention {{cust.ndr.${L}}}, after upsell of {{cust.upsell.${L}}}.` },
-      { row: "rc.lost", lead: `{{cust.lost.${L}}} accounts were lost in ${ctx.fy[ctx.fy.length - 1]!.label},`, body: `classified by reason in the table; ${confirm(ctx, "loss detail", "Why each lost account left")}.` },
+      { row: "rc.lost", lead: `In ${ctx.fy[ctx.fy.length - 1]!.label}, {{cust.lost.${L}}} ${customerNoun(ctx.ds.customers?.term).many} were lost,`, body: `classified by reason in the table; ${confirm(ctx, "loss detail", `Why each lost ${one} left`)}.` },
     ],
   };
 }
@@ -156,7 +160,7 @@ const s4_3: PageModule = {
       draft(ctx, {
         id: "S4.3",
         section: SECTION,
-        title: `${ctx.out.customers!.cohorts!.countTriangle.filter((c) => !c.pre).length} annual account cohorts, by start year and year-end status`,
+        title: `Annual ${customerNoun(ctx.ds.customers?.term).one} cohorts, ${ctx.out.customers!.cohorts!.countTriangle.filter((c) => !c.pre).length} of them, by start year and year-end status`,
         rows: [{ columns: [{ span: [1, 7], blocks: present(t) }] }],
         notes: { source: source(ctx.sources.customers) },
       }),

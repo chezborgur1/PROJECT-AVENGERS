@@ -338,15 +338,25 @@ export function assess(pages: RenderedPage[], printed: (string | PrintedTab)[]):
     // Spans at the same place on every page are the repeated title rows; a tab of one page has none.
     const keyed = own.map((p) => new Set((p.spans ?? []).map(spanKey)));
     const repeated = own.length > 1 ? new Set([...keyed[0]!].filter((k) => keyed.every((s) => s.has(k)))) : new Set<string>();
+    // A page already reported as empty is not reported again as a widow.
+    const empty = new Set<number>();
     own.forEach((p, i) => {
       const spans = p.spans ?? [];
       const where = `${name} p${i + 1}`;
       for (const c of clippedSpans(spans, tab.texts ?? []).slice(0, 3)) issues.push(`${where}: ${c}`);
       for (const o of overlappingSpans(spans).slice(0, 3)) issues.push(`${where}: ${o}`);
-      if (own.length > 1 && !tab.charts && isEmptyPage(spans, repeated)) issues.push(`${where}: prints no figures (an empty or orphan page)`);
+      if (own.length > 1 && !tab.charts && isEmptyPage(spans, repeated)) {
+        issues.push(`${where}: prints no figures (an empty or orphan page)`);
+        empty.add(i + 1);
+      }
       if (tab.titleColumns) for (const r of tallRows(spans).slice(0, 3)) issues.push(`${where}: ${r}`);
     });
-    if (own.length > 1 && !tab.charts && !tab.data) for (const bb of badBreaks(own.map((p) => p.spans ?? []), repeated, new Set(tab.sections ?? []), new Set(tab.furniture ?? []))) issues.push(`${name} ${bb}`);
+    if (own.length > 1 && !tab.charts && !tab.data) {
+      for (const bb of badBreaks(own.map((p) => p.spans ?? []), repeated, new Set(tab.sections ?? []), new Set(tab.furniture ?? []))) {
+        const page = Number(/^p(\d+): prints only/.exec(bb)?.[1]);
+        if (!empty.has(page)) issues.push(`${name} ${bb}`);
+      }
+    }
   }
   // Every chart caption prints whole on one line: a caption wrapped inside its cell splits (a date cut to "Dec-" / "25").
   for (const tab of tabsIn) {

@@ -10,7 +10,7 @@ import type { ModelOutput, PeriodColumn, PeriodValues } from "../model/types.ts"
 import { findColumn, latestColumn } from "../model/types.ts";
 import { isFieldDepartment } from "../model/analytics.ts";
 import type { RequestRow } from "../requests/schema.ts";
-import { fyRange } from "../util/format.ts";
+import { customerNoun, fyRange } from "../util/format.ts";
 import { Brief, buildBrief, joinDepartments } from "./brief.ts";
 import type { CimCopy, PageCopyKey } from "./copy.ts";
 
@@ -163,7 +163,7 @@ export function standardNote(ctx: CimContext, extra?: string): string {
  * names, one phrase per deal (guide D11): "listed customers" (or clients).
  * Only the reviewed copy may say more, from the sources.
  */
-export const population = (ctx: CimContext): string => `listed ${(ctx.ds.customers?.term ?? "Customer").toLowerCase()}s`;
+export const population = (ctx: CimContext): string => `listed ${customerNoun(ctx.ds.customers?.term).many}`;
 
 /** Who the customer list leaves out, in its own words without the "(not listed individually)" tag: "residential households and maintenance-agreement members". */
 export function residualName(ctx: CimContext): string | undefined {

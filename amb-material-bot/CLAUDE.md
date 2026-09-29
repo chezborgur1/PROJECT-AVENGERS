@@ -29,6 +29,7 @@ Advisory Services (sell-side M&A for Main Street / lower middle market).
 - The workbook formulas and `src/model/engine.ts` must stay in lockstep. `verifyWorkbook` evaluates every formula and compares it with the engine; the pipeline refuses to deliver a workbook that fails it. If you change one, change the other and run the tests.
 - Projection cells are formulas driven by the Assumptions sheet. Never write computed numbers into projection columns.
 - The CIM reads figures from `ModelOutput` only, through brief tokens; never type a figure into copy. Two figures in one clause must count the same population (a brief figure's `population`, e.g. listed customers billed in FY2025 vs active at Dec-25); the copy lint checks it.
+- One name per thing in the CIM: customers by the customer list's term (`customerNoun`, `Brief.customerNoun`; never "accounts" in the customer sense), roles by the payroll register's role names (`rolesAtAsOf`), "field employees", "revenue", "operating expenses". The copy lint and `tests/cim-deck.test.ts` check it.
 - Copy marks a management fact `{{fn.mgmt}}`, never a typed "(1)": each page numbers it against its own footnotes (`numberFootnotes` in `src/cim/sections/common.ts`).
 - The CIM must never contain invented facts. Missing information becomes `[Confirm: ...]` and lands in `open-questions.md`.
 - The CIM never carries a valuation, multiple, asking price or offer structure. Those stay on the model's internal tabs.

@@ -10,6 +10,8 @@
 import type { CimContext } from "../context.ts";
 import { confirm, pageCopy, PER_MANAGEMENT, resolveCopy } from "../context.ts";
 import type { CimCopy } from "../copy.ts";
+import { withCustomerNoun } from "../copy.ts";
+import { lowerFirst } from "../../util/format.ts";
 import type { Block, TextCell } from "../design.ts";
 import { r3, spanW } from "../design.ts";
 import { termTable } from "../exhibits.ts";
@@ -72,7 +74,7 @@ function fallback101(ctx: CimContext): NonNullable<CimCopy["s10_1"]> {
     : `${owner} is offering 100% of ${ctx.legalName}. Offers should assume a cash-free, debt-free basis, with a normalized level of working capital delivered at close.`;
   return {
     transaction: `${offer} ${i?.reasonForSale.text ? `The reason for sale is ${i.reasonForSale.text.charAt(0).toLowerCase()}${i.reasonForSale.text.slice(1)} {{fn.mgmt}}.` : `Reason for sale: ${confirm(ctx, "reason for sale", "Reason for sale")}.`}`,
-    transition: i?.owner.transition.description ? `${owner} is ${i.owner.transition.description.charAt(0).toLowerCase()}${i.owner.transition.description.slice(1)} {{fn.mgmt}}.` : `${confirm(ctx, "transition", "Owner transition offer")}.`,
+    transition: i?.owner.transition.description ? `${owner} is ${lowerFirst(withCustomerNoun(i.owner.transition.description, ctx.brief.customerNoun))} {{fn.mgmt}}.` : `${confirm(ctx, "transition", "Owner transition offer")}.`,
     premises: i?.locations[0] ? `The Company operates from ${i.locations[0].name}${i.locations[0].leaseExpiry ? `, leased through ${i.locations[0].leaseExpiry}` : ""} {{fn.mgmt}}.` : `${confirm(ctx, "premises", "Premises and lease terms")}.`,
     // ICP1's closing sentences, verbatim (guide 2.9).
     process: `Qualified buyers who have signed a confidentiality agreement may request a management meeting through AMB Advisory. ${NO_CONTACT}`,

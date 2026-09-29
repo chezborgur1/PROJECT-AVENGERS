@@ -374,7 +374,7 @@ Needs from others:
 Owner: the QA round 3 fixer. The blockers (26, 44, 45) and majors went first, then the minors. Each fix has a test: `tests/qa-round3.test.ts`, the QA round 3 blocks in `tests/model-workbook.test.ts` and `tests/model-print.test.ts`, and additions to `tests/period-shapes.test.ts`, `tests/cim-copy.test.ts`, `tests/pipeline.test.ts` and `tests/qa-round2.test.ts`. Shared types changed additively only:
 - `types.ts`: `FinancingCase.marketReplacement?` and `capitalReserve?`, `retention.byWindow?`, `DebtLikeSummary.checklist?`, `byDepartment[].wages?` (the register's gross pay, before employer costs).
 - `assumptions.ts`: `SCENARIO_FINANCING_KEYS`, `ScenarioDrivers.financing?`, `scenarioInput`.
-- `charts.ts`: `ChartPlacement.separators?`. `checks.ts`: `also?` on a check (the other tabs that carry it). `brief.ts`: `Figure.population?`.
+- `charts.ts`: `ChartPlacement.separators?`. `checks.ts`: `also?` on a check (the other tabs that carry it). `brief.ts`: `Figure.population?` and `Brief.customerNoun`.
 
 What changed, by area (finding numbers in brackets):
 
@@ -392,6 +392,13 @@ What changed, by area (finding numbers in brackets):
 - **CIM tables and charts** [34, 35, 39, 40]: refs share one bracket ("[S1, S4]") in a 0.50 in column; a footnote marker that would wrap its label moves to the ref cell; numeric columns keep spec widths and a table's exhibit rule stops at its right edge. Waterfall totals maroon, increases blush, decreases slate, and a thin step's figure sits above its bar. Chart and table labels match ("Other, 4 types"). Negative bps use U+2212.
 - **CIM terminology and voice** [37, 41]: "total operating expenses" for the figure with owner pay, "revenue" not "sales", with a lint for both; titles lead with a word; "management representation"; stage 8 of the process table has a timing.
 - **Robustness** [47 to 57]: non-finite figures print n.a. and the deck is scanned for NaN, Infinity, undefined and "{{"; the Claude drafting call no longer sends a beta the installed SDK rejects, and intake transcription accepts facts the notes do not give as null; KPI periods sort by date; one label per definition; Real Estate stays in modules omitted until the tab exists; review counts print as sourced; observation keys are sent unambiguously; the one-year proxy source reads "FY2025 depreciation expense".
+- **Second pass (after a session restart)** [37, 39, 43, and two latent bugs]:
+  - One noun for customers: the customer list's term (`customerNoun` in `src/util/format.ts`, `Brief.customerNoun`) replaces "account(s)" in the customer sense in every exhibit, template, definition and brief label, and in the Ridgeline fixture; a source's own words (the intake's "introduce commercial accounts") print in the deck's noun (`withCustomerNoun`). The copy lint fails a customer-sense "account" or "client" (`customerNounVariant`), and `tests/cim-deck.test.ts` scans every page's text, tables and notes.
+  - One name per role: the people prose takes role names and counts from the payroll register (`rolesAtAsOf`, shared with the organization table), and the field workforce is "field employees" everywhere (the pay group, the fixture); the lint fails "field technicians", "field staff" and "field team".
+  - S6.4: a bar whose label the trailing-twelve-month line would strike takes its label inside its top in white (`insidePoints`); the line no longer crosses any figure. Quarter growth tokens (`q1.yoy.FY2025`, `q.yoyLow/High`) back an observation that growth was spread across the year.
+  - Chart patches are matched to chart files by rank: pptxgenjs numbers chart files from a counter shared by every deck in the process, so a second deck in one `bot run` lost every patch (colours, legends, waterfall labels, the trailing line's marker). The waterfall test failed only when run after other decks; a test now builds two decks in a row.
+  - C37 no longer reports an empty page a second time as a widow.
+  - Two QA round 1/2 tests read the old layout (the DSCR note now starts "SBA loan only:"; C03 totals one helper row per line) and now assert the new one, helper rows included.
 
 Deviations to know:
 - **QA round 3 and QA round 2 disagreed twice.** F35 asked for spec column widths with the table at the left of its span, where QA round 2 set every table to its block: the table now keeps spec widths and its exhibit rule stops with it, so no rule runs past the figures (`narrowTables` now measures against the rule). F29 and F43 offered [Confirm] columns, where QA round 2 bans a column of placeholders alone: a column prints when the notes fill at least one cell, and an empty one is asked in `open-questions.md`.
@@ -402,10 +409,8 @@ Not done, and why:
 - **Adjustments inputs in print [24]**: the schedule's blue period inputs (N8:W24) stay outside the print area with the purple mirror printed instead. Printing them beside B:C stretches every row to the wrapped Basis heights and breaks the page.
 - **Whole-column Databook references [20]**: the SUMIFS pair each Databook row with the Raw row at the same offset; whole-column ranges would misalign them.
 - **LTM and PF columns on the detail strips [11]**: adding them pushes the strip's print range under the 7 pt floor; the guide now records the strip as strip-only.
-- **S6.4 annotation [39]**: the range keeps the guide's spaced en dash form ("Jan-23 – Dec-25").
-- **Commentary floor [43]**: S1.4, S4.1, S6.1, S6.3, S6.4, S7.2 and S8.1 stay under 120 words. Their pages are full (S7.2 dropped an added observation to fit), so the words would cost an exhibit; each is a build note in `run-summary.md`.
-- **One customer noun [37]**: "customer", "account" and "listed customer" still mix; the lint covers "opex" and "sales" only. Role names follow the intake notes ("install crew") in prose and the register ("Install technician") in tables.
+- **S6.4 annotation [39]**: the range keeps the guide's spaced en dash form ("Jan-23 – Dec-25"): the design spec sends monthly series to guide 2.6, which prescribes the range as the annotation (D7).
+- **Commentary floor [43], in part**: S4.2 now clears 120 words (a fifth observation, on new-customer revenue) and S4.1 rose from 73 to 100 (an observation reconciling the 56 billed with the 52 active). S1.4 (50, its commentary is the considerations table), S6.1 (112), S6.3 (99), S6.4 (61), S7.2 (62) and S8.1 (89) stay under the floor: S6.1, S6.3, S7.1 and S8.1 are full, and one more observation on S6.4 or S7.2 makes two consecutive pages carry the same count (guide T9; the planner logs it). Each shortfall is a build note in `run-summary.md`.
 
 Needs from others:
 - **Owner:** confirm the two QA round 2 / QA round 3 rulings above (table width and placeholder columns) in the design spec, and rule on printing the Adjustments inputs [24].
-- **CIM builder:** a customer-noun glossary in the brief, and role names drawn from one source.

@@ -10,7 +10,7 @@ import { codedNote, fieldDepartments, standardNote } from "../context.ts";
 import type { Block, TextCell } from "../design.ts";
 import { blockHeight, gapBefore, r3, spanW } from "../design.ts";
 import { monthlyIncomeStatement, ownerCompRung } from "../exhibits.ts";
-import { fmtPct, k } from "../../util/format.ts";
+import { customerNoun, fmtPct, k } from "../../util/format.ts";
 import { draft, present, source } from "./common.ts";
 import type { PageModule, SectionModule } from "./types.ts";
 
@@ -23,6 +23,7 @@ function definitionRows(ctx: CimContext): TextCell[][] {
   const fye = MONTHS[ctx.out.fiscalYearEndMonth - 1];
   const fy = ctx.ds.years[ctx.ds.years.length - 1];
   const techDept = ctx.out.headcount?.byDepartment.find((d) => /field service|service/i.test(d.department))?.department;
+  const { many } = customerNoun(ctx.ds.customers?.term);
   return [
     ["Reported EBITDA", "Net income plus interest expense [D1], income taxes [D2] and depreciation and amortization [D3]. Includes other income and expense; non-operating items are removed as normalization adjustments."],
     ["Normalization adjustments [N]", "Adjustments included in Adj. EBITDA that remove owner-discretionary, non-recurring and non-operating items. Positive amounts increase EBITDA."],
@@ -35,15 +36,15 @@ function definitionRows(ctx: CimContext): TextCell[][] {
     ...(ctx.ltm ? [["LTM", "The twelve months ending with the as-of month."]] : []),
     ...(ctx.out.customers?.retention
       ? [
-          ["Churn", "Lost accounts ÷ the average of starting and ending accounts in the period."],
-          ["GDR", "Gross dollar retention: prior-year revenue of accounts active at the start of the year, less lost accounts and downsell, ÷ that starting revenue."],
-          ["NDR", "Net dollar retention: GDR plus upsell from continuing accounts."],
+          ["Churn", `Lost ${many} ÷ the average of starting and ending ${many} in the period.`],
+          ["GDR", `Gross dollar retention: prior-year revenue of ${many} active at the start of the year, less lost ${many} and downsell, ÷ that starting revenue.`],
+          ["NDR", `Net dollar retention: GDR plus upsell from continuing ${many}.`],
         ]
       : []),
     ...(ctx.out.headcount ? [["Revenue per employee", `Revenue ÷ employees on payroll at fiscal year-end, excluding the owner${fieldDepartments(ctx) ? `; field employees are those in ${fieldDepartments(ctx).charAt(0).toLowerCase()}${fieldDepartments(ctx).slice(1)}` : ""}.`]] : []),
     ["Free cash flow", "Cash from operations less capital expenditure derived as the change in net fixed assets plus depreciation."],
     ...(ctx.out.nwc ? [["DSO, DIO, DPO", "Days sales, inventory and payables outstanding: receivables ÷ revenue, inventory ÷ cost of revenue and payables ÷ cost of revenue, each over the trailing twelve months, × 365."]] : []),
-    ...(ctx.out.customers ? [["Cum. %", "Cumulative share of revenue of the accounts ranked above and including the row."]] : []),
+    ...(ctx.out.customers ? [["Cum. %", `Cumulative share of revenue of the ${many} ranked above and including the row.`]] : []),
     // Named by the payroll department the capacity table divides by, never by the sample's trade.
     ...(techDept && ctx.ds.kpis?.some((k) => k.key === "maintenance_members") ? [[`Members per ${techDept.toLowerCase()} employee`, `Maintenance-agreement members at the stated date ÷ ${techDept.toLowerCase()} employees on payroll.`]] : []),
     ["Fiscal year", `The Company's fiscal year ends in ${fye}; FY${fy} is the year ending ${fye} ${fy}.`],

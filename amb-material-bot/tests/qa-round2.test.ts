@@ -302,7 +302,8 @@ describe("the Ridgeline deck's exhibits (F23, F25, F27, F29)", () => {
     expect(words).toBeGreaterThan(130);
     // Every fact is the notes' own, with its casing: no invented cause, no mangled acronym.
     // Staffing reads as a sentence, the fleet as one clause, the suppliers as the notes put them (QA round 3 F30).
-    expect(text).toContain("Of the 23 employees besides the owner, 14 are service technicians, 4 install crew, one operations manager, 3 CSR / dispatch staff and one bookkeeper (1).");
+    // Role names and counts are the payroll register's, as the organization table beside the prose prints them (QA round 3 F37).
+    expect(text).toContain("Of the 23 employees besides the owner, 14 are service technicians, 4 install technicians, 3 customer service / dispatch staff, one operations manager and one bookkeeper.");
     expect(text).toContain("The fleet is 18 service vans and 2 install trucks, all owned, financed with vehicle loans (1).");
     expect(text).toContain("Ferguson and Johnstone Supply are the main suppliers; Carrier equipment comes through the local distributor (1).");
     expect(text).toContain("its Google rating is 4.8 from 900+ reviews");

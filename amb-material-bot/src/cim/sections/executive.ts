@@ -6,7 +6,8 @@ import { slugs } from "../brief.ts";
 import type { CimContext } from "../context.ts";
 import { confirm, nonGaap, pageCopy, pageNo, pageRef, PER_MANAGEMENT, resolveCopy, standardNote } from "../context.ts";
 import type { CimCopy } from "../copy.ts";
-import { wordCount } from "../copy.ts";
+import { withCustomerNoun, wordCount } from "../copy.ts";
+import { lowerFirst } from "../../util/format.ts";
 import type { Block, TextCell } from "../design.ts";
 import { blockHeight, CONTENT_H, r3, SPACE, spanW } from "../design.ts";
 import {
@@ -56,7 +57,7 @@ function overviewFromFacts(ctx: CimContext): string {
   if (c?.ownership) optional.push(`The Company is ${c.ownership.charAt(0).toLowerCase()}${c.ownership.slice(1)}.`);
   const closing = [
     i?.reasonForSale.text ? `The Seller's reason for sale is ${i.reasonForSale.text.charAt(0).toLowerCase()}${i.reasonForSale.text.slice(1)}.` : `Reason for sale: ${confirm(ctx, "reason for sale", "Reason for sale")}.`,
-    ...(i?.owner.transition.description ? [`The owner is ${i.owner.transition.description.charAt(0).toLowerCase()}${i.owner.transition.description.slice(1)} (1).`] : []),
+    ...(i?.owner.transition.description ? [`The owner is ${lowerFirst(withCustomerNoun(i.owner.transition.description, b.customerNoun))} (1).`] : []),
   ];
   const text = () => [...parts, ...optional, ...closing].join(" ");
   while (optional.length && wordCount(text()) > 95) optional.pop();
@@ -165,7 +166,8 @@ function fallbackConsiderations(ctx: CimContext): NonNullable<CimCopy["s1_2"]> {
   if (b.has("cust.largestShare")) items.push({ lead: "The largest customer is {{cust.largestShare}} of revenue.", evidence: "The top 10 customers are {{cust.top10Share}} of revenue.", page: "S4.1" });
   if (b.has("hc.total")) items.push({ lead: "{{hc.total}} employees besides the owner, {{hc.field}} in the field.", evidence: `Payroll excluding the owner was {{payrollPct.latest}} of revenue in ${ctx.latest.label}.`, page: "S5.1" });
   else if (b.has("staff.total")) items.push({ lead: "{{staff.total}} employees besides the owner {{fn.mgmt}}.", evidence: `Payroll excluding the owner was {{payrollPct.latest}} of revenue in ${ctx.latest.label}.`, page: "S5.1" });
-  const transition = ctx.intake?.owner.transition.description;
+  const described = ctx.intake?.owner.transition.description;
+  const transition = described ? withCustomerNoun(described, b.customerNoun) : undefined;
   if (b.has("owner.transitionMonths") && transition) items.push({ lead: "The owner offers up to {{owner.transitionMonths}} months of transition after closing {{fn.mgmt}}.", evidence: `${transition} {{fn.mgmt}}.`, page: "S10.1" });
   if (items.length < 5) items.push({ lead: `Reported EBITDA was {{repEbitda.latest}} in ${ctx.latest.label}.`, evidence: "Net income plus interest, taxes and depreciation, per the Company's financial statements.", page: "S7.1" });
   if (items.length < 5) items.push({ lead: `The Seller offers a transition after closing.`, evidence: `${confirm(ctx, "transition terms", "Owner transition terms")}`, page: "S10.1" });
@@ -303,7 +305,7 @@ function fallbackBuyer(ctx: CimContext): NonNullable<CimCopy["s1_4"]> {
     {
       consideration: "Owner involvement",
       shows: ctx.intake?.owner.hoursPerWeek ? `The owner works about {{owner.hours}} hours a week {{fn.mgmt}}.` : `The owner's weekly role is ${confirm(ctx, "owner hours and duties", "Owner's hours per week and duties")}.`,
-      addressed: ctx.intake?.owner.transition.description ? `${ctx.intake.owner.transition.description} {{fn.mgmt}}.` : `${confirm(ctx, "transition plan", "Owner transition plan")}.`,
+      addressed: ctx.intake?.owner.transition.description ? `${withCustomerNoun(ctx.intake.owner.transition.description, b.customerNoun)} {{fn.mgmt}}.` : `${confirm(ctx, "transition plan", "Owner transition plan")}.`,
     },
   ];
   if (b.has("cust.largestShare")) rows.push({ consideration: "Customer concentration", shows: "The largest customer is {{cust.largestShare}} of revenue and the top 10 are {{cust.top10Share}}.", addressed: `Losing the largest customer in full would remove {{cust.largestRevenue}} of revenue${b.has("rev.change") && (b.value("rev.change") ?? 0) > 0 ? ` against ${ctx.latest.label} growth of {{rev.change}}` : `, {{cust.largestShare}} of the total`}.` });

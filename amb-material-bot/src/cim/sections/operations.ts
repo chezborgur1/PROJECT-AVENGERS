@@ -10,7 +10,7 @@ import { pageCopy, PER_MANAGEMENT, standardNote } from "../context.ts";
 import type { CimCopy } from "../copy.ts";
 import type { Block, Paragraph, TextCell } from "../design.ts";
 import { r3, spanW } from "../design.ts";
-import { facilities, fieldWagesTie, headcountByDepartment, headcountRollForward, keyObservations, observationsBlock, organization, tenureAtDeparture, usable } from "../exhibits.ts";
+import { facilities, fieldWagesTie, headcountByDepartment, headcountRollForward, keyObservations, observationsBlock, organization, rolesAtAsOf, tenureAtDeparture, usable } from "../exhibits.ts";
 import { chooseTitle, draft, present, source } from "./common.ts";
 import type { PageModule, SectionModule } from "./types.ts";
 
@@ -57,8 +57,8 @@ const series = (xs: string[]): string => (xs.length <= 1 ? (xs[0] ?? "") : `${xs
 const countWord = (n: number): string => (n === 1 ? "one" : fmtCount(n));
 
 /**
- * A role from the notes as a noun for its count: "service technicians",
- * "install crew" (a collective), "CSR / dispatch staff", "one bookkeeper".
+ * A role as a noun for its count: "service technicians", "install crew" (a
+ * collective), "customer service / dispatch staff", "one bookkeeper".
  */
 function roleNoun(role: string, count: number): string {
   const r = inText(role);
@@ -88,18 +88,21 @@ function peopleProse(ctx: CimContext): Block | undefined {
   const b = ctx.brief;
   const L = ctx.latest.label;
   const paragraphs: Paragraph[] = [];
-  const staff = i.workforce.composition.filter((c) => !/\bowner\b/i.test(c.role));
+  // Role names and counts from the payroll register when there is one, as the organization table beside the prose prints
+  // them (QA round 3 F37: one name per role); else the notes', which carry the management marker.
+  const register = rolesAtAsOf(ctx)?.filter(([, es]) => !es[0]!.isOwner).map(([role, es]) => ({ role, count: es.length }));
+  const staff = (register ?? i.workforce.composition.filter((c) => !/\bowner\b/i.test(c.role))).sort((a, b) => b.count - a.count);
   if (staff.length) {
     // A sentence, not a list dump (QA round 3 F30): "Of the 23 employees besides the owner, 14 are service technicians, ...".
     const total = b.has("hc.total") ? b.t("hc.total") : fmtCount(staff.reduce((s, c) => s + c.count, 0));
-    const roles = staff.map((c, k) => `${countWord(c.count)} ${k === 0 ? "are " : ""}${roleNoun(c.role, c.count)}`);
+    const roles = staff.map((c, k) => `${countWord(c.count)} ${k === 0 ? (c.count === 1 ? "is " : "are ") : ""}${roleNoun(c.role, c.count)}`);
     const pay = i.workforce.payBasis ? ` ${i.workforce.payBasis}${i.workforce.union === false ? "; there is no union" : i.workforce.union ? "; the workforce is unionized" : ""} (1).` : "";
     const flow = b.has(`hc.hires.${ctx.latest.key}`) ? ` ${L} saw ${b.t(`hc.hires.${ctx.latest.key}`)} hires and ${b.t(`hc.departures.${ctx.latest.key}`)} departures.` : "";
     // Pay by the compensation table's rows, which reconcile to the P&L wage lines (guide 4.8).
     const group = (g: string) => `${b.t(`hc.group.${g}.avgComp`)} for ${b.t(`hc.group.${g}.label`).toLowerCase()}`;
     const fy = ctx.fy[ctx.fy.length - 1]?.label;
     const comp = fy && b.has("hc.group.field.avgComp") && b.has("hc.group.office.avgComp") ? ` With employer costs, pay averaged ${group("field")} and ${group("office")} in ${fy}.` : "";
-    paragraphs.push({ lead: "Staffing.", body: `Of the ${total} employees besides the owner, ${series(roles)} (1).${pay}${flow}${comp}` });
+    paragraphs.push({ lead: "Staffing.", body: `Of the ${total} employees besides the owner, ${series(roles)}${register ? "." : " (1)."}${pay}${flow}${comp}` });
   }
   const o = i.owner;
   if (o.responsibilities.length) {

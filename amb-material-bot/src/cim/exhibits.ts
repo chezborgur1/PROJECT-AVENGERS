@@ -11,11 +11,12 @@ import type { Adjustment, KpiSeries } from "../domain/financials.ts";
 import { monthLabel } from "../domain/financials.ts";
 import type { Ladder, PeriodColumn, PeriodValues } from "../model/types.ts";
 import { isFieldDepartment } from "../model/analytics.ts";
-import { cagr, describeDelta, EN_DASH, fmtBps, fmtCount, fmtGrowth, fmtMoney, fmtPct, fyRange, k, toK, wholeShares } from "../util/format.ts";
+import { cagr, customerNoun, describeDelta, EN_DASH, fmtBps, fmtCount, fmtGrowth, fmtMoney, fmtPct, fyRange, k, toK, wholeShares } from "../util/format.ts";
 import { accountLabel, fmtKpi, joinDepartments, latestKpi, payGroups, revenueMix } from "./brief.ts";
 import type { CimContext } from "./context.ts";
 import { at, confirm, fieldDepartments, pageRef, population, resolveCopy, tableColumns } from "./context.ts";
 import type { Observation } from "./copy.ts";
+import { withCustomerNoun } from "./copy.ts";
 import type { Block, ExhibitHeader, NumCol, NumRow, NumTableSpec, ObsItem, TextCell, TextTableSpec } from "./design.ts";
 import { cellText, GAP, r3, spanW } from "./design.ts";
 
@@ -326,7 +327,7 @@ export function termRows(ctx: CimContext, full: boolean): TextCell[][] {
     [
       "Owner transition",
       owner?.transition.description
-        ? `${owner.name || "The owner"} ${owner.transition.months ? `will remain for up to ${owner.transition.months} months after closing` : "will support the transition after closing"}${/commercial accounts/i.test(owner.transition.description) ? " and introduce commercial accounts" : ""} (1).`
+        ? `${owner.name || "The owner"} ${owner.transition.months ? `will remain for up to ${owner.transition.months} months after closing` : "will support the transition after closing"}${/commercial (accounts|customers|clients)/i.test(owner.transition.description) ? ` and introduce the commercial ${customerNoun(ctx.ds.customers?.term).many}` : ""} (1).`
         : confirm(ctx, "owner transition", "Owner transition period and role after closing"),
     ],
     [
@@ -1073,7 +1074,7 @@ export function top10(ctx: CimContext, w: number): Block | undefined {
   return { kind: "numTable", header: { title: "Customer concentration, top 10", units: `(${cu.period.label}, $000s)` }, spec: { name: cu.term, cols, rows, rowH: 0.19 } };
 }
 
-/** Customer mix by type (S4.1): accounts, revenue, share and average revenue, with the unlisted households as their own row. */
+/** Customer mix by type (S4.1): customers, revenue, share and average revenue, with the unlisted households as their own row. */
 export function customerMix(ctx: CimContext, w: number): Block | undefined {
   const cu = ctx.out.customers;
   if (!cu) return undefined;
@@ -1089,7 +1090,7 @@ export function customerMix(ctx: CimContext, w: number): Block | undefined {
   for (const r of residual) rows.push({ type: "line", label: "Not listed individually (1)", key: "mix.residual", vals: ["n.a.", k(r.revenue), pc(r.revenuePct), "n.a."] });
   rows.push({ type: "key", label: "Total revenue", key: "mix.total", vals: ["", k(cu.concentration.total, { dollar: true }), "100.0%", ""] });
   const cols = fitCols(
-    [{ w: 2.3, kind: "label" }, { w: 0.7, kind: "num", head: "Accounts" }, { w: 0.7, kind: "num", head: "Revenue" }, { w: 0.62, kind: "num", head: "% total" }, { w: 0.8, kind: "num", head: "Avg. revenue" }, { w: 0.36, kind: "obs", head: "Obs." }],
+    [{ w: 2.3, kind: "label" }, { w: 0.7, kind: "num", head: customerNoun(cu.term).Many }, { w: 0.7, kind: "num", head: "Revenue" }, { w: 0.62, kind: "num", head: "% total" }, { w: 0.8, kind: "num", head: "Avg. revenue" }, { w: 0.36, kind: "obs", head: "Obs." }],
     w,
   );
   return { kind: "numTable", header: { title: `${cu.term} mix by type`, units: `(${cu.period.label}, $000s)` }, spec: { name: "Type", cols, rows, rowH: 0.19 } };
@@ -1122,27 +1123,28 @@ export function customerMixChart(ctx: CimContext): Block | undefined {
   return { kind: "chart", header: { title: `Listed ${cu.term.toLowerCase()} revenue by type`, units: "($000s; % of total revenue)" }, spec: { type: "hbar", labels, values } };
 }
 
-/** Account roll-forward by fiscal year (S4.2): starting, new, lost by reason, ending, churn. */
+/** Customer roll-forward by fiscal year (S4.2): starting, new, lost by reason, ending, churn. */
 export function retentionCounts(ctx: CimContext, w: number): Block | undefined {
   const ret = ctx.out.customers?.retention;
   if (!ret) return undefined;
+  const { one, many, Many } = customerNoun(ctx.out.customers!.term);
   const years = ctx.fy.filter((c) => ret.byFiscalYear[c.fiscalYear!]);
   if (years.length < 2) return undefined;
   const rs = years.map((c) => ret.byFiscalYear[c.fiscalYear!]!.counts);
   const cols = fitCols([{ w: 2.4, kind: "label" }, ...years.map((c): NumCol => ({ w: 0.66, kind: "num", head: c.label, group: "Fiscal year" })), { w: 0.4, kind: "obs", head: "Obs." }], w);
   const n = (v: number) => (v === 0 ? EN_DASH : fmtCount(v));
   const rows: NumRow[] = [
-    { type: "line", label: "Starting accounts", key: "rc.start", vals: rs.map((r) => n(r.startingCount)) },
-    { type: "line", label: "(+) New accounts", key: "rc.new", vals: rs.map((r) => n(r.newCustomers)) },
-    { type: "line", label: `(${EN_DASH}) Lost accounts`, key: "rc.lost", vals: rs.map((r) => (r.lostCustomers ? `(${r.lostCustomers})` : EN_DASH)) },
+    { type: "line", label: `Starting ${many}`, key: "rc.start", vals: rs.map((r) => n(r.startingCount)) },
+    { type: "line", label: `(+) New ${many}`, key: "rc.new", vals: rs.map((r) => n(r.newCustomers)) },
+    { type: "line", label: `(${EN_DASH}) Lost ${many}`, key: "rc.lost", vals: rs.map((r) => (r.lostCustomers ? `(${r.lostCustomers})` : EN_DASH)) },
     { type: "sub", label: "of which regrettable", key: "rc.regrettable", vals: rs.map((r) => n(r.lostByReason.regrettable)) },
     { type: "sub", label: "of which non-regrettable", key: "rc.nonRegrettable", vals: rs.map((r) => n(r.lostByReason.nonRegrettable)) },
     { type: "sub", label: "of which unclassified", key: "rc.unclassified", vals: rs.map((r) => n(r.lostByReason.unclassified)) },
-    { type: "key", label: "Ending accounts", key: "rc.end", vals: rs.map((r) => n(r.endingCount)) },
-    { type: "ratio", label: "Churn (lost ÷ average accounts)", key: "rc.churn", vals: rs.map((r) => pc(r.churn)) },
-    { type: "ratio", label: "New-account growth", key: "rc.growth", vals: rs.map((r) => pc(r.newCustomerGrowth)) },
+    { type: "key", label: `Ending ${many}`, key: "rc.end", vals: rs.map((r) => n(r.endingCount)) },
+    { type: "ratio", label: `Churn (lost ÷ average ${many})`, key: "rc.churn", vals: rs.map((r) => pc(r.churn)) },
+    { type: "ratio", label: `New-${one} growth`, key: "rc.growth", vals: rs.map((r) => pc(r.newCustomerGrowth)) },
   ];
-  return { kind: "numTable", header: { title: "Listed-account retention", units: "(#)" }, spec: { name: "Accounts", cols, rows } };
+  return { kind: "numTable", header: { title: `Listed-${one} retention`, units: "(#)" }, spec: { name: Many, cols, rows } };
 }
 
 /** Dollar roll-forward (S4.2): starting revenue, churn, downsell, upsell, new, ending, GDR and NDR. */
@@ -1154,20 +1156,21 @@ export function retentionDollars(ctx: CimContext, w: number): Block | undefined 
   const ds = years.map((c) => ret.byFiscalYear[c.fiscalYear!]!.dollars);
   const cols = fitCols([{ w: 2.4, kind: "label" }, ...years.map((c): NumCol => ({ w: 0.66, kind: "num", head: c.label, group: "Fiscal year" })), { w: 0.4, kind: "obs", head: "Obs." }], w);
   const neg = (v: number) => k(-v);
+  const { one, many } = customerNoun(ctx.out.customers!.term);
   const rows: NumRow[] = [
     { type: "line", label: "Starting revenue (prior year)", key: "rd.start", vals: ds.map((d) => k(d.startingRevenue, { dollar: true })) },
-    { type: "line", label: `(${EN_DASH}) Lost accounts`, key: "rd.churn", vals: ds.map((d) => neg(d.churn)) },
+    { type: "line", label: `(${EN_DASH}) Lost ${many}`, key: "rd.churn", vals: ds.map((d) => neg(d.churn)) },
     { type: "line", label: `(${EN_DASH}) Downsell`, key: "rd.downsell", vals: ds.map((d) => neg(d.downsell)) },
     { type: "line", label: "(+) Upsell", key: "rd.upsell", vals: ds.map((d) => k(d.upsell)) },
-    { type: "line", label: "(+) New accounts", key: "rd.new", vals: ds.map((d) => k(d.newRevenue)) },
+    { type: "line", label: `(+) New ${many}`, key: "rd.new", vals: ds.map((d) => k(d.newRevenue)) },
     { type: "key", label: "Ending revenue", key: "rd.end", vals: ds.map((d) => k(d.endingRevenue, { dollar: true })) },
     { type: "ratio", label: "Gross dollar retention", key: "rd.gdr", vals: ds.map((d) => pc(d.gdr)) },
     { type: "ratio", label: "Net dollar retention", key: "rd.ndr", vals: ds.map((d) => pc(d.ndr)) },
   ];
-  return { kind: "numTable", header: { title: "Listed-account revenue retention", units: "($000s)" }, spec: { name: "Revenue", cols, rows } };
+  return { kind: "numTable", header: { title: `Listed-${one} revenue retention`, units: "($000s)" }, spec: { name: "Revenue", cols, rows } };
 }
 
-/** Cohort triangle by start year: accounts still active at each fiscal year-end (guide S4.3, TPL/CPM). */
+/** Cohort triangle by start year: customers still active at each fiscal year-end (guide S4.3, TPL/CPM). */
 export function cohortTable(ctx: CimContext, w: number): Block | undefined {
   const co = ctx.out.customers?.cohorts;
   if (!co || co.countTriangle.length < 3) return undefined;
@@ -1181,7 +1184,7 @@ export function cohortTable(ctx: CimContext, w: number): Block | undefined {
     [{ w: 1.6, kind: "label" }, { w: 0.62, kind: "num", head: "Started" }, { w: GAP, kind: "gap" }, ...years.map((y): NumCol => ({ w: 0.62, kind: "num", head: `FY${y}`, group: "Active at year-end" })), { w: GAP, kind: "gap" }, { w: 0.7, kind: "num", head: "Retained" }, { w: 0.4, kind: "obs", head: "Obs." }],
     w,
   );
-  return { kind: "numTable", header: { title: "Account cohorts by start year", units: "(#)" }, spec: { name: "Cohort", cols, rows } };
+  return { kind: "numTable", header: { title: `${customerNoun(ctx.out.customers!.term).One} cohorts by start year`, units: "(#)" }, spec: { name: "Cohort", cols, rows } };
 }
 
 /** Customers at 10% of revenue or more, or the top five (guide S4.5). */
@@ -1194,7 +1197,7 @@ export function keyCustomers(ctx: CimContext, w: number): Block | undefined {
   return { kind: "numTable", header: { title: "Key customers", units: `(${cu.period.label}, $000s)` }, spec: { name: cu.term, cols, rows } };
 }
 
-/** Account wins and losses by quarter (diverging bars: wins above, losses below, guide 2.6). */
+/** Customer wins and losses by quarter (diverging bars: wins above, losses below, guide 2.6). */
 export function winsLosses(ctx: CimContext): Block | undefined {
   // The months of the P&L grid only: the retention series also counts the LTM strip's prior month, which may precede it.
   const grid = new Set(ctx.out.monthly?.months.map((m) => m.key) ?? []);
@@ -1213,9 +1216,10 @@ export function winsLosses(ctx: CimContext): Block | undefined {
   const wins = labels.map((l) => quarters.get(l)!.wins);
   const losses = labels.map((l) => quarters.get(l)!.losses);
   const net = wins.reduce((s, v) => s + v, 0) - losses.reduce((s, v) => s + v, 0);
+  const { one, many } = customerNoun(ctx.out.customers!.term);
   return {
     kind: "chart",
-    header: { title: "Listed-account wins and losses by quarter", units: "(#)", annotation: `Net ${net >= 0 ? "+" : EN_DASH}${Math.abs(net)} accounts over ${labels.length} quarters` },
+    header: { title: `Listed-${one} wins and losses by quarter`, units: "(#)", annotation: `Net ${net >= 0 ? "+" : EN_DASH}${Math.abs(net)} ${many} over ${labels.length} quarters` },
     spec: { type: "diverging", labels, wins, losses },
   };
 }
@@ -1235,18 +1239,32 @@ function ownerPostClose(ctx: CimContext): string {
   return /retire/i.test(i.reasonForSale.text ?? "") ? `Retiring; up to ${months} months of transition (1)` : `Up to ${months} months of transition (1)`;
 }
 
-export function organization(ctx: CimContext, w: number): Block | undefined {
+type Employee = NonNullable<CimContext["ds"]["payroll"]>["employees"][number];
+
+/**
+ * The payroll register's employees at the as-of date by role, in the
+ * organization table's order (the owner, management, then the largest
+ * roles): the one source of role names for the people page's table and its
+ * prose (QA round 3 F37). Undefined without a register.
+ */
+export function rolesAtAsOf(ctx: CimContext): [string, Employee[]][] | undefined {
   const pr = ctx.ds.payroll;
+  if (!pr) return undefined;
+  const asOf = ctx.out.headcount?.asOf ?? ctx.out.asOfDate;
+  const byRole = new Map<string, Employee[]>();
+  for (const e of pr.employees.filter((x) => x.hireDate <= asOf && (!x.terminationDate || x.terminationDate > asOf))) byRole.set(e.role, [...(byRole.get(e.role) ?? []), e]);
+  return [...byRole.entries()].sort((a, b) => Number(b[1][0]!.isOwner) - Number(a[1][0]!.isOwner) || Number(b[1][0]!.isManagement) - Number(a[1][0]!.isManagement) || b[1].length - a[1].length);
+}
+
+export function organization(ctx: CimContext, w: number): Block | undefined {
   const asOf = ctx.out.headcount?.asOf ?? ctx.out.asOfDate;
   const i = ctx.intake;
   const rows: TextCell[][] = [];
   const keys: string[] = [];
-  if (pr) {
-    const active = pr.employees.filter((e) => e.hireDate <= asOf && (!e.terminationDate || e.terminationDate > asOf));
-    const byRole = new Map<string, typeof active>();
-    for (const e of active) byRole.set(e.role, [...(byRole.get(e.role) ?? []), e]);
+  const roles = rolesAtAsOf(ctx);
+  if (roles) {
     const years = (d: string) => (Date.parse(asOf) - Date.parse(d)) / (365.25 * 86_400_000);
-    for (const [role, es] of [...byRole.entries()].sort((a, b) => Number(b[1][0]!.isOwner) - Number(a[1][0]!.isOwner) || Number(b[1][0]!.isManagement) - Number(a[1][0]!.isManagement) || b[1].length - a[1].length)) {
+    for (const [role, es] of roles) {
       const e0 = es[0]!;
       const mgmt = i?.management.find((m) => m.name === e0.name);
       const named = e0.isOwner || e0.isManagement;
@@ -1263,7 +1281,7 @@ export function organization(ctx: CimContext, w: number): Block | undefined {
       rows.push([named && e0.name ? `${role} (${e0.name})` : role, fmtCount(es.length), `${avg.toFixed(1)} years; ${(PAY_BASIS[e0.payBasis] ?? e0.payBasis).toLowerCase()}`, post, ""]);
       keys.push(`org.${role}`);
     }
-    const total = active.length;
+    const total = roles.reduce((s, [, es]) => s + es.length, 0);
     rows.push(["Total", fmtCount(total), "", "", ""]);
     keys.push("org.total");
   } else if (i?.workforce.composition.length) {
@@ -1285,7 +1303,7 @@ export function organization(ctx: CimContext, w: number): Block | undefined {
   const colW = [r3((w - obsW) * 0.36), 0.5, r3((w - obsW) * 0.3), r3(w - obsW - r3((w - obsW) * 0.36) - 0.5 - r3((w - obsW) * 0.3)), obsW];
   return {
     kind: "textTable",
-    header: { title: "Organization and tenure", units: pr ? `(#, at ${monthLabel(asOf.slice(0, 7))})` : "(#, per management)" },
+    header: { title: "Organization and tenure", units: roles ? `(#, at ${monthLabel(asOf.slice(0, 7))})` : "(#, per management)" },
     spec: { colW, head: ["Role", "Count", "Average tenure and pay basis", "Post-close", "Obs."], rows, rowKeys: keys, obsCol: 4, totalRow: rows.length - 1, aligns: ["left", "right", "left", "left", "center"], fontSize: 8.5 },
   };
 }
@@ -1488,7 +1506,9 @@ export function ownerResponsibilities(ctx: CimContext, w: number): Block | undef
     if (!shown.includes(f) && !ctx.openQuestions.includes(q)) ctx.openQuestions.push(q);
   }
   const hoursCol = shown.some((f) => f.head === "Hrs/wk");
-  const rows: TextCell[][] = o.responsibilities.map((r) => [r.responsibility, ...shown.map((f) => f.get(r) ?? f.ask(r.responsibility)), ""]);
+  // The notes' words print in the deck's customer noun ("introduces commercial customers").
+  const cell = (v: string | undefined, d: string, ask: (d: string) => string) => (v === undefined ? ask(d) : withCustomerNoun(v, ctx.brief.customerNoun));
+  const rows: TextCell[][] = o.responsibilities.map((r) => [r.responsibility, ...shown.map((f) => cell(f.get(r), r.responsibility, f.ask)), ""]);
   const keys = o.responsibilities.map((r) => `owner.${r.responsibility}`);
   const period = o.transition?.months ? `Up to ${o.transition.months} months` : (o.transition?.basis ?? "");
   const week = o.hoursPerWeek ? `~${o.hoursPerWeek}` : "";
@@ -1759,7 +1779,7 @@ export function leverBaselines(ctx: CimContext, w: number): Block | undefined {
   const commercial = latest.revenueLines.find((l) => /commercial/i.test(l.label));
   if (commercial && ctx.prior) {
     const prev = at(ctx, ctx.prior).revenueLines.find((l) => l.account === commercial.account)?.amount ?? 0;
-    rows.push({ type: "line", key: "base.commercial", label: `${commercial.label} revenue`, vals: [k(commercial.amount)], text: `${fmtGrowth(prev, commercial.amount)} growth in ${L}${b.has("cust.count") ? `; ${b.t("cust.count")} listed accounts active at ${monthLabel(ctx.out.customers!.period.end)}` : ""}` });
+    rows.push({ type: "line", key: "base.commercial", label: `${commercial.label} revenue`, vals: [k(commercial.amount)], text: `${fmtGrowth(prev, commercial.amount)} growth in ${L}${b.has("cust.count") ? `; ${b.t("cust.count")} ${population(ctx)} active at ${monthLabel(ctx.out.customers!.period.end)}` : ""}` });
   }
   rows.push({ type: "line", key: "base.marketing", label: "Advertising and marketing", vals: [k(latest.pnl.marketing)], text: `${fmtPct(latest.pnl.marketing / latest.pnl.revenue)} of ${L} revenue` });
   if (rows.length < 2) return undefined;

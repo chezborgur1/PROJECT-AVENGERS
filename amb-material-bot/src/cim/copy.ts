@@ -88,7 +88,7 @@ export const CimCopySchema = z.object({
   s4_2: z
     .object({
       title: Title,
-      observations: observations(3, 4, "the account and revenue retention tables", "s4_2.observations"),
+      observations: observations(3, 5, "the customer, revenue and cohort retention tables", "s4_2.observations"),
       takeaway: z
         .string()
         .optional()
@@ -227,7 +227,49 @@ function sentences(text: string): string[] {
 const TERM_VARIANTS: { re: RegExp; use: string }[] = [
   { re: /\bopex\b/i, use: "operating expenses" },
   { re: /\bsales\b(?! (outstanding|tax))/i, use: "revenue" },
+  // The field workforce is "field employees" in every exhibit (unit economics, definitions, compensation rows).
+  { re: /\bfield (technicians?|team|staff|workers?|crew)\b/i, use: "field employees" },
 ];
+
+/**
+ * "Account" in the customer sense ("listed accounts", "the top 10 accounts",
+ * "account churn"), never the ledger sense ("GL account", "accounts
+ * receivable", "the Interest Income account").
+ */
+const CUSTOMER_SENSE_ACCOUNT =
+  /\b(?:listed|commercial|residential|lost|new|continuing|departed|departing|active|largest|key|these|those|each|every|won|retained|existing|starting|ending|average|top \d+|\d+)[- ]accounts?\b(?! (?:receivable|payable|detail))|\baccounts? (?:lost|won|active|billed|rose|renew|churn|cohorts?|averaging|ranked)\b/i;
+
+/**
+ * A customer named by a noun other than the one the deck uses (QA round 3
+ * F37): with "customer", an account or a client; with "client", a customer
+ * or an account. Returns the offending words, or undefined.
+ */
+export function customerNounVariant(text: string, noun: string): string | undefined {
+  const variants: [string, RegExp][] = [
+    ["account", CUSTOMER_SENSE_ACCOUNT],
+    ["client", /\bclients?\b/i],
+    ["customer", /\bcustomers?\b/i],
+  ];
+  for (const [word, re] of variants) if (word !== noun && re.test(text)) return re.exec(text)![0];
+  return undefined;
+}
+
+/**
+ * A source's own words in the deck's customer noun: the intake's "introduce
+ * commercial accounts" prints as "introduce commercial customers" when the
+ * customer list says Customer. Only the customer sense changes.
+ */
+export function withCustomerNoun(text: string, noun: string): string {
+  const many = /[^aeiou]y$/.test(noun) ? `${noun.slice(0, -1)}ies` : `${noun}s`;
+  const swap = (w: string) => {
+    const to = /s$/i.test(w) ? many : noun;
+    return /^[A-Z]/.test(w) ? to.charAt(0).toUpperCase() + to.slice(1) : to;
+  };
+  let out = text;
+  if (noun !== "account") out = out.replace(new RegExp(CUSTOMER_SENSE_ACCOUNT.source, "gi"), (m) => m.replace(/\baccounts?\b/i, swap));
+  if (noun !== "client") out = out.replace(/\bclients?\b/gi, swap);
+  return out;
+}
 
 /** Lint one string of client-facing prose (tokens already resolved). */
 export function lintText(text: string, path: string): LintIssue[] {
@@ -350,6 +392,8 @@ export function lintCopy(copy: CimCopy, brief?: Brief): LintIssue[] {
       const text = (brief ? brief.resolve(v) : v).replace(/\{\{page:[^}]+\}\}/g, "page 00").replace(NAMED_MARKER, "(1)");
       prose.push({ path, text });
       issues.push(...(path.endsWith(".title") ? lintTitle(text, path) : lintText(text, path)));
+      const variant = brief ? customerNounVariant(text, brief.customerNoun) : undefined;
+      if (variant) issues.push({ path, issue: `"${variant}": the deck calls customers "${brief!.customerNoun}"`, text });
       const budget = BUDGETS.find((b) => b.match.test(path));
       if (budget && wordsIn(text) > budget.max) issues.push({ path, issue: `${wordsIn(text)} words (budget ${budget.max})`, text });
       if (known) {

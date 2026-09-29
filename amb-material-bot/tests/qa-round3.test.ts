@@ -22,7 +22,7 @@ import { realEstateReason } from "../src/model/checks.ts";
 import { depreciationProxySource, excessOverRunRate, splitByWeights } from "../src/ingest/adjustments.ts";
 import { runModel } from "../src/model/engine.ts";
 import { ridgelineDataset } from "./fixtures/sampleDataset.ts";
-import { lintCopy, lintText } from "../src/cim/copy.ts";
+import { customerNounVariant, lintCopy, lintText } from "../src/cim/copy.ts";
 import { chartXml, type ChartPlacement } from "../src/model/charts.ts";
 import { indefinite } from "../src/util/format.ts";
 import { sampleRow, tmpDir } from "./helpers.ts";
@@ -334,7 +334,7 @@ describe("compensation reconciles to the P&L wage lines (F31)", () => {
     const groups = payGroups(ctx.out.headcount!.byDepartment);
     // A joined name too long for one line of the label column gives way to a short one; the departments stay listed.
     expect(groups.map((g) => [g.key, g.department, g.departments])).toEqual([
-      ["field", "Field staff", ["Field service", "Installation"]],
+      ["field", "Field employees", ["Field service", "Installation"]],
       ["office", "Office and management", ["Office", "Management"]],
     ]);
     // Register wages of the field row are the P&L technician wages: service $513.3K plus install $135.6K.
@@ -421,5 +421,64 @@ describe("waterfall colours and thin-bar labels (F39)", () => {
     // The 28 step is under 6% of the axis: its own label is removed and the carrier series prints "28" at its base, above the bar.
     expect(sers[2]).toContain('<c:dLbl><c:idx val="1"/><c:delete val="1"/></c:dLbl>');
     expect(sers[4]).toMatch(/<c:dLbl><c:idx val="1"\/><c:numFmt formatCode="&quot;28&quot;"[\s\S]*?<c:dLblPos val="inBase"\/><c:showLegendKey val="0"\/><c:showVal val="1"\/>/);
+  });
+
+  it("patches the charts of a second deck built in the same process (pptxgenjs numbers chart files globally)", async () => {
+    const waterfallXml = async () => {
+      const deck = new Deck("t");
+      chart(deck, deck.pptx.addSlide(), 1, 1, 6, { type: "hbar", labels: ["FY2024", "FY2025"], values: [1, 2] });
+      chart(deck, deck.pptx.addSlide(), 1, 1, 6, { type: "waterfall", labels: ["A", "B", "C"], steps: [{ value: 320, total: true }, { value: -109 }, { value: 211, total: true }] });
+      const zip = await JSZip.loadAsync(await deck.write());
+      const files = Object.keys(zip.files).filter((f) => /charts\/chart\d+\.xml$/.test(f)).sort((a, b) => Number(/(\d+)\.xml$/.exec(a)![1]) - Number(/(\d+)\.xml$/.exec(b)![1]));
+      return zip.file(files[1]!)!.async("string");
+    };
+    await waterfallXml();
+    const xml = await waterfallXml();
+    // The decrease series of the second deck's waterfall carries its patched label format.
+    expect(xml.match(/<c:ser>[\s\S]*?<\/c:ser>/g)![3]).toContain("(#,##0);(#,##0);&quot;&quot;");
+  });
+});
+
+describe("one noun for customers (F37)", () => {
+  it("flags an account or client in the customer sense and leaves the ledger sense alone", () => {
+    expect(customerNounVariant("the top 10 accounts hold 19.3%", "customer")).toBe("top 10 accounts");
+    expect(customerNounVariant("an account churn of 7.9%", "customer")).toBe("account churn");
+    expect(customerNounVariant("Listed clients are 26.7% of revenue", "customer")).toBe("clients");
+    expect(customerNounVariant("Accounts receivable held at 30 days; the P&L Interest Income account", "customer")).toBeUndefined();
+    expect(customerNounVariant("general-ledger account detail and 2 smaller accounts payable", "customer")).toBeUndefined();
+    expect(customerNounVariant("The top 10 customers hold 19.3%", "client")).toBe("customers");
+  });
+
+  it("holds the copy to the noun the customer list uses", () => {
+    const ds = ridgelineDataset();
+    const ctx = buildContext({ row, ds, out: runModel(ds, defaultAssumptions(ds, row)), copy: { open_questions: [] }, firm, date: new Date("2026-09-29T12:00:00Z") });
+    const copy = { s4_2: { observations: [{ row: "rc.end", lead: "Listed accounts rose to 52", body: "in FY2025." }] }, open_questions: [] };
+    expect(lintCopy(copy as never, ctx.brief).map((i) => i.issue)).toContain('"Listed accounts": the deck calls customers "customer"');
+  });
+});
+
+describe("S6.4 trailing line and bar labels (F39)", () => {
+  it("moves a bar's label inside its top when the trailing line runs just above the bar, and leaves the others outside", async () => {
+    const deck = new Deck("t");
+    const values = [180, 170, 160, 175, 195, 230, 250, 235, 210, 185, 190, 225, 200, 190];
+    // The trailing line at 205 sits just above the 200 bar (index 12) and well above none of the tall bars.
+    const trailing = [null, null, null, null, null, null, null, null, null, null, null, 200.4, 205, 206];
+    chart(deck, deck.pptx.addSlide(), 1, 1, 11, { type: "monthly", labels: values.map((_, i) => `M${i}`), values, trailing }, 2.6);
+    const zip = await JSZip.loadAsync(await deck.write());
+    const xml = await zip.file(Object.keys(zip.files).find((f) => /charts\/chart\d+\.xml$/.test(f))!)!.async("string");
+    const bars = xml.match(/<c:ser>[\s\S]*?<\/c:ser>/g)![0]!;
+    const inside = [...bars.matchAll(/<c:dLbl><c:idx val="(\d+)"\/>[\s\S]*?<c:dLblPos val="inEnd"\/>/g)].map((m) => Number(m[1]));
+    expect(inside).toContain(12);
+    expect(inside).toContain(13);
+    expect(inside).not.toContain(6);
+    expect(inside).not.toContain(0);
+  });
+});
+
+describe("one name for the field workforce (F37)", () => {
+  it("flags field technicians, staff or team where the exhibits say field employees", () => {
+    expect(lintText("The 18 field technicians average 6.4 years of tenure.", "t").map((i) => i.issue)).toContain('"field technicians": the deck says "field employees"');
+    expect(lintText("The field team of 18 is paid hourly.", "t").some((i) => /field employees/.test(i.issue))).toBe(true);
+    expect(lintText("The 18 field employees average 6.4 years of tenure.", "t")).toEqual([]);
   });
 });

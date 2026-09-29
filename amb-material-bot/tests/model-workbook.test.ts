@@ -717,7 +717,8 @@ describe("QA round 1 fixes on the written workbook", () => {
     const dscr = rowOfLabel(val, "DSCR (SBA loan only)");
     expect(ref).toBeGreaterThan(0);
     expect(ev.value("Valuation", ref, 4)).toBeCloseTo(ev.value("Deal Structure", rowOfLabel(deal, "DSCR"), 3) as number, 9);
-    expect(ev.value("Valuation", dscr, 7)).toMatch(/^(Low|Mid|High) case binds at \d\.\d\dx, (below|clearing) the 1\.25x hurdle$/);
+    // The grid is SBA-only, so its note says so before naming the binding case (QA round 3 F5).
+    expect(ev.value("Valuation", dscr, 7)).toMatch(/^SBA loan only: (Low|Mid|High) case binds at \d\.\d\dx, (below|clearing) the 1\.25x hurdle$/);
     expect(rowOfLabel(wb.getWorksheet("Summary")!, "DSCR, Reference structure (x)")).toBeGreaterThan(0);
   });
 
@@ -942,9 +943,16 @@ describe("QA round 2 fixes on the written workbook", () => {
     const pnl = wb.getWorksheet("P&L Summary")!;
     const r = rowOfLabel(pnl, "Check: every line less its grid months");
     expect(r).toBeGreaterThan(0);
+    // The check row totals one grey helper row per line (QA round 3 F15); each helper recomputes its line from two SUMIFs.
     const f = (pnl.getCell(r, 3).value as { formula?: string }).formula!;
-    expect(f).toMatch(/SUMIF\('Monthly P&L'!\$\w+\$6:\$\w+\$6,"<="&/);
-    expect(f).not.toMatch(/'Monthly P&L'!C\d/);
+    const [, first, last] = /SUM\(C(\d+):C(\d+)\)/.exec(f)!.map(Number);
+    expect(last! - first!).toBeGreaterThan(5);
+    for (let h = first!; h <= last!; h++) {
+      const hf = (pnl.getCell(h, 3).value as { formula?: string }).formula!;
+      expect(hf, `helper row ${h}`).toMatch(/SUMIF\('Monthly P&L'!\$\w+\$6:\$\w+\$6,"<="&/);
+      expect(hf, `helper row ${h}`).not.toMatch(/'Monthly P&L'!C\d/);
+      expect(ev.value("P&L Summary", h, 3), `helper row ${h}`).toBeCloseTo(0, 6);
+    }
     expect(ev.value("P&L Summary", r, 3)).toBeCloseTo(0, 6);
   });
 

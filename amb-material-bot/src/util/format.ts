@@ -18,6 +18,21 @@ export function fmtMoney(v: number): string {
   return `${sign}$${Math.round(a).toLocaleString("en-US")}`;
 }
 
+/**
+ * The customer list's term ("Customer", "Client") as the deck writes it,
+ * singular and plural, lower case and capitalised: the one noun for
+ * customers across the CIM, so "account" and "customer" never mix (QA round 3 F37).
+ */
+export function customerNoun(term: string | undefined): { one: string; many: string; One: string; Many: string } {
+  const one = (term ?? "Customer").toLowerCase();
+  const many = /[^aeiou]y$/.test(one) ? `${one.slice(0, -1)}ies` : `${one}s`;
+  const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+  return { one, many, One: cap(one), Many: cap(many) };
+}
+
+/** A clause's first letter in lower case, to run a source's sentence on after "The owner is". */
+export const lowerFirst = (s: string): string => s.charAt(0).toLowerCase() + s.slice(1);
+
 /** Money quoted exactly, for salaries and rents: "$95,000". */
 export function fmtDollars(v: number): string {
   if (!Number.isFinite(v)) return "n.a.";

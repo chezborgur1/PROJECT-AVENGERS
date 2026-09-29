@@ -989,6 +989,8 @@ interface SeriesPatch {
   hidePoints?: number[];
   /** Labels set at the base of these points with fixed text: the carrier series that lifts a thin bar's figure above it. */
   textPoints?: { idx: number; text: string; color: string }[];
+  /** Bars whose label moves inside their top end, in the given colour: the S6.4 trailing line would cross it above the bar. */
+  insidePoints?: { idx: number[]; color: string; format: string };
 }
 
 /** Layout the XML pass writes into one chart file: a top-left legend of a known height and the plot area beneath it. */
@@ -1029,10 +1031,14 @@ export class Deck {
 
   private async patchCharts(buf: Buffer): Promise<Buffer> {
     const zip = await JSZip.loadAsync(buf);
-    const names = Object.keys(zip.files).filter((f) => /^ppt\/charts\/chart\d+\.xml$/.test(f));
-    for (const f of names) {
-      const n = Number(/chart(\d+)\.xml$/.exec(f)![1]);
-      const cp = this.chartPatches[n - 1] ?? {};
+    // pptxgenjs numbers chart files from a counter shared by every deck in the process, so a second deck's first chart is not
+    // chart1.xml: the files are matched to the patches by rank.
+    const chartNo = (f: string) => Number(/chart(\d+)\.xml$/.exec(f)![1]);
+    const names = Object.keys(zip.files)
+      .filter((f) => /^ppt\/charts\/chart\d+\.xml$/.test(f))
+      .sort((a, b) => chartNo(a) - chartNo(b));
+    for (const [rank, f] of names.entries()) {
+      const cp = this.chartPatches[rank] ?? {};
       let xml = await zip.file(f)!.async("string");
       let si = 0;
       xml = xml.replace(/<c:ser>[\s\S]*?<\/c:ser>/g, (ser) => {
@@ -1079,6 +1085,11 @@ function pointLabel(idx: number, text?: string, color: string = C.ink): string {
   return `<c:dLbl><c:idx val="${idx}"/><c:numFmt formatCode="${format}" sourceLinked="0"/><c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="800"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill><a:latin typeface="${SANS}"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr><c:dLblPos val="inBase"/><c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbl>`;
 }
 
+/** A value label inside the top end of one bar. */
+function insideLabel(idx: number, format: string, color: string): string {
+  return `<c:dLbl><c:idx val="${idx}"/><c:numFmt formatCode="${format.replace(/"/g, "&quot;")}" sourceLinked="0"/><c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="800"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill><a:latin typeface="${SANS}"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr><c:dLblPos val="inEnd"/><c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbl>`;
+}
+
 function patchSeries(ser: string, patch: SeriesPatch): string {
   let out = ser;
   if (patch.invisible) {
@@ -1099,7 +1110,12 @@ function patchSeries(ser: string, patch: SeriesPatch): string {
   }
   // Point labels last, first inside the series' dLbls and ahead of its series-wide settings (CT_DLbls order), so the
   // series-wide edits above never touch them.
-  const points = [...(patch.hidePoints ?? []).map((i) => pointLabel(i)), ...(patch.textPoints ?? []).map((t) => pointLabel(t.idx, t.text, t.color))].join("");
+  const inside = patch.insidePoints;
+  const points = [
+    ...(patch.hidePoints ?? []).map((i) => pointLabel(i)),
+    ...(patch.textPoints ?? []).map((t) => pointLabel(t.idx, t.text, t.color)),
+    ...(inside ? inside.idx.map((i) => insideLabel(i, inside.format, inside.color)) : []),
+  ].join("");
   if (points) out = out.replace(/<c:dLbls>/, `<c:dLbls>${points}`);
   return out;
 }
@@ -1440,6 +1456,11 @@ function legendFraction(names: string[], w: number, h: number): { h: number; w: 
 const labelOn = (fill: string): string => (DARK_FILLS.has(fill) ? C.white : C.ink);
 const maxOf = (vals: number[]): number => Math.max(0, ...vals.filter((v) => Number.isFinite(v)));
 
+/** A bar's 8 pt value label, with its padding, in inches: the band above a bar the S6.4 trailing line must not cross. */
+const MONTHLY_LABEL_H = 0.17;
+/** What a monthly chart gives its category labels and margins, in inches: the rest is the plot. */
+const MONTHLY_AXIS_H = 0.35;
+
 /** Waterfall as stacked bars over an invisible base: one series each for totals, increases and decreases. */
 /** A waterfall step under this share of the axis is too thin to hold its figure inside the bar. */
 const WATERFALL_THIN = 0.06;
@@ -1549,9 +1570,14 @@ export function chart(deck: Deck, slide: Slide, x: number, y: number, w: number,
       const labels = nb(spec.labels.map((l) => (!quarterly || /^(Jan|Apr|Jul|Oct)-/.test(l) ? l : "")));
       const trailing = spec.trailing?.some((v) => v !== null) ? spec.trailing : undefined;
       const lastIdx = trailing ? trailing.length - 1 : -1;
-      deck.noteChart({ noWrap: quarterly, ...(trailing ? { series: [{}, { lastPoint: { idx: lastIdx, color: C.maroon, format: fmt } }] } : {}) });
+      const axisMax = Math.ceil(maxOf(spec.values) * 1.18);
+      // A bar whose label the trailing line would strike (the line runs just above the bar's top) takes its label inside
+      // its top end, in white, so every bar keeps its figure and none is crossed. The plot is the chart less its axis labels.
+      const band = (axisMax * MONTHLY_LABEL_H) / Math.max(0.5, h - MONTHLY_AXIS_H);
+      const struck = trailing ? spec.values.map((v, i) => (trailing[i] !== null && trailing[i]! >= v && trailing[i]! <= v + band && v > 1.5 * band ? i : -1)).filter((i) => i >= 0) : [];
+      deck.noteChart({ noWrap: quarterly, ...(trailing ? { series: [struck.length ? { insidePoints: { idx: struck, color: C.white, format: fmt } } : {}, { lastPoint: { idx: lastIdx, color: C.maroon, format: fmt } }] } : {}) });
       const bars = { name: "Monthly", labels, values: spec.values };
-      const opts = { ...chartBase, x, y, w, h, showLegend: false, valAxisMaxVal: Math.ceil(maxOf(spec.values) * 1.18), valAxisMinVal: 0 };
+      const opts = { ...chartBase, x, y, w, h, showLegend: false, valAxisMaxVal: axisMax, valAxisMinVal: 0 };
       if (!trailing) {
         slide.addChart("bar", [bars], { ...opts, chartColors: [C.maroon], dataLabelPosition: "outEnd", dataLabelFormatCode: fmt });
         return r3(y + h);
