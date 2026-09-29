@@ -111,8 +111,9 @@ describe("pipeline on the sample request (offline: no Claude)", () => {
     expect(questions).toContain("[Confirm:");
     // Bot-flagged accounts stay proposed and out of Adj. EBITDA until an advisor accepts them (guide Q10).
     expect(questions).toMatch(/- \[ \] \[N6\] Vehicle expenses \(for review\), proposed: .*Not in Adj\. EBITDA until accepted/);
-    // SDE adds back the owner's employer payroll taxes once accepted; until then the statutory estimate is listed for review.
-    expect(questions).toMatch(/- \[ \] \[S4\] Payroll taxes and benefits on owner compensation, proposed: Adds back employer payroll taxes on Mark Delaney's salary, \$13\.9K in FY2025/);
+    // SDE adds back the owner's employer payroll taxes, accepted with the documented salary; the register detail is still asked for (F20).
+    expect(questions).not.toMatch(/\[S4\][^\n]*, proposed:/);
+    expect(questions).toMatch(/- \[ \] Accepted with the supporting document still to come: \[S4\] Payroll taxes and benefits on owner compensation \(Statutory rates on the P&L/);
     expect(questions).toMatch(/- \[ \] \[M1\] After-hours emergency plumbing, proposed: .*Memo only/);
     expect(questions).toMatch(/\[S3\] capital reserve is a proxy/);
     expect(questions).toContain("- S3.1 Market size and share: No sourced market inputs");
@@ -122,12 +123,12 @@ describe("pipeline on the sample request (offline: no Claude)", () => {
 
   it("summarises the deal, the numbers, every check and the CIM's sections with the reason each omission failed", () => {
     expect(summary).toContain("Copy: the source folder's reviewed cim-copy.fixture.json");
-    expect(summary).toMatch(/Mode: Main Street: PF Adj\. EBITDA before the capital reserve is \$438,665 \(PF Dec-25\)/);
+    expect(summary).toMatch(/Mode: Main Street: PF Adj\. EBITDA before the capital reserve is \$452,525 \(PF Dec-25\)/);
     expect(summary).toContain("Deal form: asset purchase");
     // FY2025 is the LTM here, so the headline table carries FY2023-FY2025 and PF Dec-25.
     expect(summary).toContain("| | FY2023 | FY2024 | FY2025 | PF Dec-25 |");
-    expect(summary).toMatch(/\| SDE \|.*\| \$547,915 \|/);
-    expect(summary).toMatch(/\| Adj\. EBITDA \|.*\| \$371,865 \|/);
+    expect(summary).toMatch(/\| SDE \|.*\| \$561,775 \|/);
+    expect(summary).toMatch(/\| Adj\. EBITDA \|.*\| \$385,725 \|/);
     expect(summary).toContain("Structured intake facts: intake.json in the source folder.");
     expect(summary).toContain("| cim-copy.fixture.json | CIM copy fixture (used when no API key is set) |");
     expect(summary).toContain(`### Checks (guide 5.7): ${result.masterCheck}`);

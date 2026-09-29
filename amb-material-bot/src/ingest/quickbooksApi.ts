@@ -9,7 +9,7 @@
 import fs from "node:fs";
 import type { Period } from "../util/tables.ts";
 import { reportToLines, type ReportKind, type ReportRow } from "./reportTable.ts";
-import { misalignedNotes, partialYearNote } from "./quickbooksExport.ts";
+import { exportTotalsOf, misalignedNotes, partialYearNote } from "./quickbooksExport.ts";
 import type { IngestExtract } from "./extract.ts";
 
 const TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer";
@@ -152,6 +152,10 @@ export function qboRowsToReport(report: QboReport): ReportRow[] {
           out.push({ label: heading, path, values: [undefined, ...headerValues] });
         }
         walk(row.Rows?.Row ?? [], heading ? [...path, heading] : path);
+        // The section's Summary line ("Total Income", "Gross Profit") is the report's own subtotal (C01).
+        const [sumLabel, ...sumValues] = row.Summary?.ColData ?? [];
+        const label = sumLabel?.value?.trim();
+        if (label) out.push({ label, path: heading ? [...path, heading] : path, values: [undefined, ...sumValues.map((c) => num(c.value))], total: true });
       } else if (row.ColData) {
         const [first, ...rest] = row.ColData;
         const label = first?.value?.trim();
@@ -222,11 +226,13 @@ export async function pullQuickbooks(realmId: string, fyEndMonth: number, years 
       extract.fullYears = result.fullYears;
       extract.partialYears = result.partialYears;
       if (result.monthly) extract.monthly = result.monthly;
+      extract.exportTotals = exportTotalsOf(result.totals, kind, file);
       const lastMonth = result.monthly?.months[result.monthly.months.length - 1];
       extract.notes!.push(...result.partialYears.map((p) => partialYearNote(p, file, Boolean(result.monthly), lastMonth, fyEndMonth)), ...misalignedNotes(result.misaligned, file, fyEndMonth));
     } else {
       extract.bsLines = result.lines;
       if (result.balanceSheets) extract.balanceSheets = result.balanceSheets;
+      extract.exportTotals = [...(extract.exportTotals ?? []), ...exportTotalsOf(result.totals, kind, file)];
     }
   }
   return extract;

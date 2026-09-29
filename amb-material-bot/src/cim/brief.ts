@@ -185,8 +185,12 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
   money("rev", "Revenue", rev);
   money("cogs", "Cost of revenue", (p) => p.pnl.cogs);
   money("gp", "Gross profit", (p) => p.pnl.grossProfit);
-  money("payroll", "Payroll excluding the owner", (p) => p.pnl.payroll);
-  money("ownerComp", "Owner compensation as paid", (p) => p.pnl.ownerComp);
+  // Excluding the owner means his employer payroll taxes too, which the P&L carries in payroll: the register's basis (F21).
+  const staffPayroll = (p: PeriodValues) => p.pnl.payroll - (p.ownerPayrollTaxes ?? 0);
+  money("payroll", "Payroll excluding the owner (his employer payroll taxes moved to owner compensation)", staffPayroll);
+  money("ownerComp", "Owner compensation as paid (salary)", (p) => p.pnl.ownerComp);
+  money("ownerTaxes", "The owner's employer payroll taxes, inside the P&L payroll line", (p) => p.ownerPayrollTaxes ?? 0, false);
+  money("ownerCompPaid", "Owner compensation SDE adds back: salary as paid and his accepted employer payroll taxes ([S1] rung)", (p) => p.ladder.ownerCompAsPaid, false);
   money("rent", "Rent", (p) => p.pnl.rent);
   money("marketing", "Marketing", (p) => p.pnl.marketing);
   money("otherOpex", "Other operating expenses", (p) => p.pnl.otherOpex);
@@ -209,7 +213,7 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
   money("pfAdjEbitda", "PF Adj. EBITDA", (p) => p.ladder.pfAdjEbitda, false);
   ratio("gm", "Gross margin", of((p) => p.pnl.grossProfit));
   ratio("cogsPct", "Cost of revenue as % of revenue", of((p) => p.pnl.cogs));
-  ratio("payrollPct", "Payroll excluding the owner as % of revenue", of((p) => p.pnl.payroll));
+  ratio("payrollPct", "Payroll excluding the owner as % of revenue", of(staffPayroll));
   ratio("ownerCompPct", "Owner compensation as % of revenue", of((p) => p.pnl.ownerComp));
   ratio("opexPct", "Total operating expenses as % of revenue", of((p) => p.pnl.totalOpex));
   ratio("marketingPct", "Marketing as % of revenue", of((p) => p.pnl.marketing));

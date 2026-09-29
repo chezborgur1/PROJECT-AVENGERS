@@ -227,7 +227,8 @@ export function tallRows(page: Span[]): string[] {
     const a = labels[i]!;
     const next = labels[i + 1]!;
     const gap = next.y0 - a.y0;
-    if (gap <= 3.5 * lineH) continue;
+    // The table's closing note paragraph sits below a spacer row: the space before it is the layout, not a stretched row.
+    if (gap <= 3.5 * lineH || /^Note:/.test(next.t)) continue;
     const filled = page.some((s) => s.y0 > a.y0 + 0.8 * lineH && s.y0 < next.y0 - 0.5 * lineH);
     if (!filled) out.push(`row "${a.t}" is ${(gap / lineH).toFixed(1)} lines tall with one line printed`);
   }

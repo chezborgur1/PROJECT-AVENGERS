@@ -8,11 +8,11 @@
 //   ,Jan - Dec 2023,Jan - Dec 2024,Total           (period header row)
 //   Income                                         (section heading, no values)
 //   ,Service Revenue,"812,400.00","901,250.00",... (account, indented)
-//   Total Income,...                               (computed, skipped)
+//   Total Income,...                               (computed, kept apart as a total)
 
-import { fiscalYearOf, monthLabel, monthKey, parseMonthKey, type BooksBasis } from "../domain/financials.ts";
+import { fiscalYearOf, monthLabel, monthKey, parseMonthKey, type BooksBasis, type ExportTotal } from "../domain/financials.ts";
 import { readTable, parseAmount, parsePeriodLabel, type Period } from "../util/tables.ts";
-import { reportToLines, type ReportKind, type ReportRow } from "./reportTable.ts";
+import { reportToLines, type ReportKind, type ReportRow, type ReportTotal } from "./reportTable.ts";
 import type { IngestExtract } from "./extract.ts";
 
 const TOP_SECTIONS_PNL = /^(ordinary income\/expense|income|revenue|sales|cost of (goods sold|sales)|cogs|expenses?|operating expenses|other income|other expenses?|other income\/expense)$/i;
@@ -80,9 +80,10 @@ export function gridToReport(
     const hasValues = values.some((v) => v !== undefined);
 
     if (/^total\b/i.test(label)) {
-      // Close the heading this total belongs to.
+      // Close the heading this total belongs to; the total itself is kept, with the headings it closes, to prove the accounts against (C01).
       const name = label.replace(/^total\s+/i, "").toLowerCase();
       const at = stack.findIndex((s) => s.label.toLowerCase() === name);
+      if (hasValues) rows.push({ label, path: stack.slice(0, at >= 0 ? at + 1 : stack.length).map((s) => s.label), values, total: true });
       if (at >= 0) stack.splice(at);
       continue;
     }
@@ -156,9 +157,15 @@ export async function parseQuickbooksExport(file: string, fyEndMonth: number): P
   };
   if (result.monthly) out.monthly = result.monthly;
   if (result.balanceSheets) out.balanceSheets = result.balanceSheets;
+  if (result.totals.length) out.exportTotals = exportTotalsOf(result.totals, kind, file);
   const basis = detectReportBasis(grid);
   if (basis) out.booksBasis = basis;
   return out;
+}
+
+/** A report's subtotal lines in the dataset's shape. */
+export function exportTotalsOf(totals: ReportTotal[], kind: ReportKind, file: string): ExportTotal[] {
+  return totals.map((t) => ({ statement: kind, label: t.label, path: t.path, file, byFiscalYear: t.byYear, ...(t.byMonth ? { byMonth: t.byMonth } : {}) }));
 }
 
 /** Warnings for P&L columns that do not match the fiscal year (a calendar-year export under a June year-end). */

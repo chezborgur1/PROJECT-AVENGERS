@@ -5,6 +5,7 @@
 
 import { IS_CATEGORIES, type FinancialDataset } from "../domain/financials.ts";
 import type { CheckResult, CheckStatus, ModelOutput } from "./types.ts";
+import { totalsDifference } from "./exportTotals.ts";
 import { isCustomerMoney } from "./nwc.ts";
 
 export const CHECKS: { id: string; check: string; tab: string }[] = [
@@ -66,7 +67,7 @@ export function computeChecks(ctx: CheckContext): { checks: CheckResult[]; maste
   const na = (id: string, note: string) => results.set(id, { difference: 0, tolerance: DOLLAR_TOLERANCE, status: "n.a.", note });
   const maxAbs = (xs: number[]) => xs.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
 
-  // C01, C02: the Databook rows sum to the category grid and the annual P&L.
+  // C01, C02: the Databook rows sum to the category grid, the annual P&L and the export's own subtotals.
   const grid = ds.monthly;
   if (grid) {
     let c02 = 0;
@@ -84,7 +85,8 @@ export function computeChecks(ctx: CheckContext): { checks: CheckResult[]; maste
         c01 = Math.max(c01, Math.abs(fromGrid - (ds.pnl[fy]?.[c] ?? 0)));
       }
     }
-    ok("C01", c01);
+    // Every subtotal the export prints, re-formed from the Databook rows, in every period (the workbook's Export totals rows).
+    ok("C01", Math.hypot(c01, totalsDifference(out.databook?.totals ?? [])));
   } else {
     let c01 = 0;
     for (const fy of ds.years) {
@@ -93,7 +95,7 @@ export function computeChecks(ctx: CheckContext): { checks: CheckResult[]; maste
         c01 = Math.max(c01, Math.abs(fromLines - ds.pnl[fy]![c]));
       }
     }
-    ok("C01", c01);
+    ok("C01", Math.hypot(c01, totalsDifference(out.databook?.totals ?? [])));
     na("C02", "No monthly grid (annual-only mode)");
   }
 

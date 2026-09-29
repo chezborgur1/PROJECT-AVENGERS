@@ -8,7 +8,7 @@ import type { CimContext } from "../context.ts";
 import { fieldDepartments, standardNote } from "../context.ts";
 import type { Block, TextCell } from "../design.ts";
 import { blockHeight, gapBefore, r3, spanW } from "../design.ts";
-import { monthlyIncomeStatement } from "../exhibits.ts";
+import { monthlyIncomeStatement, ownerCompRung } from "../exhibits.ts";
 import { fmtPct, k } from "../../util/format.ts";
 import { draft, present, source } from "./common.ts";
 import type { PageModule, SectionModule } from "./types.ts";
@@ -25,7 +25,7 @@ function definitionRows(ctx: CimContext): TextCell[][] {
     ["Reported EBITDA", "Net income plus interest expense [D1], income taxes [D2] and depreciation and amortization [D3]. Includes other income and expense; non-operating items are removed as normalization adjustments."],
     ["Normalization adjustments [N]", "Accepted adjustments that remove owner-discretionary, non-recurring and non-operating items. Positive amounts increase EBITDA."],
     ...(ctx.mainStreet
-      ? [["SDE", "Seller's discretionary earnings: Reported EBITDA plus normalization adjustments plus one working owner's compensation as paid [S1]."]]
+      ? [["SDE", `Seller's discretionary earnings: Reported EBITDA plus normalization adjustments plus one working owner's compensation: salary, payroll taxes and benefits ${ownerCompRung(ctx).refs}.`]]
       : []),
     ["Adj. EBITDA", ctx.mainStreet ? "SDE less market replacement compensation for the owner [S2] and a capital reserve [S3]." : "Reported EBITDA plus normalization adjustments plus owner compensation above a market replacement cost [S1] + [S2]."],
     ["PF Adj. EBITDA", "Adj. EBITDA plus accepted pro forma adjustments [PF]; equal to Adj. EBITDA when none is accepted."],

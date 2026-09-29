@@ -79,7 +79,10 @@ const SOURCE_PERIOD = [/ and LTM [A-Z][a-z]{2}-\d{2}/g, /, FY\d{4}(–FY\d{4})?/
  */
 export function fitNotes(ctx: CimContext, id: string, notes: Notes): Notes {
   const out: Notes = { ...notes, footnotes: notes.footnotes && [...notes.footnotes] };
-  const over = () => notesLineCount(out) > 3;
+  // Page references resolve once the deck is paginated, to "page 16" or, when the page is not in the deck, "the appendix":
+  // the band is measured with the longer reading so it still fits after resolution.
+  const resolved = (t: string | undefined) => t?.replace(/\{\{page:[^}]+\}\}/g, "the appendix");
+  const over = () => notesLineCount({ ...out, source: resolved(out.source), note: resolved(out.note), footnotes: out.footnotes?.map((f) => resolved(f)!) }) > 3;
   const cut = new Set<string>();
   while (over() && out.note) {
     const parts = sentencesOf(out.note);

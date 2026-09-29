@@ -132,4 +132,21 @@ describe("the sample folder reproduces the fixture", () => {
     expect(d.reconciliations).toHaveLength(12);
     expect(d.reconciliations!.every((r) => r.difference === 0 && !r.material)).toBe(true);
   });
+
+  it("keeps every bank line as exported, classified, and the subtotals each export prints (F7)", () => {
+    const d = ds();
+    expect(d.bankTransactions).toEqual(fx.bankTransactions);
+    expect(d.bankTransactions).toHaveLength(871);
+    // The operating lines are the deposits the proof of cash counts, month by month, in cents.
+    for (const [m, v] of Object.entries(d.depositsByMonth!)) {
+      const operating = d.bankTransactions!.filter((t) => t.date.startsWith(m) && t.classification === "Operating").reduce((s, t) => s + t.amount, 0);
+      expect(operating, m).toBeCloseTo(v.amount, 6);
+      expect(Math.round(v.amount * 100) / 100).toBe(v.amount);
+    }
+    expect(d.exportTotals).toEqual(fx.exportTotals);
+    const label = (statement: string) => d.exportTotals!.filter((t) => t.statement === statement).map((t) => t.label);
+    expect(label("pnl")).toEqual(["Total Income", "Total Cost of Goods Sold", "Gross Profit", "Total Payroll Expenses", "Total Expenses", "Net Operating Income", "Total Other Income", "Total Other Expenses", "Net Other Income", "Net Income"]);
+    expect(label("balance_sheet")).toContain("TOTAL LIABILITIES AND EQUITY");
+    expect(d.exportTotals!.find((t) => t.label === "Net Income")!.byFiscalYear).toEqual({ 2023: 74_600, 2024: 129_240, 2025: 232_815 });
+  });
 });

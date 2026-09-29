@@ -106,7 +106,7 @@ function fallback11(ctx: CimContext): NonNullable<CimCopy["s1_1"]> {
       // With two fiscal years there is no compound rate, only the year-on-year change; with one, only the level.
       f0 === fl
         ? { row: "qs.revenue", lead: `Revenue was {{rev.latest}} in ${ctx.latest.label},`, body: `${ctx.brief.has("rev.yoy") ? "{{rev.yoy}} on the prior year; " : ""}${confirm(ctx, "growth drivers", "What drove revenue by year")}.` }
-        : { row: "qs.revenue", lead: `Revenue went from {{rev.${f0}}} to {{rev.${fl}}},`, body: `${ctx.brief.has("rev.cagr") ? "a {{rev.cagr}} compound rate" : "a {{rev.total}} increase"}; ${confirm(ctx, "growth drivers", "What drove revenue growth by year")}.` },
+        : { row: "qs.revenue", lead: `Revenue went from {{rev.${f0}}} to {{rev.${fl}}},`, body: `${ctx.brief.has("rev.cagr") ? "a {{rev.cagr}} compound rate" : ctx.brief.has("rev.yoy") ? "{{rev.yoy}} on the prior year" : "{{rev.total}} over the years shown"}; ${confirm(ctx, "growth drivers", "What drove revenue growth by year")}.` },
       ctx.brief.has("gm.delta")
         ? { row: "qs.gm", lead: "Gross margin moved {{gm.delta}} to {{gm.latest}},", body: `driven by ${confirm(ctx, "gross-margin driver", "What moved gross margin")}.` }
         : { row: "qs.gm", lead: "Gross margin was {{gm.latest}},", body: `with cost of revenue at {{cogsPct.latest}} of revenue; ${confirm(ctx, "gross-margin driver", "What drives gross margin")}.` },
@@ -134,7 +134,12 @@ const s1_2: PageModule = {
     const rw = spanW(9, 12);
     const b = ctx.brief;
     const growth = b.has("rev.cagr") ? `grew at a ${b.t("rev.cagr")} CAGR to` : b.has("rev.yoy") ? `${verb(b.value("rev.yoy"))} ${b.t("rev.yoy")} to` : "reached";
-    const title = chooseTitle(ctx, "S1.2 title", copy.title, `Revenue ${growth} ${b.t("rev.latest")} and Adj. EBITDA reached ${b.t("adjEbitda.latest")} in ${ctx.latest.label}`);
+    // Alternates in the same words, so a line break never leaves the period alone on the title's last line.
+    const title = chooseTitle(ctx, "S1.2 title", copy.title, [
+      `Revenue ${growth} ${b.t("rev.latest")} and Adj. EBITDA reached ${b.t("adjEbitda.latest")} in ${ctx.latest.label}`,
+      `In ${ctx.latest.label}, revenue ${growth} ${b.t("rev.latest")} and Adj. EBITDA reached ${b.t("adjEbitda.latest")}`,
+      `Revenue ${growth} ${b.t("rev.latest")} and Adj. EBITDA was ${b.t("adjEbitda.latest")} in ${ctx.latest.label}`,
+    ]);
     return [
       draft(ctx, {
         id: "S1.2",

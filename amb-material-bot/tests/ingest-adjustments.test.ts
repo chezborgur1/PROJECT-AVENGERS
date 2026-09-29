@@ -52,16 +52,18 @@ describe("adjustments.csv", () => {
     const refs = ds.adjustments!.map((a) => a.ref);
     expect(refs.slice(0, 5)).toEqual(["D1", "D2", "D3", "N1", "N2"]);
     expect(refs.slice(-5)).toEqual(["S1", "S2", "S3", "S4", "PF1"]);
-    // [S4] is the owner's employer payroll taxes at statutory rates on the $200,000 salary, proposed until accepted.
-    expect(ds.adjustments!.find((a) => a.ref === "S4")).toMatchObject({ category: "owner_compensation", status: "proposed", evidence: "pending", byFiscalYear: { 2023: 12_584, 2024: 13_250, 2025: 13_860 } });
+    // [S4] is the owner's employer payroll taxes at statutory rates on the documented $200,000 salary: accepted with [S1]
+    // (guide 5.4: SDE adds back salary and payroll taxes), the register detail still to be requested (F20).
+    expect(ds.adjustments!.find((a) => a.ref === "S4")).toMatchObject({ category: "owner_compensation", status: "accepted", evidence: "pending", byFiscalYear: { 2023: 12_584, 2024: 13_250, 2025: 13_860 } });
     const byRef = (ref: string) => ds.adjustments!.find((a) => a.ref === ref)!;
     expect(byRef("N1")).toMatchObject({ description: "Owner's boat", status: "excluded" });
     expect(byRef("N2")).toMatchObject({ category: "non_operating", origin: "pnl", byFiscalYear: { 2025: -3_100 } });
     expect(byRef("PF1")).toMatchObject({ pnlLine: "rent", pfMethod: "Market rate" });
     expect(byRef("D2").basis).toMatch(/pass-through/);
-    // Reported EBITDA 319,515 − 3,100 interest income + 200,000 owner comp − 109,250 replacement; the excluded boat stays out,
-    // and so does the PF row: annual-only mode has no PF column, so the engine's PF Adj. EBITDA cannot carry it either.
-    expect(ds.mode!.measure).toBeCloseTo(319_515 - 3_100 + 200_000 - 109_250, 2);
+    // Reported EBITDA 319,515 − 3,100 interest income + 200,000 owner comp + 13,860 owner payroll taxes − 109,250 replacement;
+    // the excluded boat stays out, and so does the PF row: annual-only mode has no PF column, so the engine's PF Adj. EBITDA
+    // cannot carry it either.
+    expect(ds.mode!.measure).toBeCloseTo(319_515 - 3_100 + 200_000 + 13_860 - 109_250, 2);
     expect(ds.mode!.mode).toBe("mainStreet");
     expect(ds.warnings.some((w) => /pro forma rows are not applied in annual-only mode/.test(w))).toBe(true);
     const model = runModel(ds, defaultAssumptions(ds, sampleRow()));

@@ -141,6 +141,12 @@ export interface PeriodValues {
   bs?: BalanceSheetValues;
   /** Period KPIs computed by the engine (revenue per employee, labor cost %, customers), keyed by KPI key. */
   kpis: Record<string, number>;
+  /**
+   * The owner's employer payroll taxes and benefits inside the P&L payroll
+   * line (the [S4] row's amount for the period, whatever its status), so
+   * payroll can be shown excluding the owner on the payroll register's basis.
+   */
+  ownerPayrollTaxes?: number;
 }
 
 // --- Monthly series ---------------------------------------------------------------
@@ -523,6 +529,32 @@ export interface DatabookRow {
   byFiscalYear: Record<number, number>;
 }
 
+/** One part of an export total: the Databook rows under an export heading, added or taken away. */
+export interface TotalTerm {
+  /** The export heading (P&L section, or balance-sheet section path). */
+  section: string;
+  sign: 1 | -1;
+  /** P&L: only accounts under this sub-heading ("Payroll Expenses : "). */
+  accountPrefix?: string;
+  /** Balance sheet: the heading and every heading below it. */
+  nested?: boolean;
+}
+
+export type TotalFormation = { terms: TotalTerm[] } | { netIncome: true };
+
+/** An export's subtotal line against the Databook's re-forming of it, period by period (C01). */
+export interface DatabookTotal {
+  statement: "pnl" | "balance_sheet";
+  label: string;
+  path: string[];
+  file: string;
+  /** Absent when the bot cannot re-form the line: it is shown on the raw tab, not tied. */
+  formation?: TotalFormation;
+  /** Keyed by month (P&L grid, balance-sheet dates) or fiscal year ("2025"). */
+  exported: Record<string, number>;
+  databook: Record<string, number>;
+}
+
 /** One Databook balance-sheet row: a mapped account with its balance at every statement date. */
 export interface DatabookBsRow {
   account: string;
@@ -673,7 +705,7 @@ export interface ProFormaScenario {
 export interface ModelOutput {
   /** The assumptions the workbook echoes on its Assumptions tab and every formula reads. */
   assumptions?: Assumptions;
-  databook?: { pnl: DatabookRow[]; bs: DatabookBsRow[] };
+  databook?: { pnl: DatabookRow[]; bs: DatabookBsRow[]; totals?: DatabookTotal[] };
   cashFlow?: HistoricalCashFlowYear[];
   valuationDetail?: ValuationDetail;
   deal?: DealStructureColumn[];

@@ -389,9 +389,12 @@ function opexLines(ctx: CimContext, budget: number): OpexLine[] {
       .filter((a) => ctx.ds.lines.some((l) => l.account === a && l.category === cat && l.statement === "pnl"))
       .sort((a, b) => (latest.accountLines[b] ?? 0) - (latest.accountLines[a] ?? 0));
   type Cat = { key: string; label: string; get: (p: PeriodValues) => number; accounts: string[]; split: string[] };
+  // The owner's employer payroll taxes move from payroll to owner compensation, so payroll excludes him on the register's
+  // basis; the payroll accounts then no longer add to the line, so it is not split into them.
+  const taxes = ctx.out.columns.some((c) => ctx.out.periods[c.key]?.ownerPayrollTaxes);
   const all: Cat[] = [
-    { key: "is.ownerComp", label: "Owner compensation", get: (p) => p.pnl.ownerComp, accounts: accountsOf("owner_comp"), split: [] },
-    { key: "is.payroll", label: "Payroll, excluding the owner", get: (p) => p.pnl.payroll, accounts: accountsOf("payroll"), split: [] },
+    { key: "is.ownerComp", label: ownerCompLabel(ctx), get: ownerCompTotal, accounts: accountsOf("owner_comp"), split: [] },
+    { key: "is.payroll", label: "Payroll, excluding the owner", get: staffPayroll, accounts: taxes ? [] : accountsOf("payroll"), split: [] },
     { key: "is.rent", label: "Rent", get: (p) => p.pnl.rent, accounts: accountsOf("rent"), split: [] },
     { key: "is.marketing", label: "Advertising and marketing", get: (p) => p.pnl.marketing, accounts: accountsOf("marketing"), split: [] },
     { key: "is.otherOpex", label: "Other operating expenses", get: (p) => p.pnl.otherOpex, accounts: accountsOf("other_opex"), split: [] },
@@ -592,13 +595,19 @@ export function serviceLines(ctx: CimContext, w: number): Block | undefined {
   const rows: TextCell[][] = [];
   const keys: string[] = [];
   const mix = revenueMix(latest, rl.map((l) => l.account));
+  // A text column is built only when the notes fill at least one of its rows (spec 14); one left out becomes an open question.
+  const buys = rl.some((l) => l.whatTheCustomerBuys);
+  const pricing = rl.some((l) => l.pricingBasis);
+  const lines = rl.map((l) => l.label).join(", ");
+  if (!buys) ctx.openQuestions.push(`What the customer buys on each service line (${lines}): the column is left out of the service lines table until the Seller describes it`);
+  if (!pricing) ctx.openQuestions.push(`The pricing basis of each service line (${lines}; flat rate, contract, time and materials): the column is left out of the service lines table until the Seller gives it`);
   for (const [i, l] of rl.entries()) {
     const cur = latest.revenueLines.find((x) => x.account === l.account)?.amount ?? 0;
     const prev = prior?.revenueLines.find((x) => x.account === l.account)?.amount;
     rows.push([
       l.label,
-      l.whatTheCustomerBuys ?? confirm(ctx, "what the customer buys", `What the customer buys: ${l.label}`),
-      l.pricingBasis ?? confirm(ctx, "pricing basis", `Pricing basis for ${l.label} (flat rate, contract, time and materials)`),
+      ...(buys ? [l.whatTheCustomerBuys ?? confirm(ctx, "what the customer buys", `What the customer buys: ${l.label}`)] : []),
+      ...(pricing ? [l.pricingBasis ?? confirm(ctx, "pricing basis", `Pricing basis for ${l.label} (flat rate, contract, time and materials)`)] : []),
       k(cur, { dollar: true }),
       `${mix.whole[i]}%`,
       prev !== undefined ? fmtGrowth(prev, cur) : "n.a.",
@@ -608,11 +617,16 @@ export function serviceLines(ctx: CimContext, w: number): Block | undefined {
   }
   const fixed = 0.6 + 0.42 + 0.5 + 0.38;
   const rest = r3(w - fixed);
-  const colW = [r3(rest * 0.3), r3(rest * 0.4), r3(rest - r3(rest * 0.3) - r3(rest * 0.4)), 0.6, 0.42, 0.5, 0.38];
+  const shares = [0.3, ...(buys ? [0.4] : []), ...(pricing ? [0.3] : [])];
+  const total = shares.reduce((s, x) => s + x, 0);
+  const textW = shares.map((x) => r3((rest * x) / total));
+  textW[0] = r3(rest - textW.slice(1).reduce((s, x) => s + x, 0));
+  const colW = [...textW, 0.6, 0.42, 0.5, 0.38];
+  const head = ["Service line", ...(buys ? ["What the customer buys"] : []), ...(pricing ? ["Pricing basis"] : []), ctx.latest.label, "%", "y/y", "Obs."];
   return {
     kind: "textTable",
     header: { title: "Service lines", units: `(${ctx.latest.label}, $000s)` },
-    spec: { colW, head: ["Service line", "What the customer buys", "Pricing basis", ctx.latest.label, "%", "y/y", "Obs."], rows, rowKeys: keys, obsCol: 6, aligns: ["left", "left", "left", "right", "right", "right", "center"], fontSize: 8 },
+    spec: { colW, head, rows, rowKeys: keys, obsCol: head.length - 1, aligns: [...textW.map(() => "left" as const), "right", "right", "right", "center"], fontSize: 8 },
   };
 }
 
@@ -657,9 +671,12 @@ export function costStructure(ctx: CimContext, w: number, maxRows = 22): Block {
   const head: NumRow[] = [];
   for (const a of cogs.length <= 3 ? cogs : []) head.push(r("line", accountLabel(a), `cost.${a}`, (p) => p.accountLines[a] ?? 0));
   head.push(r("subtotal", "Cost of revenue", "cost.cogs", (p) => p.pnl.cogs));
-  for (const a of payroll.length <= 5 ? payroll : []) head.push(r("line", accountLabel(a), `cost.${a}`, (p) => p.accountLines[a] ?? 0));
-  head.push(r("subtotal", "Payroll, excluding the owner", "cost.payroll", (p) => p.pnl.payroll, ctx.out.headcount ? `${fmtCount(ctx.out.headcount.latestHeadcount)} employees at ${monthLabel(ctx.latest.end)}` : ""));
-  head.push(r("line", "Owner compensation", "cost.owner", (p) => p.pnl.ownerComp, `Restated in [S1] and [S2] (${pageRef("S7.1")})`));
+  const listed = payroll.length <= 5 ? payroll : [];
+  for (const a of listed) head.push(r("line", accountLabel(a), `cost.${a}`, (p) => p.accountLines[a] ?? 0));
+  // The accounts carry the owner's employer payroll taxes; they leave payroll for owner compensation, on the register's basis.
+  if (listed.length && ps.some((p) => p.ownerPayrollTaxes)) head.push(r("line", "Less: owner's payroll taxes", "cost.ownerTaxes", (p) => -(p.ownerPayrollTaxes ?? 0), "Moved to owner compensation"));
+  head.push(r("subtotal", "Payroll, excluding the owner", "cost.payroll", staffPayroll, ctx.out.headcount ? `${fmtCount(ctx.out.headcount.latestHeadcount)} employees at ${monthLabel(ctx.latest.end)}` : ""));
+  head.push(r("line", ownerCompLabel(ctx), "cost.owner", ownerCompTotal, `Restated in ${ownerCompRung(ctx).refs} and [S2] (${pageRef("S7.1")})`));
   const tail: NumRow[] = [];
   if (latest.pnl.rent) tail.push(r("line", "Rent", "cost.rent", (p) => p.pnl.rent, ctx.intake?.locations[0]?.leaseExpiry ? `Lease through ${ctx.intake.locations[0].leaseExpiry}` : ""));
   if (latest.pnl.marketing) tail.push(r("line", "Advertising and marketing", "cost.marketing", (p) => p.pnl.marketing));
@@ -703,6 +720,28 @@ export function costShiftChart(table: Block, max = 6): Block | undefined {
 /** Accepted rows of a tier as they appear in the ladder, with their per-column amounts. */
 function tierRows(ctx: CimContext, tier: Adjustment["tier"]): { row: Adjustment; byColumn: Record<string, number> }[] {
   return ctx.out.adjustments.filter((a) => a.row.tier === tier && a.row.status === "accepted");
+}
+
+/**
+ * The [S1] rung as the deck names it: the owner's salary as paid, and with it
+ * the owner's employer payroll taxes and benefits when that row is accepted
+ * into the rung ([S4]; guide 5.4: SDE adds back salary, payroll taxes and
+ * benefits). `refs` lists every accepted row the rung sums.
+ */
+/** Payroll excluding the owner, his employer payroll taxes (inside the P&L payroll line) included (F21). */
+export const staffPayroll = (p: PeriodValues): number => p.pnl.payroll - (p.ownerPayrollTaxes ?? 0);
+
+/** Owner compensation with his employer payroll taxes, the other side of `staffPayroll`. */
+export const ownerCompTotal = (p: PeriodValues): number => p.pnl.ownerComp + (p.ownerPayrollTaxes ?? 0);
+
+/** The owner-compensation line's label: with his payroll taxes when the P&L carries any. */
+function ownerCompLabel(ctx: CimContext): string {
+  return ctx.out.columns.some((c) => ctx.out.periods[c.key]?.ownerPayrollTaxes) ? "Owner compensation, with payroll taxes" : "Owner compensation";
+}
+
+export function ownerCompRung(ctx: CimContext): { label: string; refs: string } {
+  const rows = tierRows(ctx, "owner_compensation").filter((a) => a.row.category === "owner_compensation");
+  return { label: rows.length > 1 ? "Owner compensation, salary and payroll taxes" : "Owner compensation, as paid", refs: rows.map((a) => `[${a.row.ref}]`).join(" ") };
 }
 
 /**
@@ -769,16 +808,15 @@ export function ebitdaLadder(ctx: CimContext, w: number, maxRows = 23): Block {
   rows.push(row("subtotal", "Total normalization adjustments", "ladder.normTotal", (l) => l.totalNormalization, {}, true));
 
   rows.push({ type: "section", label: "Owner compensation" });
-  const s1 = s.find((a) => a.row.category === "owner_compensation");
   const s2 = s.find((a) => a.row.category === "replacement_cost");
   const s3 = s.find((a) => a.row.category === "capital_reserve");
   if (ctx.mainStreet) {
-    rows.push(row("line", "(+) Owner compensation, as paid", "ladder.S1", (l) => l.ownerCompAsPaid, { ref: s1 ? `[${s1.row.ref}]` : "" }));
+    rows.push(row("line", `(+) ${ownerCompRung(ctx).label}`, "ladder.S1", (l) => l.ownerCompAsPaid, { ref: ownerCompRung(ctx).refs }));
     rows.push(row("key", "Seller's discretionary earnings (SDE)", "ladder.sde", (l) => l.sde, { note: "1" }, true), ratio("% margin", "ladder.sdeMargin", (l) => l.sdeMargin));
     rows.push(row("line", `(${EN_DASH}) Market replacement compensation`, "ladder.S2", (l) => l.marketReplacement, { ref: s2 ? `[${s2.row.ref}]` : "", note: "2" }));
-    if (ps.some((p) => p.ladder.capitalReserve !== 0)) rows.push(row("line", `(${EN_DASH}) Capital reserve`, "ladder.S3", (l) => l.capitalReserve, { ref: s3 ? `[${s3.row.ref}]` : "" }));
+    if (ps.some((p) => p.ladder.capitalReserve !== 0)) rows.push(row("line", `(${EN_DASH}) Capital reserve`, "ladder.S3", (l) => l.capitalReserve, { ref: s3 ? `[${s3.row.ref}]` : "", ...(reserveIsProxy(ctx) ? { note: "3" } : {}) }));
   } else {
-    rows.push(row("line", "(+) Owner compensation normalization", "ladder.ownerNorm", (l) => l.ownerCompNormalization, { ref: [s1, s2].filter(Boolean).map((a) => `[${a!.row.ref}]`).join(" "), note: "2" }));
+    rows.push(row("line", "(+) Owner compensation normalization", "ladder.ownerNorm", (l) => l.ownerCompNormalization, { ref: [ownerCompRung(ctx).refs, s2 ? `[${s2.row.ref}]` : ""].filter(Boolean).join(" "), note: "2" }));
   }
   rows.push(row("key", "Adj. EBITDA", "ladder.adj", (l) => l.adjEbitda, {}, true), ratio("% margin", "ladder.adjMargin", (l) => l.adjMargin));
   if (pf.length) {
@@ -801,13 +839,13 @@ export function condensedLadder(ctx: CimContext, w: number): Block {
   const rows: NumRow[] = [row("key", "Reported EBITDA", "cl.reported", (l) => l.reportedEbitda, {}, true), row("line", "(+) Normalization adjustments", "cl.norm", (l) => l.totalNormalization, { ref: refRange })];
   if (ctx.mainStreet) {
     rows.push(
-      row("line", "(+) Owner compensation, as paid", "cl.S1", (l) => l.ownerCompAsPaid, { ref: "[S1]" }),
+      row("line", `(+) ${ownerCompRung(ctx).label}`, "cl.S1", (l) => l.ownerCompAsPaid, { ref: ownerCompRung(ctx).refs }),
       row("key", "SDE", "cl.sde", (l) => l.sde, {}, true),
       ratio("% margin", "cl.sdeMargin", (l) => l.sdeMargin),
       row("line", `(${EN_DASH}) Market replacement compensation`, "cl.S2", (l) => l.marketReplacement, { ref: "[S2]" }),
       row("line", `(${EN_DASH}) Capital reserve`, "cl.S3", (l) => l.capitalReserve, { ref: "[S3]" }),
     );
-  } else rows.push(row("line", "(+) Owner compensation normalization", "cl.ownerNorm", (l) => l.ownerCompNormalization, { ref: "[S1] [S2]" }));
+  } else rows.push(row("line", "(+) Owner compensation normalization", "cl.ownerNorm", (l) => l.ownerCompNormalization, { ref: `${ownerCompRung(ctx).refs} [S2]` }));
   rows.push(row("key", "Adj. EBITDA", "cl.adj", (l) => l.adjEbitda, {}, true), ratio("% margin", "cl.adjMargin", (l) => l.adjMargin));
   rows.push(row("line", "(+) Pro forma adjustments", "cl.pf", (l) => l.totalProForma, { ref: "[PF]" }), row("key", "PF Adj. EBITDA", "cl.pfAdj", (l) => l.pfAdjEbitda, {}, true));
   return { kind: "numTable", header: { title: "EBITDA ladder, condensed", units: "($000s)" }, spec: { name: "EBITDA ladder", cols, rows } };
@@ -820,7 +858,7 @@ export function ladderWaterfall(ctx: CimContext): Block {
   const labels: string[] = ["Reported EBITDA", "Normalization adjustments [N]"];
   const steps: { value: number; total?: boolean }[] = [{ value: toK(l.reportedEbitda), total: true }, { value: toK(l.totalNormalization) }];
   if (ctx.mainStreet) {
-    labels.push("Owner compensation, as paid [S1]", "SDE", "Market replacement compensation [S2]");
+    labels.push(`${ownerCompRung(ctx).label} ${ownerCompRung(ctx).refs}`, "SDE", "Market replacement compensation [S2]");
     steps.push({ value: toK(l.ownerCompAsPaid) }, { value: toK(l.sde), total: true }, { value: toK(l.marketReplacement) });
     if (l.capitalReserve !== 0) {
       labels.push("Capital reserve [S3]");
@@ -844,8 +882,11 @@ export function ladderWaterfall(ctx: CimContext): Block {
  * T11). The record is the general-ledger account the row cites, else the
  * first document named, without file names.
  */
-function evidenceText(a: Adjustment): string {
+function evidenceText(ctx: CimContext, a: Adjustment): string {
   if (a.evidence === "management_representation") return "Management representation (1)";
+  // The depreciation proxy is AMB's estimate, not a record: it says so before any parenthetical is stripped (F23).
+  if (a.category === "capital_reserve" && reserveIsProxy(ctx)) return "AMB estimate (proxy: three-year average depreciation; Form 4562 requested) (2)";
+  if (a.evidence === "pending") return "Calculated from documented figures; supporting document requested";
   const parts = a.sourceDocument.split(";").map((p) => p.replace(/\([^)]*\)/g, "").trim());
   const account = parts.find((p) => /account /i.test(p));
   if (account) {
@@ -854,6 +895,16 @@ function evidenceText(a: Adjustment): string {
     return `Documented (GL: ${leaf})`;
   }
   return `Documented (${parts[0] || "general ledger"})`;
+}
+
+/** Whether the capital reserve [S3] is the depreciation proxy rather than equipment spending from Form 4562. */
+export const reserveIsProxy = (ctx: CimContext): boolean => ctx.ds.recastInputs?.capitalReserve?.basis === "da_proxy";
+
+/** The footnote the reserve's markers point at: an AMB estimate until Form 4562 is provided, else its source. */
+export function reserveFootnote(ctx: CimContext): string | undefined {
+  const cr = ctx.ds.recastInputs?.capitalReserve;
+  if (!cr) return undefined;
+  return reserveIsProxy(ctx) ? "[S3] is an AMB estimate (three-year average depreciation) until Form 4562 is provided." : `${cr.source}.`;
 }
 
 /** Adjustment support (spec 4.5): one row per accepted [N], [S] and [PF] row, with its basis and evidence in words. */
@@ -866,7 +917,7 @@ export function adjustmentSupport(ctx: CimContext, w: number, full: boolean): Bl
     a.row.description,
     ...amountCols.map((c) => k(a.byColumn[c.key] ?? 0)),
     a.row.basis,
-    evidenceText(a.row),
+    evidenceText(ctx, a.row),
   ]);
   const amountW = amountCols.length * 0.62;
   const colW = full
@@ -898,7 +949,7 @@ export function ownerCompensation(ctx: CimContext, w: number): Block | undefined
   const k$ = (v: number, dollar = false) => k(v, { dollar });
   const burden = rs.replacementSalary * rs.burdenPct;
   const rows: NumRow[] = [
-    { type: "line", label: "Owner compensation, as paid", key: "oc.asPaid", ref: "[S1]", vals: ps.map((p) => k$(p.ladder.ownerCompAsPaid, true)) },
+    { type: "line", label: ownerCompRung(ctx).label, key: "oc.asPaid", ref: ownerCompRung(ctx).refs, vals: ps.map((p) => k$(p.ladder.ownerCompAsPaid, true)) },
     { type: "line", label: "Market replacement salary (1)", key: "oc.salary", vals: ps.map(() => k$(rs.replacementSalary)) },
     { type: "sub", label: `(+) Payroll taxes and benefits at ${fmtPct(rs.burdenPct, 0)}`, key: "oc.burden", vals: ps.map(() => k$(burden)) },
     { type: "subtotal", label: "Market replacement compensation", key: "oc.replacement", ref: "[S2]", vals: ps.map((p) => k$(-p.ladder.marketReplacement, true)) },
@@ -1328,33 +1379,51 @@ export function facilities(ctx: CimContext, w: number, withSuppliers = true): Bl
   };
 }
 
-/** Owner responsibilities and transition (spec 8, guide S5.4): hours only where the notes give them; the week's total from the notes. */
+/**
+ * Owner responsibilities and transition (spec 8, guide S5.4): hours only where
+ * the notes give them; the week's total and the transition from the notes. A
+ * column is built only when the notes fill at least one of its rows (spec 14:
+ * no exhibit built from placeholders); a column left out becomes an open
+ * question. Transition support is blank where the notes name none for a
+ * duty: the owner's overall transition stands on the total line.
+ */
 export function ownerResponsibilities(ctx: CimContext, w: number): Block | undefined {
   const o = ctx.intake?.owner;
   if (!o?.responsibilities.length) return undefined;
   const withHours = o.responsibilities.some((r) => r.hoursPerWeek !== undefined);
+  const successors = o.responsibilities.some((r) => r.assumedBy);
+  const supports = o.responsibilities.some((r) => r.transitionSupport);
+  const duties = o.responsibilities.map((r) => r.responsibility.toLowerCase()).join(", ");
+  if (!successors) ctx.openQuestions.push(`Who assumes each of the owner's duties after closing (${duties}): the column is left out of the owner responsibilities table until the Seller names them`);
+  if (!supports) ctx.openQuestions.push(`What transition support the owner offers for each duty (${duties}): the column is left out of the owner responsibilities table until the Seller states it`);
   const rows: TextCell[][] = o.responsibilities.map((r) => [
     r.responsibility,
     ...(withHours ? [r.hoursPerWeek !== undefined ? String(r.hoursPerWeek) : ""] : []),
-    r.assumedBy ?? confirm(ctx, "successor", `Who assumes "${r.responsibility}" after closing`),
-    r.transitionSupport ?? confirm(ctx, "support", `Transition support for "${r.responsibility}"`),
+    ...(successors ? [r.assumedBy ?? confirm(ctx, "successor", `Who assumes "${r.responsibility}" after closing`)] : []),
+    ...(supports ? [r.transitionSupport ?? ""] : []),
     "",
   ]);
   const keys = o.responsibilities.map((r) => `owner.${r.responsibility}`);
-  rows.push([withHours || !o.hoursPerWeek ? "Total" : `Total: about ${o.hoursPerWeek} hours a week (1)`, ...(withHours ? [o.hoursPerWeek ? `~${o.hoursPerWeek}` : ""] : []), "", "", ""]);
+  const transition = o.transition ? `; transition ${o.transition.basis}` : "";
+  const text = [successors, supports].filter(Boolean).length;
+  rows.push([withHours || !o.hoursPerWeek ? `Total${transition} (1)` : `Total: about ${o.hoursPerWeek} hours a week${transition} (1)`, ...(withHours ? [o.hoursPerWeek ? `~${o.hoursPerWeek}` : ""] : []), ...Array(text).fill(""), ""]);
   keys.push("owner.total");
-  const colW = withHours ? [1.95, 0.5, r3((w - 2.85) / 2), r3(w - 2.85 - r3((w - 2.85) / 2)), 0.4] : [2.1, r3((w - 2.5) / 2), r3(w - 2.5 - r3((w - 2.5) / 2)), 0.4];
+  const fixed = 0.4 + (withHours ? 0.5 : 0);
+  const label = text ? (withHours ? 1.95 : 2.1) : r3(w - fixed);
+  const each = text ? r3((w - fixed - label) / text) : 0;
+  const colW = [label, ...(withHours ? [0.5] : []), ...Array(text).fill(each), 0.4];
+  colW[0] = r3(w - colW.slice(1).reduce((s, x) => s + x, 0));
   return {
     kind: "textTable",
     header: { title: "Owner responsibilities and transition", units: "(per management) (1)" },
     spec: {
       colW,
-      head: ["Responsibility", ...(withHours ? ["Hrs/wk"] : []), "Who assumes it post-close", "Transition support", "Obs."],
+      head: ["Responsibility", ...(withHours ? ["Hrs/wk"] : []), ...(successors ? ["Who assumes it post-close"] : []), ...(supports ? ["Transition support"] : []), "Obs."],
       rows,
       rowKeys: keys,
-      obsCol: withHours ? 4 : 3,
+      obsCol: colW.length - 1,
       totalRow: rows.length - 1,
-      aligns: withHours ? ["left", "right", "left", "left", "center"] : ["left", "left", "left", "center"],
+      aligns: ["left", ...(withHours ? ["right" as const] : []), ...Array(text).fill("left"), "center"],
       fontSize: 8,
     },
   };
@@ -1412,6 +1481,9 @@ export function monthlyIncomeStatement(ctx: CimContext): Block | undefined {
   const lab = monthLabel(mo.months[idx[idx.length - 1]!]!.key);
   const cols: NumCol[] = [{ w: 2.6, kind: "label" }, ...idx.map((i): NumCol => ({ w: 0.74, kind: "num", head: monthLabel(mo.months[i]!.key), group: `LTM ${lab}, by month` })), { w: GAP, kind: "gap" }, { w: 0.85, kind: "num", head: lab, group: "LTM" }];
   const s = mo.series;
+  // The owner's employer payroll taxes by month ([S4]'s months), moved from payroll to owner compensation as on the annual pages.
+  const taxRow = ctx.ds.adjustments?.find((a) => a.tier === "owner_compensation" && a.category === "owner_compensation" && a.origin !== "owner_comp");
+  const taxes = mo.months.map((m) => taxRow?.byMonth?.[m.key] ?? 0);
   const line = (type: NumRow["type"], label: string, key: string, series: number[] | undefined, dollar = false): NumRow | undefined => {
     if (!series) return undefined;
     const vals = idx.map((i) => k(series[i]!, { dollar }));
@@ -1428,8 +1500,8 @@ export function monthlyIncomeStatement(ctx: CimContext): Block | undefined {
     line("key", "Gross profit", "m.gp", s.gross_profit, true),
     ratio("% margin", "m.gm", s.gross_profit, s.revenue),
     { type: "section", label: "Operating expenses" } as NumRow,
-    line("line", "Payroll, excluding the owner", "m.payroll", s.payroll),
-    line("line", "Owner compensation", "m.owner", s.owner_comp),
+    line("line", "Payroll, excluding the owner", "m.payroll", s.payroll?.map((v, i) => v - taxes[i]!)),
+    line("line", taxes.some(Boolean) ? "Owner compensation, with payroll taxes" : "Owner compensation", "m.owner", s.owner_comp?.map((v, i) => v + taxes[i]!)),
     line("line", "Rent", "m.rent", s.rent),
     line("line", "Advertising and marketing", "m.marketing", s.marketing),
     line("line", "Other operating expenses", "m.other", s.other_opex),
@@ -1438,7 +1510,7 @@ export function monthlyIncomeStatement(ctx: CimContext): Block | undefined {
     line("key", "Reported EBITDA", "m.ebitda", s.reported_ebitda, true),
     ratio("% margin", "m.margin", s.reported_ebitda, s.revenue),
     line("line", "(+) Normalization adjustments", "m.norm", s.total_normalization),
-    line("line", "(+) Owner compensation, as paid [S1]", "m.s1", s.owner_comp_as_paid),
+    line("line", `(+) ${ownerCompRung(ctx).label} ${ownerCompRung(ctx).refs}`, "m.s1", s.owner_comp_as_paid),
     ctx.mainStreet ? line("key", "SDE", "m.sde", s.sde, true) : undefined,
     line("line", `(${EN_DASH}) Market replacement compensation [S2]`, "m.s2", s.market_replacement),
     ctx.mainStreet ? line("line", `(${EN_DASH}) Capital reserve [S3]`, "m.s3", s.capital_reserve) : undefined,

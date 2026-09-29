@@ -8,7 +8,7 @@ import { confirm, nonGaap, pageCopy, pageRef, PER_MANAGEMENT, resolveCopy, stand
 import type { CimCopy } from "../copy.ts";
 import type { Block, TextCell } from "../design.ts";
 import { r3, spanW } from "../design.ts";
-import { adjustmentSupport, ebitdaLadder, keyObservations, ladderWaterfall, observationsBlock, ownerCompensation, usable } from "../exhibits.ts";
+import { adjustmentSupport, ebitdaLadder, keyObservations, ladderWaterfall, observationsBlock, ownerCompensation, reserveFootnote, reserveIsProxy, usable } from "../exhibits.ts";
 import { fmtDollars, fmtPct, k } from "../../util/format.ts";
 import { chooseTitle, draft, present, source } from "./common.ts";
 import type { PageModule, SectionModule } from "./types.ts";
@@ -23,7 +23,9 @@ const SECTION = "Adjusted EBITDA";
 function ladderFootnotes(ctx: CimContext): string[] {
   const rs = ctx.ds.recastInputs;
   const notes = [ctx.mainStreet ? "SDE is Adj. EBITDA before one owner's market pay and the capital reserve." : "[S1] adds back owner pay as paid; [S2] deducts a market replacement with taxes and benefits."];
-  if (rs) notes.push(`${fmtDollars(rs.replacementSalary)} general-manager salary per management, not independently verified, plus payroll taxes and benefits at ${fmtPct(rs.burdenPct, 0)} of salary.`);
+  if (rs) notes.push(`${fmtDollars(rs.replacementSalary)} manager salary per management, not independently verified, plus ${fmtPct(rs.burdenPct, 0)} payroll taxes and benefits.`);
+  // (3) marks the capital reserve when it is AMB's depreciation proxy (F23).
+  if (ctx.mainStreet && reserveIsProxy(ctx)) notes.push(reserveFootnote(ctx)!);
   return notes;
 }
 
@@ -46,7 +48,7 @@ const s7_1: PageModule = {
       "S7.1 title",
       copy.title,
       ctx.mainStreet
-        ? `Adj. EBITDA of ${b.t("adjEbitda.latest")} in ${ctx.latest.label} restates ${b.t("ownerComp.latest")} of owner pay to a ${b.maybe("replacementCost") ?? b.t("s2.latest")} market cost and deducts a ${b.t("s3.latest")} reserve`
+        ? `Adj. EBITDA of ${b.t("adjEbitda.latest")} in ${ctx.latest.label} restates ${b.t("ownerCompPaid.latest")} of owner pay to a ${b.maybe("replacementCost") ?? b.t("s2.latest")} market cost and deducts a ${b.t("s3.latest")} reserve`
         : `Adj. EBITDA of ${b.t("adjEbitda.latest")} in ${ctx.latest.label} after ${b.t("normTotal.latest")} of normalization and ${b.t("ownerAboveMarket.latest")} of owner pay above market`,
     );
     return [
@@ -94,11 +96,15 @@ const s7_2: PageModule = {
     const owner = ctx.carried.get("S7.2")?.includes("S7.3") ? ownerCompensation(ctx, usable(1, 7)) : undefined;
     const obs = observationsBlock(owner ? "owner compensation" : "the support table", keyObservations(ctx, "S7.2", copy.observations, present(owner, support)));
     const accepted = ctx.out.adjustments.filter((a) => a.row.status === "accepted" && a.row.tier !== "definitional" && a.row.tier !== "memo" && Object.values(a.byColumn).some((v) => v !== 0));
-    const documented = accepted.filter((a) => a.row.evidence === "documented").length;
+    // A depreciation proxy or a statutory-rate calculation is AMB's figure, not a record: counted apart from the documented rows.
+    const estimated = accepted.filter((a) => a.row.evidence === "pending" || (a.row.category === "capital_reserve" && reserveIsProxy(ctx))).length;
+    const represented = accepted.filter((a) => a.row.evidence === "management_representation").length;
+    const documented = accepted.length - estimated - represented;
     const b = ctx.brief;
+    const byAmb = estimated ? `, ${estimated} calculated by AMB` : "";
     const title = chooseTitle(ctx, "S7.2 title", copy.title, [
-      `${accepted.length} accepted adjustments, ${documented} documented in the records and ${accepted.length - documented} by management representation`,
-      `${accepted.length} accepted adjustments: ${documented} documented and ${accepted.length - documented} resting on management representation`,
+      `${accepted.length} accepted adjustments: ${documented} documented in the records${byAmb} and ${represented} by management representation`,
+      `${accepted.length} accepted adjustments: ${documented} documented${byAmb} and ${represented} resting on management representation`,
     ]);
     return [
       draft(ctx, {
@@ -109,7 +115,8 @@ const s7_2: PageModule = {
         notes: {
           source: source(ctx.sources.financials, "general ledger detail", ctx.sources.payroll, "Seller add-back list"),
           note: `Figures in USD thousands; positive amounts increase EBITDA. Only accepted adjustments are included; memo items are not added. ${b.has("replacementCost") ? `[S2] is ${b.t("replacementCost")} a year.` : ""}`.trim(),
-          footnotes: [PER_MANAGEMENT, ...(owner && ctx.ds.recastInputs?.capitalReserve ? [ctx.ds.recastInputs.capitalReserve.source + "."] : [])],
+          // (2) is the reserve's footnote: the owner table marks its reserve line, and a proxy's evidence cell says it is an estimate.
+          footnotes: [PER_MANAGEMENT, ...((owner || reserveIsProxy(ctx)) && reserveFootnote(ctx) ? [reserveFootnote(ctx)!] : [])],
         },
         carries: owner ? ["S7.3"] : [],
       }),
@@ -128,7 +135,7 @@ function fallback72(ctx: CimContext): NonNullable<CimCopy["s7_2"]> {
   const [above, replacement] = ctx.present.has("S7.3") ? ["oc.above", "oc.replacement"] : [`support.${ref("owner_compensation")}`, `support.${ref("replacement_cost")}`];
   return {
     observations: [
-      { row: above, lead: "Owner pay above market of {{ownerAboveMarket.latest}}", body: "is compensation as paid of {{ownerComp.latest}} less the {{replacementCost}} replacement cost." },
+      { row: above, lead: "Owner pay above market of {{ownerAboveMarket.latest}}", body: "is compensation as paid of {{ownerCompPaid.latest}} less the {{replacementCost}} replacement cost." },
       { row: replacement, lead: "The replacement cost of {{replacementCost}}", body: "is a {{replacementSalary}} salary plus {{burdenPct}} payroll taxes and benefits." },
     ],
   };
@@ -146,7 +153,7 @@ const s7_3: PageModule = {
       draft(ctx, {
         id: "S7.3",
         section: SECTION,
-        title: `SDE of ${ctx.brief.t("sde.latest")} keeps one working owner's pay of ${ctx.brief.t("ownerComp.latest")}`,
+        title: `SDE of ${ctx.brief.t("sde.latest")} keeps one working owner's pay of ${ctx.brief.t("ownerCompPaid.latest")}`,
         rows: [{ columns: [{ span: [1, 7], blocks: present(ownerCompensation(ctx, usable(1, 7))) }] }],
         notes: { source: source(ctx.sources.financials, ctx.sources.payroll), note: standardNote(ctx), footnotes: ladderFootnotes(ctx).slice(1) },
       }),

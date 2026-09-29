@@ -23,12 +23,12 @@ describe("contract figures (FY2025 = LTM Dec-25)", () => {
   it("ladder rungs match the finished contract", () => {
     const n = model.namedOutputs;
     expect(n.RepEBITDA_FY[2025]).toBe(319_515);
-    expect(n.SDE_FY[2025]).toBe(547_915);
-    expect(n.AdjEBITDA_FY[2025]).toBe(371_865);
+    expect(n.SDE_FY[2025]).toBe(561_775);
+    expect(n.AdjEBITDA_FY[2025]).toBe(385_725);
     expect(n.RepEBITDA_LTM).toBe(319_515);
-    expect(n.SDE_LTM).toBe(547_915);
-    expect(n.AdjEBITDA_LTM).toBe(371_865);
-    expect(n.PFAdjEBITDA).toBe(371_865);
+    expect(n.SDE_LTM).toBe(561_775);
+    expect(n.AdjEBITDA_LTM).toBe(385_725);
+    expect(n.PFAdjEBITDA).toBe(385_725);
   });
 
   it("columns follow guide 5.2: FY-2..FY, YTD PY/CY, LTM PY/CY, PF, then five projected years", () => {
@@ -194,8 +194,8 @@ describe("annual-only mode (guide 5.2A)", () => {
   it("keeps only fiscal-year columns and the same fiscal-year ladder", () => {
     expect(annual.granularity).toBe("annual");
     expect(annual.columns.filter((c) => !c.projected).every((c) => c.ref.kind === "fiscal_year")).toBe(true);
-    expect(annual.namedOutputs.SDE_FY[2025]).toBe(547_915);
-    expect(annual.namedOutputs.AdjEBITDA_FY[2025]).toBe(371_865);
+    expect(annual.namedOutputs.SDE_FY[2025]).toBe(561_775);
+    expect(annual.namedOutputs.AdjEBITDA_FY[2025]).toBe(385_725);
     expect(annual.masterCheck).toBe("All checks OK (render check pending)");
   });
 

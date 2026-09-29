@@ -124,6 +124,36 @@ export interface MappedLine extends RawLine {
   mappedBy: "override" | "source" | "rule" | "default";
 }
 
+/** How a bank line is treated in the proof of cash: only Operating deposits count as revenue collected. */
+export type BankClassification = "Operating" | "Transfer" | "Loan" | "Owner" | "Reversal" | "Withdrawal";
+
+/** One bank transaction as exported (amount signed: deposits positive), with the bot's classification beside it. */
+export interface BankTransaction {
+  /** YYYY-MM-DD. */
+  date: string;
+  description: string;
+  amount: number;
+  classification: BankClassification;
+  file: string;
+}
+
+/**
+ * A subtotal an accounting export prints (Total Income, Gross Profit, Total
+ * Current Assets, Net Income). Accounts are read line by line; these are
+ * kept to prove the lines read add up to what the export says (C01).
+ */
+export interface ExportTotal {
+  statement: "pnl" | "balance_sheet";
+  label: string;
+  /** Headings the total closes, outermost first, report wrappers removed ("Expenses", "Payroll Expenses"). */
+  path: string[];
+  file: string;
+  /** P&L: the amount per fiscal year the export covers. */
+  byFiscalYear: Record<number, number>;
+  /** P&L single-month columns, or every balance-sheet date. */
+  byMonth?: Record<MonthKey, number>;
+}
+
 /** What a single ingestor hands back. */
 export interface SourceExtract {
   kind: SourceKind;
@@ -210,6 +240,10 @@ export interface FinancialDataset {
   reconciliations?: SourceReconciliation[];
   /** Operating deposits by calendar month, transfers excluded. Present when a bank source was read. */
   depositsByMonth?: Record<MonthKey, { amount: number; excluded: number }>;
+  /** Every bank transaction as exported, classified, when the bank source listed transactions (Raw - Bank). */
+  bankTransactions?: BankTransaction[];
+  /** The subtotals each accounting export prints, for the periods the dataset reads from it (C01). */
+  exportTotals?: ExportTotal[];
   /** Debt and debt-like items at the latest balance-sheet date (guide 5.6). Present when a balance sheet exists. */
   debtLikeItems?: DebtLikeItem[];
 }

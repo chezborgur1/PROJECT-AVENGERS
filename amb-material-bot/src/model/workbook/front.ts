@@ -350,7 +350,8 @@ export function planSummary(ctx: TabContext): SheetBuilder {
   b.spacerRow(r++);
   const vd = model.valuationDetail!;
   const cases = ["low", "mid", "high"] as const;
-  const caseCols = [3, 4, 5];
+  // The first three value columns, wherever the period groups put their spacers (one fiscal year leaves D a spacer).
+  const caseCols = cols.length >= 3 ? cols.slice(0, 3).map((c) => c.col) : [3, 4, 5];
   b.section(r++, "Indicative valuation range (internal; never in the CIM)", spans);
   b.cell(r, 2, { style: "header", v: model.mode.mode === "mainStreet" ? "SDE × multiple" : "Adj. EBITDA × multiple", role: "text", align: { horizontal: "left" } });
   cases.forEach((c, i) => b.cell(r, caseCols[i]!, { style: "header", v: c === "low" ? "Low" : c === "mid" ? "Mid" : "High", role: "text" }));

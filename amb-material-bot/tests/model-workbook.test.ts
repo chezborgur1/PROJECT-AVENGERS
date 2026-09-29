@@ -113,15 +113,15 @@ describe("verifyWorkbook", () => {
     expect(verified.compared).toBeGreaterThan(6_000);
   });
 
-  it("the ladder on the workbook ties to Adj. EBITDA 371,865 and SDE 547,915", async () => {
+  it("the ladder on the workbook ties to Adj. EBITDA 385,725 and SDE 561,775", async () => {
     const named = (name: string) => {
       const { sheet, row: r, col } = namedCell(wb, name);
       return ev.value(sheet, r, col);
     };
-    expect(named("AdjEBITDA_LTM")).toBeCloseTo(371.865, 9);
-    expect(named("SDE_LTM")).toBeCloseTo(547.915, 9);
+    expect(named("AdjEBITDA_LTM")).toBeCloseTo(385.725, 9);
+    expect(named("SDE_LTM")).toBeCloseTo(561.775, 9);
     expect(named("RepEBITDA_LTM")).toBeCloseTo(319.515, 9);
-    expect(named("PFAdjEBITDA")).toBeCloseTo(371.865, 9);
+    expect(named("PFAdjEBITDA")).toBeCloseTo(385.725, 9);
     expect(named("MasterCheck")).toBe("All checks OK (render check pending)");
   }, 120_000);
 
@@ -161,8 +161,8 @@ describe("LibreOffice recalculation", () => {
       const { sheet, row: r, col } = namedCell(lo, name);
       return (lo.getWorksheet(sheet)!.getCell(r, col).value as { result?: unknown }).result;
     };
-    expect(cached("AdjEBITDA_LTM")).toBeCloseTo(371.865, 6);
-    expect(cached("SDE_LTM")).toBeCloseTo(547.915, 6);
+    expect(cached("AdjEBITDA_LTM")).toBeCloseTo(385.725, 6);
+    expect(cached("SDE_LTM")).toBeCloseTo(561.775, 6);
     expect(cached("RepEBITDA_LTM")).toBeCloseTo(319.515, 6);
     expect(cached("MasterCheck")).toBe("All checks OK (render check pending)");
   }, 360_000);
@@ -253,8 +253,9 @@ describe("house style (guide 5.8-5.13)", () => {
       expect(ws.views[0]!.showGridLines, name).toBe(false);
       expect(ws.views[0]).toMatchObject({ state: "frozen", xSplit: 2, ySplit: 6 });
       expect(ws.pageSetup.orientation, name).toBe("landscape");
-      // Absolute, so inserting a row inside the table never moves the area.
-      expect(wbXml, name).toMatch(new RegExp(`<definedName name="_xlnm.Print_Area" localSheetId="\\d+">'${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}'!\\$B\\$2:\\$[A-Z]+\\$\\d+</definedName>`));
+      // Absolute, so inserting a row inside the table never moves the area; a Basis column printed apart is a second range.
+      const q = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      expect(wbXml, name).toMatch(new RegExp(`<definedName name="_xlnm.Print_Area" localSheetId="\\d+">'${q}'!\\$B\\$2:\\$[A-Z]+\\$\\d+(,'${q}'!\\$[A-Z]+\\$\\d+:\\$[A-Z]+\\$\\d+)*</definedName>`));
       expect(ws.headerFooter.oddFooter, name).toContain("Strictly confidential");
       expect(ws.headerFooter.oddFooter, name).toContain("Page &P of &N");
       expect(ws.headerFooter.oddHeader, name).toContain("As of 12/31/25");
@@ -379,7 +380,7 @@ describe("the sample request folder, as ingested", () => {
   it("verifies too: rows without months are prorated in the month grid as the engine prorates them", async () => {
     const ds = (await gatherIntake(row, REPO, () => {})).dataset;
     const { model: ingested, file: ingestedFile } = await build(ds, "ingested");
-    expect(ingested.namedOutputs.AdjEBITDA_LTM).toBeCloseTo(371_865, 6);
+    expect(ingested.namedOutputs.AdjEBITDA_LTM).toBeCloseTo(385_725, 6);
     const v = await verifyWorkbook(ingestedFile, ingested);
     expect(v.errors).toEqual([]);
     expect(v.mismatches).toEqual([]);
@@ -448,17 +449,18 @@ describe("period and balance-sheet cases beyond the sample", () => {
     expect(ds.warnings.some((w) => /Owner's personal vehicle.*run-rate of FY2024/.test(w))).toBe(true);
   }, 240_000);
 
-  it("an accepted owner payroll-tax row [S4] lifts SDE and Adj. EBITDA by its amount and still verifies (F6)", async () => {
+  it("the owner payroll-tax row [S4] carries its amount into SDE and Adj. EBITDA, and held back as proposed it still verifies (F6, F20)", async () => {
     const ds = ridgelineDataset();
     const s4 = ds.adjustments!.find((a) => a.description === "Payroll taxes and benefits on owner compensation")!;
-    s4.status = "accepted";
-    const { model: accepted, file: acceptedFile } = await build(ds, "s4-accepted");
-    const v = await verifyWorkbook(acceptedFile, accepted);
+    expect(s4.status).toBe("accepted");
+    s4.status = "proposed";
+    const { model: held, file: heldFile } = await build(ds, "s4-proposed");
+    const v = await verifyWorkbook(heldFile, held);
     expect(v.errors).toEqual([]);
     expect(v.mismatches).toEqual([]);
     expect(v.lint).toEqual([]);
-    expect(accepted.namedOutputs.SDE_LTM! - model.namedOutputs.SDE_LTM!).toBeCloseTo(13_860, 6);
-    expect(accepted.namedOutputs.AdjEBITDA_LTM! - model.namedOutputs.AdjEBITDA_LTM!).toBeCloseTo(13_860, 6);
+    expect(model.namedOutputs.SDE_LTM! - held.namedOutputs.SDE_LTM!).toBeCloseTo(13_860, 6);
+    expect(model.namedOutputs.AdjEBITDA_LTM! - held.namedOutputs.AdjEBITDA_LTM!).toBeCloseTo(13_860, 6);
   }, 240_000);
 
   it("a June fiscal year-end with December balance sheets", async () => {
@@ -595,7 +597,7 @@ describe("QA round 1 fixes on the written workbook", () => {
     await book.xlsx.writeFile(out);
     const e = await evaluateWorkbook(out);
     const tie = e.workbook.getWorksheet("Databook")!.getRow(6).values as unknown[];
-    const diffCol = tie.findIndex((v) => v === "Diff by period ($)");
+    const diffCol = tie.findIndex((v) => v === "Diff, all periods");
     expect(e.value("Databook", 8, diffCol)).toBeCloseTo(Math.SQRT2 * 100, 6);
     expect(e.value("Databook", 8, diffCol + 1)).toBe("CHECK");
   }, 180_000);

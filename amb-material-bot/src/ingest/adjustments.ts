@@ -555,13 +555,14 @@ export function buildSchedule(ctx: ScheduleContext): ScheduleResult {
   }
   const s1TiesToPnl = years.every((y) => Math.abs((s1Amounts[y] ?? 0) - (ownerComp[y] ?? 0)) < 1);
   const ownerLabel = ctx.owner ? `${ctx.owner.name}` : "the owner";
+  const s1Evidence = s1Override?.evidence ?? "documented";
   rows.push({
     tier: "owner_compensation",
     description: "Owner compensation",
     category: "owner_compensation",
     basis: s1Override?.basis ?? (s1Amounts[latest] ? `Adds back ${ownerLabel}'s compensation as paid, ${money(s1Amounts[latest] ?? 0)} in FY${latest}, per the P&L ${accountName("owner_comp")} account.` : "None: no owner compensation is expensed on the P&L (a sole proprietor's draw is not an expense), so SDE equals Reported EBITDA plus normalization adjustments."),
     sourceDocument: s1Override?.sourceDocument ?? `P&L, account ${accountName("owner_comp")}`,
-    evidence: s1Override?.evidence ?? "documented",
+    evidence: s1Evidence,
     status: s1Override?.status ?? "accepted",
     byFiscalYear: s1Amounts,
     byMonth: monthly ? (s1TiesToPnl ? categoryMonths(monthly, "owner_comp") : monthsForRow(monthly, years, s1Amounts, categoryMonths(monthly, "owner_comp"), stubRuleFor(s1Override!))) : undefined,
@@ -591,6 +592,39 @@ export function buildSchedule(ctx: ScheduleContext): ScheduleResult {
     sourceFile: s2Override?.sourceFile,
   });
 
+  // The employer taxes and benefits on the owner's pay sit in the P&L payroll line, but SDE adds back one working owner's total
+  // compensation (guide 5.4: salary, payroll taxes, benefits), so they are a second owner-compensation row. It follows [S3] so
+  // the fixed refs [S1]–[S3] hold and sums into the [S1] rung. It is accepted whenever [S1] is documented: the taxes follow
+  // from that salary at statutory rates, and leaving them out while [S2] deducts a burdened replacement would understate
+  // SDE and Adj. EBITDA by the same amount. An [S1] that is not documented leaves it proposed with [S1].
+  const ownerTaxes: Record<number, number> = s1TaxesOverride?.byFiscalYear ?? ctx.ownerEmployerCosts?.byFiscalYear ?? Object.fromEntries(years.map((y) => [y, employerPayrollTaxes(s1Amounts[y] ?? 0, y)]));
+  const ownerTaxesByYear = Object.fromEntries(years.map((y) => [y, ownerTaxes[y] ?? 0]));
+  let ownerTaxRow: Omit<Adjustment, "ref"> | undefined;
+  if (years.some((y) => ownerTaxesByYear[y])) {
+    const fromRegister = !s1TaxesOverride && ctx.ownerEmployerCosts;
+    const ownerAccounts = [...new Set(ctx.lines.filter((l) => l.statement === "pnl" && l.category === "owner_comp").map((l) => l.account))];
+    const wageBase = socialSecurityWageBase(latest);
+    ownerTaxRow = {
+      tier: "owner_compensation",
+      description: "Payroll taxes and benefits on owner compensation",
+      category: "owner_compensation",
+      basis:
+        s1TaxesOverride?.basis ??
+        (fromRegister
+          ? `Adds back the employer taxes and benefits on ${ownerLabel}'s pay that the payroll register records, ${money(ownerTaxesByYear[latest] ?? 0)} in FY${latest}; the P&L carries them in the payroll line.`
+          : `Adds back employer payroll taxes on ${ownerLabel}'s salary, ${money(ownerTaxesByYear[latest] ?? 0)} in FY${latest}, at statutory rates (Social Security 6.2% to the $${wageBase.toLocaleString("en-US")} wage base, Medicare 1.45%, federal unemployment on $7,000); the P&L carries them in the payroll line. State unemployment and owner benefits are not included.`),
+      sourceDocument: s1TaxesOverride?.sourceDocument ?? (fromRegister ? `Payroll register (${ctx.ownerEmployerCosts!.file})` : `Statutory rates on the P&L ${accountName("owner_comp")} account; payroll register employer detail to be requested`),
+      evidence: s1TaxesOverride?.evidence ?? (fromRegister ? "documented" : "pending"),
+      status: s1TaxesOverride?.status ?? (s1Evidence === "documented" ? "accepted" : "proposed"),
+      byFiscalYear: ownerTaxesByYear,
+      ...(monthly
+        ? { byMonth: monthsForRow(monthly, years, ownerTaxesByYear, categoryMonths(monthly, "owner_comp"), stubRuleFor({ category: "owner_compensation", stubAmount: s1TaxesOverride?.stubAmount })), ...(ownerAccounts.length === 1 ? { accounts: ownerAccounts } : {}) }
+        : {}),
+      origin: "suggested",
+      sourceFile: s1TaxesOverride?.sourceFile ?? pnlFile,
+    };
+  }
+
   // Pro forma rows: annual run-rate amounts, applied in full to the PF column (never spread over months).
   for (const r of pfRows) {
     rows.push(toAdjustment(r, { basis: `${r.pfMethod ?? "Run-rate"}: ${r.description}.`, sourceDocument: `Adjustments schedule (${r.sourceFile})` }));
@@ -603,7 +637,7 @@ export function buildSchedule(ctx: ScheduleContext): ScheduleResult {
   const reported = windowPnl.revenue - windowPnl.cogs - windowPnl.payroll - windowPnl.owner_comp - windowPnl.rent - windowPnl.marketing - windowPnl.other_opex + windowPnl.other_income - windowPnl.other_expense;
   const firstMonth = monthly?.months[0];
   const fye = firstMonth ? (firstMonth.month - firstMonth.fiscalMonth + 12) % 12 || 12 : 12;
-  const measured = rows.filter((a) => a.status === "accepted" && a.tier !== "definitional" && a.tier !== "memo");
+  const measured = [...rows, ...(ownerTaxRow ? [ownerTaxRow] : [])].filter((a) => a.status === "accepted" && a.tier !== "definitional" && a.tier !== "memo");
   const measure = reported + measured.reduce((s, a) => s + (pfColumnAmount(a, windowMonths, latest, fye) ?? 0), 0);
   if (!windowMonths && measured.some((a) => a.tier === "pro_forma" && a.byFiscalYear[latest])) {
     warnings.push("Accepted pro forma rows are not applied in annual-only mode (there is no PF column; the Low / Mid / High scenarios restate the lines instead), so they do not count toward the Main Street test.");
@@ -647,36 +681,8 @@ export function buildSchedule(ctx: ScheduleContext): ScheduleResult {
     origin: "capital_reserve",
     sourceFile: s3Override?.sourceFile,
   });
-
-  // The employer taxes and benefits on the owner's pay sit in the P&L payroll line, but SDE adds back one working owner's total
-  // compensation (guide 5.4), so they are a second owner-compensation row. It follows [S3] so the fixed refs [S1]–[S3] hold,
-  // sums into the [S1] rung, and stays proposed until the advisor accepts it: the statutory estimate is not evidence.
-  const ownerTaxes: Record<number, number> = s1TaxesOverride?.byFiscalYear ?? ctx.ownerEmployerCosts?.byFiscalYear ?? Object.fromEntries(years.map((y) => [y, employerPayrollTaxes(s1Amounts[y] ?? 0, y)]));
-  const ownerTaxesByYear = Object.fromEntries(years.map((y) => [y, ownerTaxes[y] ?? 0]));
-  if (years.some((y) => ownerTaxesByYear[y])) {
-    const fromRegister = !s1TaxesOverride && ctx.ownerEmployerCosts;
-    const ownerAccounts = [...new Set(ctx.lines.filter((l) => l.statement === "pnl" && l.category === "owner_comp").map((l) => l.account))];
-    const wageBase = socialSecurityWageBase(latest);
-    rows.push({
-      tier: "owner_compensation",
-      description: "Payroll taxes and benefits on owner compensation",
-      category: "owner_compensation",
-      basis:
-        s1TaxesOverride?.basis ??
-        (fromRegister
-          ? `Adds back the employer taxes and benefits on ${ownerLabel}'s pay that the payroll register records, ${money(ownerTaxesByYear[latest] ?? 0)} in FY${latest}; the P&L carries them in the payroll line.`
-          : `Adds back employer payroll taxes on ${ownerLabel}'s salary, ${money(ownerTaxesByYear[latest] ?? 0)} in FY${latest}, at statutory rates (Social Security 6.2% to the $${wageBase.toLocaleString("en-US")} wage base, Medicare 1.45%, federal unemployment on $7,000); the P&L carries them in the payroll line. State unemployment and owner benefits are not included.`),
-      sourceDocument: s1TaxesOverride?.sourceDocument ?? (fromRegister ? `Payroll register (${ctx.ownerEmployerCosts!.file})` : `Statutory rates on the P&L ${accountName("owner_comp")} account; payroll register employer detail to be requested`),
-      evidence: s1TaxesOverride?.evidence ?? (fromRegister ? "documented" : "pending"),
-      status: s1TaxesOverride?.status ?? "proposed",
-      byFiscalYear: ownerTaxesByYear,
-      ...(monthly
-        ? { byMonth: monthsForRow(monthly, years, ownerTaxesByYear, categoryMonths(monthly, "owner_comp"), stubRuleFor({ category: "owner_compensation", stubAmount: s1TaxesOverride?.stubAmount })), ...(ownerAccounts.length === 1 ? { accounts: ownerAccounts } : {}) }
-        : {}),
-      origin: "suggested",
-      sourceFile: s1TaxesOverride?.sourceFile ?? pnlFile,
-    });
-  }
+  // After [S3], so the fixed refs [S1]–[S3] hold and this row is [S4].
+  if (ownerTaxRow) rows.push(ownerTaxRow);
 
   // Memo rows: listed, never added.
   for (const r of memoRows) {

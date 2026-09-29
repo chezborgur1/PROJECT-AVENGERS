@@ -3,7 +3,7 @@
 // needs: month-level P&L, every dated balance sheet, deposits by month and
 // the facts a tax return states about the books.
 
-import type { BooksBasis, MonthKey, SourceExtract } from "../domain/financials.ts";
+import type { BankTransaction, BooksBasis, ExportTotal, MonthKey, SourceExtract } from "../domain/financials.ts";
 import type { DatedBalanceSheet, MonthlyAccount } from "./reportTable.ts";
 
 export interface IngestExtract extends SourceExtract {
@@ -13,6 +13,10 @@ export interface IngestExtract extends SourceExtract {
   balanceSheets?: DatedBalanceSheet[];
   /** Operating deposits by calendar month, transfers and the like excluded. */
   depositsByMonth?: Record<MonthKey, { amount: number; excluded: number }>;
+  /** Bank exports that list transactions: every line, classified. */
+  bankTransactions?: BankTransaction[];
+  /** The subtotals an accounting report prints (Total Income, Net Income). */
+  exportTotals?: ExportTotal[];
   /** Cash or accrual, when the source says so (report basis line, tax return line F). */
   booksBasis?: BooksBasis;
   /** Equipment cost placed in service per fiscal year (Form 4562), the capital reserve default. */

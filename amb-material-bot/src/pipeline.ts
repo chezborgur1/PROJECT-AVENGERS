@@ -156,6 +156,9 @@ function openQuestionsMd(p: { row: RequestRow; ds: FinancialDataset; model: Mode
   if (represented.length) {
     toReview.push(`Accepted on management representation only, and footnoted as such in the CIM: ${represented.map((a) => `[${a.ref}] ${a.description}`).join("; ")}. Supporting documents would let them print as documented.`);
   }
+  // An accepted row computed from documented figures (the owner's payroll taxes at statutory rates) still wants its own document.
+  const pending = schedule.filter((a) => a.status === "accepted" && a.evidence === "pending");
+  if (pending.length) toReview.push(`Accepted with the supporting document still to come: ${pending.map((a) => `[${a.ref}] ${a.description} (${a.sourceDocument})`).join("; ")}.`);
 
   const omitted = cim.plan.modules.filter((m) => m.state === "omitted").map((m) => `- ${m.id} ${m.name}: ${m.reason ?? "trigger not met"}`);
 

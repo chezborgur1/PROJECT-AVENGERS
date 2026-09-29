@@ -22,11 +22,13 @@ import {
   type Addback,
   type Adjustment,
   type BalanceSheetPeriod,
+  type BankTransaction,
   type BsCategory,
   type BsDetailLine,
   type BooksBasis,
   type DealFormDecision,
   type DebtLikeItem,
+  type ExportTotal,
   type FinancialDataset,
   type IsCategory,
   type KpiSeries,
@@ -153,6 +155,26 @@ function buildGrid(sources: IngestExtract[], years: number[], fyEndMonth: number
     };
   }
   return undefined;
+}
+
+/**
+ * The subtotals each export prints, for the periods the dataset reads from
+ * that export, one entry per total line in the order the first export
+ * prints them.
+ */
+function chosenExportTotals(picks: { src: IngestExtract; statement: ExportTotal["statement"]; months: MonthKey[]; years: number[] }[]): ExportTotal[] {
+  const out = new Map<string, ExportTotal>();
+  for (const { src, statement, months, years } of picks) {
+    for (const t of src.exportTotals ?? []) {
+      if (t.statement !== statement) continue;
+      const key = `${statement}|${t.path.join(" > ")}|${t.label}`;
+      const e = out.get(key) ?? { statement, label: t.label, path: t.path, file: path.basename(t.file), byFiscalYear: {} };
+      for (const y of years) if (t.byFiscalYear[y] !== undefined) e.byFiscalYear[y] = t.byFiscalYear[y]!;
+      for (const m of months) if (t.byMonth?.[m] !== undefined) (e.byMonth ??= {})[m] = t.byMonth[m]!;
+      out.set(key, e);
+    }
+  }
+  return [...out.values()].filter((t) => Object.keys(t.byFiscalYear).length || Object.keys(t.byMonth ?? {}).length);
 }
 
 /** Category totals of one source for one year, mapped the same way the chosen source is. */
@@ -301,6 +323,14 @@ export function mergeSources(input: MergeInput): FinancialDataset {
   }
 
   // --- Source reconciliation ----------------------------------------------------
+  // The subtotals the exports print, for the periods read from each: the grid's months and years, each other year from
+  // its chosen source, each balance-sheet date from its own.
+  const exportTotals = chosenExportTotals([
+    ...(grid ? [{ src: grid.source, statement: "pnl" as const, months: grid.monthly.months.map((m) => m.key), years: years.filter((y) => chosenPnl.get(y) === grid.source) }] : []),
+    ...years.filter((y) => chosenPnl.get(y) && chosenPnl.get(y) !== grid?.source).map((y) => ({ src: chosenPnl.get(y)!, statement: "pnl" as const, months: [], years: [y] })),
+    ...balanceSheets.map((bs) => ({ src: candidates.get(bs.period.key)!.src, statement: "balance_sheet" as const, months: [bs.period.key], years: bs.fiscalYearEnd ? [bs.period.fiscalYear] : [] })),
+  ]);
+
   const reconciliations: SourceReconciliation[] = [];
   for (const year of years) {
     const chosen = chosenPnl.get(year);
@@ -335,14 +365,18 @@ export function mergeSources(input: MergeInput): FinancialDataset {
   // --- Bank deposits --------------------------------------------------------------
   const depositsByMonth: NonNullable<FinancialDataset["depositsByMonth"]> = {};
   const deposits: FinancialDataset["deposits"] = {};
+  const bankTransactions: BankTransaction[] = [];
   let anyByMonth = false;
+  // Deposits are summed in cents, as the bank prints them, so no binary noise reaches the raw tab.
+  const cents = (v: number) => Math.round(v * 100) / 100;
   for (const e of ordered) {
+    if (e.bankTransactions) bankTransactions.push(...e.bankTransactions);
     if (e.depositsByMonth) {
       anyByMonth = true;
       for (const [k, d] of Object.entries(e.depositsByMonth)) {
         const cur = (depositsByMonth[k] ??= { amount: 0, excluded: 0 });
-        cur.amount += d.amount;
-        cur.excluded += d.excluded;
+        cur.amount = cents(cur.amount + d.amount);
+        cur.excluded = cents(cur.excluded + d.excluded);
       }
     } else {
       for (const [y, d] of Object.entries(e.deposits ?? {})) {
@@ -568,6 +602,8 @@ export function mergeSources(input: MergeInput): FinancialDataset {
     ...(input.intake ? { intake: input.intake.facts } : {}),
     reconciliations,
     ...(anyByMonth ? { depositsByMonth } : {}),
+    ...(bankTransactions.length ? { bankTransactions: bankTransactions.sort((a, b) => a.date.localeCompare(b.date)) } : {}),
+    ...(exportTotals.length ? { exportTotals } : {}),
     ...(debtLikeItems ? { debtLikeItems } : {}),
   };
 }

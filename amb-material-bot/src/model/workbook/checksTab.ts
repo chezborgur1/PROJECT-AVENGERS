@@ -95,8 +95,9 @@ export function checkFormulas(model: ModelOutput, plans: Partial<Record<SheetKey
   if (has("databook")) {
     const diff = colLetter(databookTieCols(model).diff);
     const block = (first: string, last: string) => `${S("databook")}$${diff}$${rowOf("databook", first)}:$${diff}$${rowOf("databook", last)}`;
-    const [pnl, bs] = [block("first", "last"), block("bsFirst", "bsLast")];
-    out.C01 = { f: `SQRT(SUMPRODUCT(${pnl},${pnl})+SUMPRODUCT(${bs},${bs}))` };
+    // Account rows and the export-total rows alike; the Databook is in dollars and this tab shows $000s.
+    const blocks = [["first", "last"], ["pnlTotalsFirst", "pnlTotalsLast"], ["bsFirst", "bsLast"], ["bsTotalsFirst", "bsTotalsLast"]].filter(([f]) => plans.databook!.rows[f!] !== undefined);
+    out.C01 = { f: `SQRT(${blocks.map(([f, l]) => block(f!, l!)).map((x) => `SUMPRODUCT(${x},${x})`).join("+")})/1000` };
   }
   if (has("monthly")) out.C02 = { f: rss(rowRange("monthly", "tie_out", MONTH_START, MONTH_START + monthsN - 1)) };
   if (has("monthly") && has("pnl")) {

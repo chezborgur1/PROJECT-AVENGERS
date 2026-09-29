@@ -12,7 +12,7 @@ import { COLOR, FMT, WIDTH } from "../styles.ts";
 import type { ModelOutput, NwcLines } from "../types.ts";
 import { isCreditCard, isCustomerMoney } from "../nwc.ts";
 import { A, type TabContext } from "./assumptionsTab.ts";
-import { DATABOOK_COL, MONTH_START, monthOffset } from "./data.ts";
+import { DATABOOK_COL, MONTH_START, monthOffset, RAW_BANK_COLS } from "./data.ts";
 import { ASOF, gridMonths, S, SHEET, serialOfMonthEnd, serialOfMonthStart } from "./layout.ts";
 
 const K = 1000;
@@ -661,6 +661,15 @@ export function planProofOfCash(ctx: TabContext, ds: FinancialDataset | undefine
   b.cell(6, 8, { style: "header", v: "Flag (above 5%)", role: "text", align: { horizontal: "left" } });
   const monthlyRow = `${S("monthly")}$${colLetter(MONTH_START)}$${rowOf("monthly", "revenue")}:$${colLetter(MONTH_START + months.length - 1)}$${rowOf("monthly", "revenue")}`;
   const monthlyHeader = `${S("monthly")}$${colLetter(MONTH_START)}$6:$${colLetter(MONTH_START + months.length - 1)}$6`;
+  // Deposits: the Operating lines of the pasted transactions in the month (n.a. when the month has no statement lines),
+  // or, for statements read as monthly totals, the month's row of the summary.
+  const tx = ds?.bankTransactions?.length ?? 0;
+  const bankCol = (c: number) => `${S("rawBank")}$${colLetter(c)}$4:$${colLetter(c)}$${3 + tx}`;
+  const inMonth = (month: string) => `${bankCol(RAW_BANK_COLS.date)},">="&${month},${bankCol(RAW_BANK_COLS.date)},"<="&EOMONTH(${month},0)`;
+  const depositsOf = (month: string) =>
+    tx
+      ? `IF(COUNTIFS(${inMonth(month)})=0,"n.a.",SUMIFS(${bankCol(RAW_BANK_COLS.amount)},${bankCol(RAW_BANK_COLS.classification)},"Operating",${inMonth(month)})/${K})`
+      : `IFERROR(INDEX(${S("rawBank")}$B:$B,MATCH(${month},${S("rawBank")}$A:$A,0))/${K},"n.a.")`;
   let r = 8;
   const first = r;
   // Months derive from AsOfDate like every period label (guide 5.2): the first from its offset, each next one from the row above.
@@ -671,7 +680,7 @@ export function planProofOfCash(ctx: TabContext, ds: FinancialDataset | undefine
     const monthF = i === 0 ? `EOMONTH(${ASOF},${monthOffset(model.assumptions!.asOfMonth, m) - 1})+1` : `EOMONTH(${addr(r - 1, 2)},0)+1`;
     b.formula(r, 2, monthF, { fmt: FMT.monthHeader, expect: serialOfMonthStart(m), label: `month ${m}`, align: { horizontal: "left" } });
     b.formula(r, 3, `INDEX(${monthlyRow},MATCH(${addr(r, 2)},${monthlyHeader},0))`, { style: "line", fmt: FMT.body, expect: rev / K, label: `revenue ${m}` });
-    b.formula(r, 4, `IFERROR(INDEX(${S("rawBank")}$B:$B,MATCH(${addr(r, 2)},${S("rawBank")}$A:$A,0))/${K},"n.a.")`, { style: "line", fmt: FMT.body, expect: dep === undefined ? "n.a." : dep / K, label: `deposits ${m}` });
+    b.formula(r, 4, depositsOf(addr(r, 2)), { style: "line", fmt: FMT.body, expect: dep === undefined ? "n.a." : dep / K, label: `deposits ${m}` });
     b.formula(r, 5, `IFERROR(${addr(r, 4)}-${addr(r, 3)},"n.a.")`, { style: "line", fmt: FMT.body, expect: dep === undefined ? "n.a." : (dep - rev) / K, label: `variance ${m}` });
     const pct = dep === undefined || !rev ? "n.a." : (dep - rev) / rev;
     b.formula(r, 6, `IFERROR(${addr(r, 5)}/${addr(r, 3)},"n.a.")`, { style: "ratio", fmt: FMT.pct1, expect: pct, label: `variance pct ${m}` });
@@ -697,7 +706,7 @@ export function planProofOfCash(ctx: TabContext, ds: FinancialDataset | undefine
   b.formula(r, 6, `IFERROR(${addr(totalRow, 5)}/${addr(totalRow, 3)},0)`, { style: "check", fmt: FMT.pct1, expect: totalRev ? (totalDep - totalRev) / totalRev : 0, tol: 1e-6, label: "C14" });
   b.cf({ ref: addr(r, 6), formula: `ABS(${addr(r, 6)})>0.05`, font: { color: "FF0000" } });
   r += 2;
-  b.note(r, 2, "Note: operating deposits exclude transfers, loan proceeds and owner contributions (Raw - Bank). A variance inside 5% is consistent with timing of collections and sales tax; a larger one needs an explanation before the revenue figure is relied on.");
+  b.note(r, 2, `Note: ${tx ? "deposits are the Operating lines of Raw - Bank, whose Classification column (an input) marks transfers, loan proceeds, owner contributions and reversals" : "operating deposits exclude transfers, loan proceeds and owner contributions (Raw - Bank)"}. A variance inside 5% is consistent with timing of collections and sales tax; a larger one needs an explanation before the revenue figure is relied on.`);
   b.print({ area: `B2:${addr(r, 8)}`, landscape: false, fitToWidth: 1, fitToHeight: 0, titlesRow: "5:6" });
   b.furniture(ctx.codeName, ctx.asOfLabel);
   return b;

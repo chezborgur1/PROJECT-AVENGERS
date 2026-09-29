@@ -89,12 +89,12 @@ describe("numbers brief", () => {
   it("prints from the model's periods with the contract's figures", () => {
     const { ds, row, out } = ridgeline();
     const brief = buildContext({ row, ds, out, copy: { open_questions: [] }, firm, date: new Date() }).brief;
-    expect(brief.value("adjEbitda.FY2025")).toBeCloseTo(371_865, 0);
-    expect(brief.value("sde.FY2025")).toBeCloseTo(547_915, 0);
+    expect(brief.value("adjEbitda.FY2025")).toBeCloseTo(385_725, 0);
+    expect(brief.value("sde.FY2025")).toBeCloseTo(561_775, 0);
     // Prose money, like every other amount in a title: $95,000 plus 15% prints $109.3K, never $109.2K from float noise.
     expect(brief.t("replacementCost")).toBe("$109.3K");
     expect(brief.t("replacementSalary")).toBe("$95,000");
-    expect(brief.resolve("Adj. EBITDA of {{adjEbitda.latest}}")).toBe("Adj. EBITDA of $371.9K");
+    expect(brief.resolve("Adj. EBITDA of {{adjEbitda.latest}}")).toBe("Adj. EBITDA of $385.7K");
     expect(unknownTokens("{{rev.latest}} and {{rev.nowhere}}", brief)).toEqual(["rev.nowhere"]);
   });
 });

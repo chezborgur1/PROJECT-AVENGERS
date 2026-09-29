@@ -32,6 +32,7 @@ import type { Assumptions, ScenarioDrivers } from "./assumptions.ts";
 import { customerActiveAt, customerAnalytics, customerListYears, headcountAnalytics, isFieldDepartment, onPayrollAt, touchedYears } from "./analytics.ts";
 import { computeChecks } from "./checks.ts";
 import { dealStructure, sensitivityGrids, valuationDetail } from "./deal.ts";
+import { databookTotals } from "./exportTotals.ts";
 import { debtLikeSummary, historicalCashFlow, nwcAnalysis } from "./nwc.ts";
 import {
   amountInWindow,
@@ -510,11 +511,14 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
       })
     : undefined;
 
-  // KPIs per column (DATA_CONTRACT §5.9).
+  // KPIs per column (DATA_CONTRACT §5.9). Labor cost excludes the owner: his employer payroll taxes sit in the P&L payroll
+  // line, so they come out with him, on the payroll register's basis (the [S4] row carries the amount).
+  const ownerTaxRow = schedule.find((r) => r.tier === "owner_compensation" && r.category === "owner_compensation" && r.origin !== "owner_comp");
   for (const c of hist) {
     const p = periods[c.key]!;
     const k = p.kpis;
-    if (p.pnl.revenue) k.labor_cost_pct_revenue = p.pnl.payroll / p.pnl.revenue;
+    p.ownerPayrollTaxes = ownerTaxRow ? (amountsByColumn.get(c.key)?.get(ownerTaxRow) ?? 0) : 0;
+    if (p.pnl.revenue) k.labor_cost_pct_revenue = (p.pnl.payroll - p.ownerPayrollTaxes) / p.pnl.revenue;
     if (ds.revenueLines?.length && p.pnl.revenue) k.recurring_revenue_pct = p.revenueLines.filter((l) => l.recurring).reduce((s, l) => s + l.amount, 0) / p.pnl.revenue;
     if (ds.customers) {
       const end = monthEndDate(c.end);
@@ -633,6 +637,13 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
     byMonth: Object.fromEntries(bsSheets.filter((s) => s.lines.some((x) => x.account === l.account)).map((s) => [s.key, s.lines.filter((x) => x.account === l.account).reduce((t, x) => t + x.amount, 0)])),
   }));
 
+  // The export's own subtotals re-formed from these rows, period by period (C01): months on the grid, else fiscal years.
+  const databookTotalRows = databookTotals(ds.exportTotals ?? [], databookPnl, databookBs, {
+    months: monthly?.series.months.map((m) => m.key) ?? [],
+    years: hist.filter((c) => c.ref.kind === "fiscal_year").map((c) => c.fiscalYear!),
+    bsDates: [...new Set(databookBs.flatMap((r) => Object.keys(r.byMonth)))].sort(),
+  });
+
   // --- Named outputs, modules, checks ----------------------------------------------------------------------
   const fyCols = hist.filter((c) => c.ref.kind === "fiscal_year");
   const byFy = (f: (l: PeriodValues) => number): Record<number, number> => Object.fromEntries(fyCols.map((c) => [c.fiscalYear!, f(periods[c.key]!)]));
@@ -718,7 +729,7 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
     sensitivities,
     scenarios,
     cashFlow,
-    databook: { pnl: databookPnl, bs: databookBs },
+    databook: { pnl: databookPnl, bs: databookBs, ...(databookTotalRows.length ? { totals: databookTotalRows } : {}) },
   };
   // The chart exhibits read the analytics above; each chart tab follows its analysis tab (guide 5.12).
   const charts = chartExhibits(ds, draft);

@@ -22,8 +22,10 @@ import {
   IS_CATEGORIES,
   type Adjustment,
   type BalanceSheetPeriod,
+  type BankTransaction,
   type BsCategory,
   type CustomerRecord,
+  type ExportTotal,
   type FinancialDataset,
   type IntakeFacts,
   type IsCategory,
@@ -40,6 +42,9 @@ import {
   type TerminationType,
 } from "../../src/domain/financials.ts";
 import { addbackHint } from "../../src/domain/chartOfAccounts.ts";
+import { classifyBankLine } from "../../src/ingest/bankCsv.ts";
+import { exportTotalsOf, gridToReport } from "../../src/ingest/quickbooksExport.ts";
+import { reportToLines, type ReportKind } from "../../src/ingest/reportTable.ts";
 
 export const FY_END_MONTH = 12;
 export const YEARS = [2023, 2024, 2025] as const;
@@ -50,6 +55,7 @@ const SAMPLE_DIR = path.resolve(import.meta.dirname, "../../samples/project-ridg
 const PNL_FILE = "QuickBooks Profit and Loss FY23-FY25.csv";
 const BS_FILE = "QuickBooks Balance Sheet FY23-FY25.csv";
 const BANK_FILE = "Bank transactions 2025 (checking).csv";
+const PNL_MONTHLY_FILE = "QuickBooks Profit and Loss FY23-FY25 (monthly).csv";
 const ADDBACKS_FILE = "addbacks.csv";
 const NOTES_FILE = "intake-notes.md";
 
@@ -489,13 +495,14 @@ function buildAdjustments(accountMonthly: Map<string, Record<MonthKey, number>>)
     },
     {
       // SDE adds back the owner's total compensation (guide 5.4); the employer taxes on his salary sit in the payroll line.
+      // Accepted with the documented [S1] salary they follow from.
       tier: "owner_compensation",
       description: "Payroll taxes and benefits on owner compensation",
       category: "owner_compensation",
       basis: "Adds back employer payroll taxes on Mark Delaney's salary, $13.9K in FY2025, at statutory rates (Social Security 6.2% to the $176,100 wage base, Medicare 1.45%, federal unemployment on $7,000); the P&L carries them in the payroll line. State unemployment and owner benefits are not included.",
       sourceDocument: "Statutory rates on the P&L Payroll Expenses : Officer Compensation account; payroll register employer detail to be requested",
       evidence: "pending",
-      status: "proposed",
+      status: "accepted",
       byFiscalYear: byYear(OWNER_EMPLOYER_TAXES),
       byMonth: scaled("Payroll Expenses : Officer Compensation", OWNER_EMPLOYER_TAXES),
       accounts: ["Payroll Expenses : Officer Compensation"],
@@ -878,6 +885,28 @@ function depositsByMonth(): Record<MonthKey, { amount: number; excluded: number 
   return out;
 }
 
+/** Every line of the checking export, classified as the bank reader classifies it (Raw - Bank). */
+function bankTransactions(): BankTransaction[] {
+  const rows = parse(fs.readFileSync(path.join(SAMPLE_DIR, BANK_FILE), "utf8"), { columns: true, skip_empty_lines: true, trim: true, bom: true }) as Record<string, string>[];
+  return rows
+    .filter((r) => Number(r.Amount))
+    .map((r) => ({ date: r.Date!, description: r.Description ?? "", amount: Number(r.Amount), classification: classifyBankLine(r.Description ?? "", Number(r.Amount)), file: BANK_FILE }));
+}
+
+/**
+ * The subtotals the monthly P&L and the balance-sheet exports print, read
+ * with the export reader itself, so the workbook's export-total rows and C01
+ * run on the fixture as they do on an ingested folder.
+ */
+function exportTotals(): ExportTotal[] {
+  const read = (file: string, kind: ReportKind) => {
+    const grid = parse(fs.readFileSync(path.join(SAMPLE_DIR, file), "utf8"), { relax_column_count: true, skip_empty_lines: false, bom: true }) as string[][];
+    const { rows, periods } = gridToReport(grid, kind, FY_END_MONTH);
+    return exportTotalsOf(reportToLines(rows, periods, kind, FY_END_MONTH).totals, kind, file);
+  };
+  return [...read(PNL_MONTHLY_FILE, "pnl"), ...read(BS_FILE, "balance_sheet")];
+}
+
 // ---------------------------------------------------------------------------
 // Intake facts transcribed from samples/project-ridgeline/intake-notes.md.
 // Anything the notes do not say is left undefined, never guessed.
@@ -1157,6 +1186,8 @@ export function ridgelineDataset(): FinancialDataset {
     dealForm: { form: "asset_purchase", basis: "Intake notes: the owner prefers an asset sale; the Main Street default agrees" },
     reconciliations: [],
     depositsByMonth: deposits,
+    bankTransactions: bankTransactions(),
+    exportTotals: exportTotals(),
     debtLikeItems: [
       { item: "Vehicle loans", balance: 146_800, asOf, treatment: "debt", accounts: ["Long-Term Liabilities : Vehicle Loans"], source: BS_FILE, status: "confirmed", payoffLetter: "requested" },
       { item: "SBA loan", balance: 118_000, asOf, treatment: "debt", accounts: ["Long-Term Liabilities : SBA Loan"], source: BS_FILE, status: "confirmed", payoffLetter: "requested" },

@@ -91,7 +91,7 @@
         {
           "row": "cl.sde",
           "lead": "SDE of {{sde.latest}}",
-          "body": "adds back the owner's {{ownerComp.latest}} salary as paid; it is the measure for a buyer who will run the Company."
+          "body": "adds back the owner's {{ownerComp.latest}} salary and {{ownerTaxes.latest}} of his payroll taxes; it is the measure for a buyer who will run the Company."
         },
         {
           "row": "cl.adj",
@@ -319,7 +319,7 @@
         {
           "row": "ladder.sde",
           "lead": "SDE of {{sde.latest}}, a {{sdeMargin.latest}} margin,",
-          "body": "adds back the owner's {{ownerComp.latest}} salary as paid; it is the earnings of an owner who runs the Company full time."
+          "body": "adds back the owner's {{ownerComp.latest}} salary and {{ownerTaxes.latest}} of his payroll taxes; it is the earnings of an owner who runs the Company full time."
         },
         {
           "row": "ladder.adj",
@@ -340,7 +340,7 @@
         {
           "row": "oc.above",
           "lead": "Owner pay above market of {{ownerAboveMarket.latest}}",
-          "body": "is salary as paid of {{ownerComp.latest}} less the replacement cost, up from {{ownerAboveMarket.FY2023}} in FY2023 as the salary rose; a buyer who hires a manager keeps it."
+          "body": "is salary and payroll taxes of {{ownerCompPaid.latest}} less the replacement cost, up from {{ownerAboveMarket.FY2023}} in FY2023 as the salary rose; a buyer who hires a manager keeps it."
         }
       ]
     },
@@ -391,7 +391,7 @@
     },
     "s10_1": {
       "title": "The owner targets a closing within 12 months and will stay up to {{owner.transitionMonths}} months after it",
-      "transaction": "Mark Delaney, the founder and owner, is offering the operating assets of Ridgeline Comfort Services LLC; he prefers an asset sale (1). He is retiring at {{owner.age}} and wants a clean exit within 12 months. He is open to a buyer keeping the Ridgeline name and all {{hc.total}} employees. Offers should assume an asset purchase in which the Seller keeps cash, receivables and payables and repays debt at closing.",
+      "transaction": "Mark Delaney, the founder and owner, is offering the operating assets of Ridgeline Comfort Services LLC; he prefers an asset sale (1). He is retiring at {{owner.age}} and wants a clean exit within 12 months. He is open to a buyer keeping the Ridgeline name and all {{hc.total}} employees. Offers should assume an asset purchase in which the Seller keeps cash, receivables and payables.",
       "transition": "The owner will stay up to {{owner.transitionMonths}} months after closing and introduce the commercial accounts (1). Lisa Tran, operations manager and with the Company {{mgmt.lisa.tenure}}, runs dispatch and day-to-day scheduling and is expected to stay. The {{hc.field}} field employees are paid hourly plus spiff commissions on maintenance agreements, with no union.",
       "premises": "The Company leases an {{kpi.shop_size}} shop and office on Maple Ave from an unrelated landlord; the lease runs through 2029 with a five-year renewal option (1). The fleet is {{kpi.fleet_service_vans}} service vans and {{kpi.fleet_install_trucks}} install trucks, owned and financed with vehicle loans. ServiceTitan runs dispatch, invoicing and memberships, and QuickBooks Online the books.",
       "process": "We will invite qualified buyers who have signed a confidentiality agreement to an introductory call and then a management meeting, on the timetable set out on {{page:S10.2}}. All inquiries should be directed to AMB Advisory, not to the Seller or its employees."

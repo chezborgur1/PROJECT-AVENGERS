@@ -186,7 +186,7 @@ export function planPnlSummary(ctx: TabContext): SheetBuilder {
 }
 
 /** Width of a Basis column printed as its own range (the ladder, the P&L Summary): the page holds it beside the labels at full scale. */
-const BASIS_APART = 85;
+const BASIS_APART = 80;
 
 /**
  * The Basis cell of a P&L Summary line: the source accounts it sums (from the
@@ -285,11 +285,18 @@ function kpiRows(model: ModelOutput, customerYears: number[]): KpiRow[] {
       cell: (column, _col, at, _h, pv) => (column.months === 12 ? { f: `IFERROR(${at("revenue")}*${K}/${at("kpi_employees")},"n.a.")`, expect: ratio(pv.kpis.revenue_per_employee) } : undefined),
     });
   }
+  // The owner's employer payroll taxes sit in the payroll line; the labor cost excludes them with him, read from their
+  // schedule row ([S4]) whatever its status.
+  const ownerTaxes = model.adjustments.findIndex((x) => x.row.tier === "owner_compensation" && x.row.category === "owner_compensation" && x.row.origin !== "owner_comp");
+  const adjCols = adjustmentsLayout(model).byKey;
   rows.push({
     key: "kpi_labor_cost",
     label: "Labor cost, % of revenue (excludes owner)",
     fmt: FMT.pct1,
-    cell: (_c, _col, at, _h, pv) => ({ f: `IFERROR(${at("payroll")}/${at("revenue")},"n.a.")`, expect: ratio(pv.kpis.labor_cost_pct_revenue) }),
+    cell: (c, _col, at, _h, pv) => ({
+      f: ownerTaxes >= 0 && adjCols[c.key] !== undefined ? `IFERROR((${at("payroll")}-${schedRowCell(ownerTaxes, adjCols[c.key]!)})/${at("revenue")},"n.a.")` : `IFERROR(${at("payroll")}/${at("revenue")},"n.a.")`,
+      expect: ratio(pv.kpis.labor_cost_pct_revenue),
+    }),
   });
   const recurring = model.periods[model.columns[0]!.key]!.revenueLines.filter((x) => x.recurring);
   if (recurring.length) {
@@ -628,9 +635,13 @@ function basisFormula(spec: LadderRow, model: ModelOutput): { f: string; text: s
   if (spec.fixed === undefined) return { f: one(rows[0]!), text: text(rows[0]!) };
   const status = (i: number) => `${schedRowCell(i, ADJ_STATUS_COL, true)}="Accepted"`;
   const accepted = rows.filter((i) => model.adjustments[i]!.row.status === "accepted");
-  const f = rows.length === 1 ? `IF(${status(rows[0]!)},${one(rows[0]!)},"")` : `TRIM(${rows.map((i) => `IF(${status(i)},${one(i)}&" ","")`).join("&")})`;
+  if (rows.length === 1) return { f: `IF(${status(rows[0]!)},${one(rows[0]!)},"")`, text: accepted.map(text).join("") };
+  // A rung that sums several rows ([S1] salary and [S4] its payroll taxes) names each accepted row; their bases are on the
+  // Adjustments schedule, and all of them here would stretch the row past three lines.
+  const named = (i: number) => `${schedRowCell(i, ADJ_REF_COL, true)}&" "&${schedRowCell(i, 3, true)}`;
+  const f = `TRIM(${rows.map((i) => `IF(${status(i)},${named(i)}&" ","")`).join("&")})`;
   // TRIM also folds runs of spaces inside the text, so the expectation does too.
-  return { f, text: rows.length === 1 ? accepted.map(text).join("") : accepted.map(text).join(" ").replace(/ {2,}/g, " ").trim() };
+  return { f, text: accepted.map((i) => `[${model.adjustments[i]!.row.ref}] ${model.adjustments[i]!.row.description}`).join(" ").replace(/ {2,}/g, " ").trim() };
 }
 
 /** SUM over a tier's ladder rows, or undefined when the tier has no accepted rows. */

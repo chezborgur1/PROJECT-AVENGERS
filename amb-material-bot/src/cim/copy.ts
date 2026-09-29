@@ -287,6 +287,33 @@ const BUDGETS: { match: RegExp; max: number }[] = [
   { match: /^s10_1\.process$/, max: 50 },
 ];
 
+/** Words too common to identify a claim. */
+const CLAIM_STOP = new Set(["with", "from", "that", "this", "each", "their", "they", "have", "will", "been", "into", "than", "which", "whose", "about", "after", "before"]);
+
+/** The stems (first four letters of each word of four letters or more) that identify what a placeholder asks about. */
+const claimStems = (text: string): string[] => [...new Set((text.toLowerCase().match(/[a-z]{4,}/g) ?? []).filter((w) => !CLAIM_STOP.has(w)).map((w) => w.slice(0, 4)))];
+
+/**
+ * A claim the copy leaves open as "[Confirm: …]" in one place must not be
+ * stated as fact in another (rule 5): a sentence outside any placeholder
+ * that carries every identifying word of an open placeholder (by stem, two
+ * words at least) asserts what the deck says is unconfirmed.
+ */
+export function lintOpenClaims(strings: { path: string; text: string }[]): LintIssue[] {
+  const open = strings.flatMap((s) => [...s.text.matchAll(/\[Confirm:([^\]]*)\]/g)].map((m) => ({ path: s.path, claim: m[1]!.trim(), stems: claimStems(m[1]!) })).filter((c) => c.stems.length >= 2));
+  const out: LintIssue[] = [];
+  for (const s of strings) {
+    for (const sentence of sentences(s.text)) {
+      // A sentence that carries the placeholder itself is the open claim, not an assertion of it.
+      const own = [...sentence.matchAll(/\[Confirm:([^\]]*)\]/g)].map((m) => claimStems(m[1]!));
+      const stems = new Set(claimStems(sentence.replace(/\[Confirm:[^\]]*\]/g, "")));
+      const hit = open.find((c) => c.stems.every((st) => stems.has(st)) && !own.some((o) => c.stems.every((st) => o.includes(st))));
+      if (hit) out.push({ path: s.path, issue: `states as fact what ${hit.path} leaves open ([Confirm: ${hit.claim}])`, text: sentence });
+    }
+  }
+  return out;
+}
+
 /** Money and percentage literals, for the check that every figure came from the brief. */
 const FIGURE_LITERAL = /[–-]?\$[0-9][0-9,]*(\.[0-9]+)?[KM]?|[0-9]+(\.[0-9]+)?%/g;
 
@@ -300,11 +327,13 @@ const FIGURE_LITERAL = /[–-]?\$[0-9][0-9,]*(\.[0-9]+)?[KM]?|[0-9]+(\.[0-9]+)?%
 export function lintCopy(copy: CimCopy, brief?: Brief): LintIssue[] {
   const issues: LintIssue[] = [];
   const known = brief?.texts();
+  const prose: { path: string; text: string }[] = [];
   const walk = (v: unknown, path: string) => {
     if (typeof v === "string") {
       if (path.endsWith(".row") || path.endsWith(".page")) return;
       if (brief) for (const k of unknownTokens(v, brief)) issues.push({ path, issue: `unknown figure token {{${k}}}`, text: v });
       const text = (brief ? brief.resolve(v) : v).replace(/\{\{page:[^}]+\}\}/g, "page 00");
+      prose.push({ path, text });
       issues.push(...(path.endsWith(".title") ? lintTitle(text, path) : lintText(text, path)));
       const budget = BUDGETS.find((b) => b.match.test(path));
       if (budget && wordsIn(text) > budget.max) issues.push({ path, issue: `${wordsIn(text)} words (budget ${budget.max})`, text });
@@ -322,7 +351,7 @@ export function lintCopy(copy: CimCopy, brief?: Brief): LintIssue[] {
     } else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) walk(x, path ? `${path}.${k}` : k);
   };
   walk({ ...copy, open_questions: [] }, "");
-  return issues;
+  return [...issues, ...lintOpenClaims(prose)];
 }
 
 /**

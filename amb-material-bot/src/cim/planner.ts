@@ -203,7 +203,7 @@ function finish(ctx: CimContext, built: PlannedPage[], dividers: boolean, target
     p.draft.spec = spec;
   }
 
-  warnings.push(...labelConflicts(pages), ...commentaryDensity(pages));
+  warnings.push(...labelConflicts(pages), ...commentaryDensity(pages), ...mixedUnits(pages));
 
   const sections: SectionEntry[] = [];
   const exhibits = new Map<string, { title: string; page: number }[]>();
@@ -269,6 +269,30 @@ export function commentaryDensity(pages: PlannedPage[]): string[] {
     const count = obs.items.length;
     if (prev && prev.count === count) out.push(`${p.draft.id}: ${count} observations, as on ${prev.id} before it (T9: counts follow the evidence)`);
     prev = { id: p.draft.id, count };
+  }
+  return out;
+}
+
+/**
+ * Fact-table columns that mix dollar amounts carrying their unit in the cell
+ * ("$152.0K", "$200 a year") with bare ones ("$152"), which read in the
+ * header's unit (spec 4.3): "$200" beside "$152.0K" reads as $200K (F24).
+ */
+export function mixedUnits(pages: PlannedPage[]): string[] {
+  const out: string[] = [];
+  const unit = /\$[\d,.]+\s*[KMB]\b|\$[\d,.]+ (a|per) /;
+  for (const p of pages) {
+    const spec = p.draft.spec;
+    if (!spec) continue;
+    for (const b of spec.rows.flatMap((r) => [...r.columns.flatMap((c) => c.blocks), ...(r.floating ?? [])])) {
+      if (b.kind !== "numTable") continue;
+      const heads = b.spec.cols.filter((c) => c.kind === "num").map((c) => c.head ?? "value");
+      heads.forEach((head, i) => {
+        const money = b.spec.rows.flatMap((row) => (row.vals?.[i] && /\$\d/.test(row.vals[i]!) ? [row.vals[i]!] : []));
+        const withUnit = money.filter((v) => unit.test(v));
+        if (withUnit.length && withUnit.length < money.length) out.push(`${spec.id}: "${b.header?.title ?? b.spec.name}" mixes dollar amounts with and without a unit in its ${head} column (${money.find((v) => !unit.test(v))} beside ${withUnit[0]})`);
+      });
+    }
   }
   return out;
 }

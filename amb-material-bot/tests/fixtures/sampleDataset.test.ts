@@ -115,13 +115,15 @@ describe("adjustments schedule", () => {
     const reported = netIncome + accepted("definitional");
     expect(reported).toBe(319_515);
     expect(accepted("normalization")).toBe(28_400);
-    const sde = reported + accepted("normalization") + byRef("S1").byFiscalYear[2025]!;
-    expect(sde).toBe(547_915);
+    // SDE adds back the owner's salary [S1] and his employer payroll taxes [S4] (guide 5.4, F20).
+    const sde = reported + accepted("normalization") + byRef("S1").byFiscalYear[2025]! + byRef("S4").byFiscalYear[2025]!;
+    expect(byRef("S4")).toMatchObject({ status: "accepted", byFiscalYear: { 2025: 13_860 } });
+    expect(sde).toBe(561_775);
     expect(byRef("S2").byFiscalYear[2025]).toBe(-REPLACEMENT_SALARY * (1 + BURDEN_PCT));
     expect(byRef("S3").byFiscalYear[2025]).toBe(-CAPITAL_RESERVE);
     const adjEbitda = sde + byRef("S2").byFiscalYear[2025]! + byRef("S3").byFiscalYear[2025]!;
-    expect(adjEbitda).toBe(371_865);
-    expect(ds.mode).toMatchObject({ mode: "mainStreet", measure: 438_665, overridden: false });
+    expect(adjEbitda).toBe(385_725);
+    expect(ds.mode).toMatchObject({ mode: "mainStreet", measure: 452_525, overridden: false });
     expect(ds.dealForm?.form).toBe("asset_purchase");
   });
 });

@@ -11,6 +11,16 @@ export interface ReportRow {
   path: string[];
   /** One value per period column; undefined where blank. */
   values: (number | undefined)[];
+  /** A "Total ..." line the report prints for the heading it closes (path ends with that heading). */
+  total?: boolean;
+}
+
+/** A subtotal line the report prints (Total Income, Gross Profit, Net Income), by fiscal year and by month or date. */
+export interface ReportTotal {
+  label: string;
+  path: string[];
+  byYear: Record<number, number>;
+  byMonth?: Record<MonthKey, number>;
 }
 
 export type ReportKind = "pnl" | "balance_sheet";
@@ -50,6 +60,8 @@ export interface ReportLines {
    * year under a June year-end), described for the run's warnings.
    */
   misaligned: string[];
+  /** The subtotals the report prints, kept apart from the accounts so the accounts can be proved against them (C01). */
+  totals: ReportTotal[];
 }
 
 /** A multi-month P&L column that starts in one fiscal year and ends in the next cannot be split without inventing a spread. */
@@ -102,10 +114,26 @@ export function reportToLines(
 
   const lines: RawLine[] = [];
   const accounts: MonthlyAccount[] = [];
+  const totals: ReportTotal[] = [];
   const balanceSheets: DatedBalanceSheet[] = bsColumns.map((c) => ({ key: c.key, lines: [] }));
+  const cents = (v: number) => Math.round(v * 100) / 100;
   for (const row of rows) {
-    if (computed.test(row.label.trim())) continue;
     if (row.values.every((v) => v === undefined)) continue;
+    if (row.total || computed.test(row.label.trim())) {
+      const t: ReportTotal = { label: row.label.trim(), path: stripWrappers(row.path), byYear: {} };
+      if (kind === "pnl") {
+        row.values.forEach((v, col) => {
+          const p = periods[col];
+          if (v !== undefined && p) t.byYear[p.fiscalYear] = cents((t.byYear[p.fiscalYear] ?? 0) + v);
+        });
+        if (allSingleMonths) t.byMonth = Object.fromEntries(monthColumns.filter(({ col }) => row.values[col] !== undefined).map(({ key, col }) => [key, row.values[col]!]));
+      } else {
+        for (const [year, col] of bsColumnByYear) if (row.values[col] !== undefined) t.byYear[year] = row.values[col]!;
+        t.byMonth = Object.fromEntries(bsColumns.filter(({ col }) => row.values[col] !== undefined).map(({ key, col }) => [key, row.values[col]!]));
+      }
+      totals.push(t);
+      continue;
+    }
     const path = stripWrappers(row.path);
     const section = path[0];
     // Parent headings below the top section become part of the account name,
@@ -146,7 +174,7 @@ export function reportToLines(
     const partialYears = [...monthsByYear]
       .filter(([, m]) => m < 12)
       .map(([year, months]) => ({ year, months }));
-    const result: ReportLines = { lines, fullYears: fullYears.sort(), partialYears, misaligned };
+    const result: ReportLines = { lines, fullYears: fullYears.sort(), partialYears, misaligned, totals };
     if (allSingleMonths) {
       const months = [...new Set(monthColumns.map((c) => c.key))].sort();
       result.monthly = { months, accounts };
@@ -154,7 +182,7 @@ export function reportToLines(
     return result;
   }
   const dated = balanceSheets.filter((b) => b.lines.length > 0).sort((a, b) => a.key.localeCompare(b.key));
-  return { lines, fullYears: [...bsColumnByYear.keys()].sort(), partialYears: [], balanceSheets: dated, misaligned };
+  return { lines, fullYears: [...bsColumnByYear.keys()].sort(), partialYears: [], balanceSheets: dated, misaligned, totals };
 }
 
 /**
