@@ -223,7 +223,7 @@ export async function pullQuickbooks(realmId: string, fyEndMonth: number, years 
       extract.partialYears = result.partialYears;
       if (result.monthly) extract.monthly = result.monthly;
       const lastMonth = result.monthly?.months[result.monthly.months.length - 1];
-      extract.notes!.push(...result.partialYears.map((p) => partialYearNote(p, file, Boolean(result.monthly), lastMonth)), ...misalignedNotes(result.misaligned, file, fyEndMonth));
+      extract.notes!.push(...result.partialYears.map((p) => partialYearNote(p, file, Boolean(result.monthly), lastMonth, fyEndMonth)), ...misalignedNotes(result.misaligned, file, fyEndMonth));
     } else {
       extract.bsLines = result.lines;
       if (result.balanceSheets) extract.balanceSheets = result.balanceSheets;

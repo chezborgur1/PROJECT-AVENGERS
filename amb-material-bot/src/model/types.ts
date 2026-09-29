@@ -15,7 +15,6 @@ import type {
   BsDetailLine,
   DealForm,
   DealMode,
-  Evidence,
   IsCategory,
   MonthKey,
   MonthPeriod,
@@ -86,7 +85,7 @@ export interface LadderItem {
   description: string;
   amount: number;
   status: Adjustment["status"];
-  evidence: Evidence;
+  evidence: Adjustment["evidence"];
 }
 
 /**
@@ -212,7 +211,8 @@ export interface NwcAnalysis {
 }
 
 export interface DebtLikeSummary {
-  items: { item: string; balance: number; treatment: "debt" | "debt_like" | "nwc"; status: string; payoffLetter?: string; note?: string }[];
+  /** `accounts` are the balance-sheet accounts behind each balance, so the workbook links them to the Databook. */
+  items: { item: string; balance: number; treatment: "debt" | "debt_like" | "nwc"; status: string; payoffLetter?: string; note?: string; accounts: string[] }[];
   fundedDebt: number;
   debtLike: number;
   /** Memo: balances kept in NWC under the AMB default (deferred revenue, customer deposits). */
@@ -242,6 +242,8 @@ export interface RetentionDollars {
   endingRevenue: number;
   gdr: number;
   ndr: number;
+  /** Revenue billed in the year by customers active at its start and lost during it: ending revenue plus this is the listed customers' revenue. */
+  lostInYearRevenue?: number;
 }
 
 export interface ConcentrationRow {
@@ -301,7 +303,12 @@ export interface HeadcountAnalytics {
   asOf: string;
   latestHeadcount: number;
   latestFieldHeadcount: number;
-  byDepartment: { department: string; count: number; totalComp: number; avgComp: number; pctRevenue: number; avgTenureYears: number }[];
+  /**
+   * Count is FTE on payroll at the as-of date; total compensation is the
+   * fiscal year's pay of everyone in the department, leavers included, so
+   * the average divides it by the year's average FTE (`avgFte`).
+   */
+  byDepartment: { department: string; count: number; avgFte: number; totalComp: number; avgComp: number; pctRevenue: number; avgTenureYears: number }[];
   rollForwardByFiscalYear: Record<number, { start: number; hires: number; departures: number; departuresByType: Record<string, number>; end: number }>;
   /** Monthly hires and departures for MC-H1. */
   monthly?: { month: MonthKey; hires: number; departures: number; end: number }[];
@@ -365,7 +372,8 @@ export interface ChartExhibit {
 
 // --- Checks (guide 5.7) --------------------------------------------------------------
 
-export type CheckStatus = "OK" | "CHECK" | "n.a.";
+/** "Pending" marks a check that runs on the written file (C37, the render check) and has not run yet. */
+export type CheckStatus = "OK" | "CHECK" | "n.a." | "Pending";
 
 export interface CheckResult {
   /** "C01" … "C37". */
@@ -385,7 +393,8 @@ export interface ValuationSummary {
   multiples: { low: number; mid: number; high: number; source: string };
   enterpriseValue: { low: number; mid: number; high: number };
   equityValue: { low: number; mid: number; high: number };
-  bridge: { fundedDebt: number; debtLike: number; cash: number; nwcVsPeg: number };
+  /** `asOf`: the month of the balance sheet every bridge line reads; absent when the sources have no balance sheet, and the bridge is then n.a. */
+  bridge: { fundedDebt: number; debtLike: number; cash: number; nwcVsPeg: number; asOf?: MonthKey };
 }
 
 // --- Named outputs (guide 5.14) ---------------------------------------------------------
@@ -586,6 +595,7 @@ export interface ValuationDetail {
 }
 
 export interface SourcesAndUses {
+  /** `reconciliationHoldback` is a memo inside `purchasePrice` (paid into escrow at close) and is not part of `total`. */
   uses: { purchasePrice: number; transactionFees: number; workingCapitalFunding: number; reconciliationHoldback: number; total: number };
   sources: { seniorLoan: number; sellerNote: number; rolloverEquity: number; buyerEquity: number; total: number };
   check: number;
@@ -605,8 +615,10 @@ export interface SellerProceeds {
   escrowReleased: number;
   sellerNotePrincipal: number;
   totalConsideration: number;
-  /** Asset purchase memo: AR + unbilled − AP − accrued retained by the seller. */
+  /** Asset purchase memo: AR + unbilled + prepaids − AP − accrued retained by the seller. */
   sellerRetainedNwc: number;
+  /** Asset purchase memo: cash on the latest dated balance sheet, which the seller keeps. */
+  sellerRetainedCash?: number;
 }
 
 export interface DealStructureColumn {
@@ -629,6 +641,11 @@ export interface DealStructureColumn {
   debtService: { seniorLoan: number; sellerNote: number; total: number; cashFlowAvailable: number; dscr: number };
   /** The OFF14 term strings, formula-built in the workbook. */
   terms: Record<string, string>;
+  /**
+   * Asset purchase only: the Form 8594 purchase price allocation (guide 5.5; internal, never in the CIM).
+   * Land and building are null when the premises arrangement is unconfirmed; goodwill is the residual.
+   */
+  allocation?: { land: number | null; building: number | null; equipment: number; inventory: number; nonCompete: number; goodwill: number };
 }
 
 export interface SensitivityGrid {

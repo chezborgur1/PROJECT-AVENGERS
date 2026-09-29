@@ -5,9 +5,9 @@
 
 import { monthLabel } from "../../domain/financials.ts";
 import type { CimContext } from "../context.ts";
-import { standardNote } from "../context.ts";
+import { fieldDepartments, standardNote } from "../context.ts";
 import type { Block, TextCell } from "../design.ts";
-import { r3, spanW } from "../design.ts";
+import { blockHeight, gapBefore, r3, spanW } from "../design.ts";
 import { monthlyIncomeStatement } from "../exhibits.ts";
 import { fmtPct, k } from "../../util/format.ts";
 import { draft, present, source } from "./common.ts";
@@ -15,9 +15,13 @@ import type { PageModule, SectionModule } from "./types.ts";
 
 const SECTION = "Appendix";
 
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
 /** Definitions of every measure the deck prints (guide S11.1), with the formula the engine uses. */
-function definitions(ctx: CimContext, w: number): Block {
-  const rows: TextCell[][] = [
+function definitionRows(ctx: CimContext): TextCell[][] {
+  const fye = MONTHS[ctx.out.fiscalYearEndMonth - 1];
+  const fy = ctx.ds.years[ctx.ds.years.length - 1];
+  return [
     ["Reported EBITDA", "Net income plus interest expense [D1], income taxes [D2] and depreciation and amortization [D3]. Includes other income and expense; non-operating items are removed as normalization adjustments."],
     ["Normalization adjustments [N]", "Accepted adjustments that remove owner-discretionary, non-recurring and non-operating items. Positive amounts increase EBITDA."],
     ...(ctx.mainStreet
@@ -33,10 +37,41 @@ function definitions(ctx: CimContext, w: number): Block {
           ["NDR", "Net dollar retention: GDR plus upsell from continuing accounts."],
         ]
       : []),
-    ...(ctx.out.headcount ? [["Revenue per employee", "Revenue ÷ employees on payroll at fiscal year-end, excluding the owner; field employees are service and installation staff."]] : []),
+    ...(ctx.out.headcount ? [["Revenue per employee", `Revenue ÷ employees on payroll at fiscal year-end, excluding the owner${fieldDepartments(ctx) ? `; field employees are those in ${fieldDepartments(ctx).charAt(0).toLowerCase()}${fieldDepartments(ctx).slice(1)}` : ""}.`]] : []),
     ["Free cash flow", "Cash from operations less capital expenditure derived as the change in net fixed assets plus depreciation."],
+    ...(ctx.out.nwc ? [["DSO, DIO, DPO", "Days sales, inventory and payables outstanding: receivables ÷ revenue, inventory ÷ cost of revenue and payables ÷ cost of revenue, each over the trailing twelve months, × 365."]] : []),
+    ...(ctx.out.customers ? [["Cum. %", "Cumulative share of revenue of the accounts ranked above and including the row."]] : []),
+    ...(ctx.out.headcount && ctx.ds.kpis?.some((k) => k.key === "maintenance_members") ? [["Members per technician", "Maintenance-agreement members at the stated date ÷ service technicians on payroll."]] : []),
+    ["Fiscal year", `The Company's fiscal year ends in ${fye}; FY${fy} is the year ending ${fye} ${fy}.`],
   ];
-  return { kind: "textTable", header: { title: "Definitions" }, spec: { colW: [1.75, r3(w - 1.75)], head: ["Term", "Definition"], rows, fontSize: 8.5 } };
+}
+
+const definitionsTable = (rows: TextCell[][], w: number, continued: boolean): Block => ({
+  kind: "textTable",
+  header: { title: continued ? "Definitions (continued)" : "Definitions" },
+  spec: { colW: [1.75, r3(w - 1.75)], head: ["Term", "Definition"], rows, fontSize: 8.5 },
+});
+
+/**
+ * The definitions down the left and the sources on the right, with the
+ * definitions running on under the sources where that lets the two columns
+ * end together (spec 1: within 0.50 in).
+ */
+function basisColumns(ctx: CimContext, lw: number, rw: number): { left: Block[]; right: Block[] } {
+  const rows = definitionRows(ctx);
+  const sources = sourcesTable(ctx, rw);
+  const split = (k: number) => {
+    const left = definitionsTable(rows.slice(0, k), lw, false);
+    const tail = k < rows.length ? definitionsTable(rows.slice(k), rw, true) : undefined;
+    const rightH = blockHeight(sources, rw) + (tail ? gapBefore(sources, tail) + blockHeight(tail, rw) : 0);
+    return { left: [left], right: present(sources, tail), gap: Math.abs(blockHeight(left, lw) - rightH) };
+  };
+  let best = split(rows.length);
+  for (let k = Math.ceil(rows.length / 2); k < rows.length; k++) {
+    const next = split(k);
+    if (next.gap < best.gap) best = next;
+  }
+  return best;
 }
 
 /** The sources behind the deck and what each was used for (guide S11.1, REQ precedence). */
@@ -49,7 +84,7 @@ function sourcesTable(ctx: CimContext, w: number): Block {
   if (ds.customers) rows.push([`${ds.customers.term} list (coded)`, `To ${monthLabel(ds.customers.asOfMonth)}`, "Concentration, mix and retention"]);
   if (ds.payroll) rows.push(["Payroll register", `To ${monthLabel(ds.payroll.asOfMonth)}`, "Headcount, compensation and tenure"]);
   if (ds.depositsByMonth) rows.push(["Bank statements", `${Object.keys(ds.depositsByMonth).length} months`, "Proof of cash against revenue"]);
-  if (ds.intake) rows.push(["Management (intake call)", "As of the request", "Operations, people, transaction terms"]);
+  if (ds.intake) rows.push(["Management (intake call)", "As of the intake call", "Operations, people, transaction terms"]);
   return { kind: "textTable", header: { title: "Sources" }, spec: { colW: [1.6, 1.15, r3(w - 2.75)], head: ["Source", "Period", "Used for"], rows, fontSize: 8.5 } };
 }
 
@@ -60,15 +95,16 @@ const s11_1: PageModule = {
   absent: () => undefined,
   budget: [1, 1],
   build(ctx) {
+    const { left, right } = basisColumns(ctx, r3(spanW(1, 7) - 0.1), spanW(8, 12));
     return [
       draft(ctx, {
         id: "S11.1",
         section: SECTION,
         title: "Basis of preparation and definitions",
-        rows: [{ columns: [{ span: [1, 7], blocks: [definitions(ctx, spanW(1, 7) - 0.1)] }, { span: [8, 12], blocks: [sourcesTable(ctx, spanW(8, 12))] }] }],
+        rows: [{ columns: [{ span: [1, 7], blocks: left }, { span: [8, 12], blocks: right }] }],
         notes: {
           source: source(ctx.sources.financials, "Management"),
-          note: standardNote(ctx, `Revenue is reported gross. Margins are of total revenue. Adjustment tiers: [D] definitional, [N] normalization, [S] owner compensation${ctx.pf ? ", [PF] pro forma" : ""}.`),
+          note: standardNote(ctx, `Revenue is reported gross. Margins are of total revenue. Adjustment tiers: [D] definitional, [N] normalization, [S] owner compensation${ctx.mainStreet ? " and capital reserve" : ""}, [PF] pro forma.`),
         },
         kind: "reference",
       }),

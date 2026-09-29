@@ -18,12 +18,18 @@ const s9_1: PageModule = {
   name: "Opportunity sizing",
   status: "A",
   copyKey: "s9_1",
-  absent: (ctx) => (ctx.intake?.growthLevers.length ? undefined : "No growth levers in the intake notes"),
+  // Guide 3.3: the page sizes levers, so it needs one with a baseline and a benchmark or management target; until then the
+  // levers are a line in the executive summary's transaction table and this reason is an open question (QA round 1 F44).
+  absent: (ctx) => {
+    const levers = ctx.intake?.growthLevers ?? [];
+    if (!levers.length) return "No growth levers in the intake notes";
+    return levers.some((l) => l.baseline && l.target) ? undefined : `None of the ${levers.length} growth levers has both a baseline and a benchmark or management target to size it; ask the Seller for a target per lever`;
+  },
   budget: [1, 1],
   build(ctx) {
     const copy = pageCopy(ctx, "s9_1") ?? fallback91(ctx);
     const levers = growthLevers(ctx, spanW(1, 12));
-    const base = leverBaselines(ctx, usable(1, 7));
+    const base = leverBaselines(ctx, usable(1, 6));
     const obs = observationsBlock("the levers", keyObservations(ctx, "S9.1", copy.observations, present(levers, base)));
     const n = ctx.intake!.growthLevers.length;
     const b = ctx.brief;
@@ -34,7 +40,7 @@ const s9_1: PageModule = {
         id: "S9.1",
         section: SECTION,
         title,
-        rows: [{ columns: [{ span: [1, 12], blocks: present(levers) }] }, { columns: [{ span: [1, 7], blocks: present(base) }, { span: [8, 12], blocks: present(obs) }] }],
+        rows: [{ columns: [{ span: [1, 12], blocks: present(levers) }] }, { columns: [{ span: [1, 6], blocks: present(base) }, { span: [7, 12], blocks: present(obs) }] }],
         notes: { source: source(ctx.sources.financials, "Management"), note: standardNote(ctx, "Levers are management's view; buyer synergies are not included."), footnotes: [PER_MANAGEMENT] },
       }),
     ];

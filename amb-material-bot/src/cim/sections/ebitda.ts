@@ -23,7 +23,7 @@ const SECTION = "Adjusted EBITDA";
 function ladderFootnotes(ctx: CimContext): string[] {
   const rs = ctx.ds.recastInputs;
   const notes = [ctx.mainStreet ? "SDE is Adj. EBITDA before one owner's market pay and the capital reserve." : "[S1] adds back owner pay as paid; [S2] deducts a market replacement with taxes and benefits."];
-  if (rs) notes.push(`${fmtDollars(rs.replacementSalary)} general-manager salary per management, not independently verified, plus ${fmtPct(rs.burdenPct, 0)} payroll taxes and benefits (AMB default).`);
+  if (rs) notes.push(`${fmtDollars(rs.replacementSalary)} general-manager salary per management, not independently verified, plus payroll taxes and benefits at ${fmtPct(rs.burdenPct, 0)} of salary.`);
   return notes;
 }
 
@@ -46,7 +46,7 @@ const s7_1: PageModule = {
       "S7.1 title",
       copy.title,
       ctx.mainStreet
-        ? `Adj. EBITDA of ${b.t("adjEbitda.latest")} in ${ctx.latest.label} restates ${b.t("ownerComp.latest")} of owner pay to a ${b.t("replacementCost")} market cost and deducts a ${b.t("s3.latest")} reserve`
+        ? `Adj. EBITDA of ${b.t("adjEbitda.latest")} in ${ctx.latest.label} restates ${b.t("ownerComp.latest")} of owner pay to a ${b.maybe("replacementCost") ?? b.t("s2.latest")} market cost and deducts a ${b.t("s3.latest")} reserve`
         : `Adj. EBITDA of ${b.t("adjEbitda.latest")} in ${ctx.latest.label} after ${b.t("normTotal.latest")} of normalization and ${b.t("ownerAboveMarket.latest")} of owner pay above market`,
     );
     return [
@@ -89,14 +89,17 @@ const s7_2: PageModule = {
   absent: () => undefined,
   budget: [1, 1],
   build(ctx) {
-    const copy = pageCopy(ctx, "s7_2") ?? fallback72();
+    const copy = pageCopy(ctx, "s7_2") ?? fallback72(ctx);
     const support = adjustmentSupport(ctx, spanW(1, 12), true);
     const owner = ctx.carried.get("S7.2")?.includes("S7.3") ? ownerCompensation(ctx, usable(1, 7)) : undefined;
     const obs = observationsBlock(owner ? "owner compensation" : "the support table", keyObservations(ctx, "S7.2", copy.observations, present(owner, support)));
     const accepted = ctx.out.adjustments.filter((a) => a.row.status === "accepted" && a.row.tier !== "definitional" && a.row.tier !== "memo" && Object.values(a.byColumn).some((v) => v !== 0));
     const documented = accepted.filter((a) => a.row.evidence === "documented").length;
     const b = ctx.brief;
-    const title = chooseTitle(ctx, "S7.2 title", copy.title, `${accepted.length} accepted adjustments, ${documented} documented in the records and ${accepted.length - documented} by management representation`);
+    const title = chooseTitle(ctx, "S7.2 title", copy.title, [
+      `${accepted.length} accepted adjustments, ${documented} documented in the records and ${accepted.length - documented} by management representation`,
+      `${accepted.length} accepted adjustments: ${documented} documented and ${accepted.length - documented} resting on management representation`,
+    ]);
     return [
       draft(ctx, {
         id: "S7.2",
@@ -105,21 +108,28 @@ const s7_2: PageModule = {
         rows: [{ columns: [{ span: [1, 12], blocks: [support] }] }, { columns: [{ span: [1, 7], blocks: present(owner) }, { span: [8, 12], blocks: present(obs) }] }],
         notes: {
           source: source(ctx.sources.financials, "general ledger detail", ctx.sources.payroll, "Seller add-back list"),
-          note: `Figures in USD thousands; positive amounts increase EBITDA. Proposed adjustments not yet supported are excluded and listed for the advisor; memo items are not added. ${b.has("replacementCost") ? `[S2] is ${b.t("replacementCost")} a year.` : ""}`.trim(),
+          note: `Figures in USD thousands; positive amounts increase EBITDA. Only accepted adjustments are included; memo items are not added. ${b.has("replacementCost") ? `[S2] is ${b.t("replacementCost")} a year.` : ""}`.trim(),
           footnotes: [PER_MANAGEMENT, ...(owner && ctx.ds.recastInputs?.capitalReserve ? [ctx.ds.recastInputs.capitalReserve.source + "."] : [])],
         },
         carries: owner ? ["S7.3"] : [],
       }),
     ];
   },
-  fallback: () => ({ s7_2: fallback72() }),
+  fallback: (ctx) => ({ s7_2: fallback72(ctx) }),
 };
 
-function fallback72(): NonNullable<CimCopy["s7_2"]> {
+/**
+ * Template observations keyed to rows the page carries: the owner-compensation
+ * table when S7.3 sits under the support table (Main Street), else the [S1]
+ * and [S2] rows of the support table itself (lower middle market).
+ */
+function fallback72(ctx: CimContext): NonNullable<CimCopy["s7_2"]> {
+  const ref = (category: string) => ctx.out.adjustments.find((a) => a.row.category === category && a.row.status === "accepted")?.row.ref;
+  const [above, replacement] = ctx.present.has("S7.3") ? ["oc.above", "oc.replacement"] : [`support.${ref("owner_compensation")}`, `support.${ref("replacement_cost")}`];
   return {
     observations: [
-      { row: "oc.above", lead: "Owner pay above market of {{ownerAboveMarket.latest}}", body: "is compensation as paid of {{ownerComp.latest}} less the {{replacementCost}} replacement cost." },
-      { row: "oc.replacement", lead: "The replacement cost of {{replacementCost}}", body: "is a {{replacementSalary}} salary plus {{burdenPct}} payroll taxes and benefits." },
+      { row: above, lead: "Owner pay above market of {{ownerAboveMarket.latest}}", body: "is compensation as paid of {{ownerComp.latest}} less the {{replacementCost}} replacement cost." },
+      { row: replacement, lead: "The replacement cost of {{replacementCost}}", body: "is a {{replacementSalary}} salary plus {{burdenPct}} payroll taxes and benefits." },
     ],
   };
 }

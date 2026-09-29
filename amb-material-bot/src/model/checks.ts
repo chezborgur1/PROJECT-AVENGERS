@@ -5,6 +5,7 @@
 
 import { IS_CATEGORIES, type FinancialDataset } from "../domain/financials.ts";
 import type { CheckResult, CheckStatus, ModelOutput } from "./types.ts";
+import { isCustomerMoney } from "./nwc.ts";
 
 export const CHECKS: { id: string; check: string; tab: string }[] = [
   { id: "C01", check: "Databook ties to each raw export, every subtotal and period", tab: "Databook" },
@@ -155,10 +156,19 @@ export function computeChecks(ctx: CheckContext): { checks: CheckResult[]; maste
     const deposits = months.reduce((s, m) => s + ds.depositsByMonth![m]!.amount, 0);
     const revenue = months.reduce((s, m) => s + grid.values[m]!.revenue, 0);
     ok("C14", revenue ? (deposits - revenue) / revenue : 0, 0.05, "Deposits less revenue for the months with bank data, % of revenue");
+  } else if (ds.depositsByMonth && grid) {
+    na("C14", "Bank months outside the P&L months");
   } else if (ds.deposits && Object.keys(ds.deposits).length) {
-    const [fy, d] = Object.entries(ds.deposits)[0]!;
-    const revenue = ds.pnl[Number(fy)]?.revenue ?? 0;
-    ok("C14", revenue ? (d.amount - revenue) / revenue : 0, 0.05, `FY${fy} deposits over ${d.months} months against annual revenue`);
+    // Without a monthly grid only a full year of deposits compares with a year of revenue: part of a year would read as a shortfall.
+    const full = Object.entries(ds.deposits).filter(([fy, d]) => d.months === 12 && ds.pnl[Number(fy)]).sort(([a], [b]) => Number(b) - Number(a))[0];
+    if (full) {
+      const [fy, d] = full;
+      const revenue = ds.pnl[Number(fy)]!.revenue;
+      ok("C14", revenue ? (d.amount - revenue) / revenue : 0, 0.05, `FY${fy} deposits over 12 months against annual revenue`);
+    } else {
+      const [fy, d] = Object.entries(ds.deposits).sort(([a], [b]) => Number(b) - Number(a))[0]!;
+      na("C14", `Bank data covers ${d.months} months of FY${fy}; a full year is needed without monthly books`);
+    }
   } else na("C14", "No bank source");
 
   // C15-C18: writer-side lint, confirmed by verifyWorkbook on the written file.
@@ -169,7 +179,8 @@ export function computeChecks(ctx: CheckContext): { checks: CheckResult[]; maste
 
   // C19, C20: NWC and debt-like items.
   if (out.debtLike && out.nwc) {
-    const doubleListed = out.debtLike.items.filter((i) => /deferred revenue|customer deposit/i.test(i.item) && i.treatment !== "nwc").length;
+    // Debt-like customer money is fine only when the override also takes it out of NWC.
+    const doubleListed = out.nwc.deferredRevenueTreatment === "debt_like" ? 0 : out.debtLike.items.filter((i) => isCustomerMoney(i.item) && i.treatment !== "nwc").length;
     ok("C19", doubleListed, 0, "Count of deferred-revenue or deposit balances treated as debt-like while NWC carries them");
   } else na("C19", "No balance sheet");
   if (out.nwc) {
@@ -212,11 +223,11 @@ export function computeChecks(ctx: CheckContext): { checks: CheckResult[]; maste
   } else na("C28", "No valuation");
 
   // C29: scenarios.
-  if (tabs.annualMode && out.assumptions) {
+  if (out.scenarios && out.assumptions) {
     const s = out.assumptions.scenarios;
     const differs = (x: typeof s.low) => x.revenueGrowth !== s.mid.revenueGrowth && Object.entries(x.methods).some(([k, v]) => v !== s.mid.methods[k as keyof typeof s.mid.methods]);
     ok("C29", differs(s.low) && differs(s.high) ? 0 : 1, 0);
-  } else na("C29", "Scenario block only in annual-only mode");
+  } else na("C29", "Scenario block only in Main Street mode");
 
   // C30: sensitivities.
   if (out.sensitivities?.length) ok("C30", maxAbs(out.sensitivities.map((g) => g.body[3]![4]! - g.base)), 1e-6, "Centre cell of each grid less the model's base case");
@@ -239,13 +250,29 @@ export function computeChecks(ctx: CheckContext): { checks: CheckResult[]; maste
 
   // C36: timing.
   na("C36", "LOI date not set");
-  // C37: render QA runs on the written file.
-  na("C37", "Run the PDF render QA on the delivered file");
+  // C37: the render check runs on the written file (renderCheck.ts); until it has, the master check says so.
+  results.set("C37", { difference: 0, tolerance: 0, status: "Pending", note: "Runs on the written file: LibreOffice render, measured page by page" });
 
   const checks: CheckResult[] = CHECKS.map((c) => {
     const r = results.get(c.id) ?? { difference: 0, tolerance: DOLLAR_TOLERANCE, status: "n.a." as CheckStatus, note: "Not evaluated" };
     return { ...c, ...r };
   });
+  return { checks, masterCheck: masterCheckOf(checks) };
+}
+
+/** The master check line: a count of failures, else OK, qualified while the render check is pending (guide 5.7). */
+export function masterCheckOf(checks: CheckResult[]): string {
   const failing = checks.filter((c) => c.status === "CHECK").length;
-  return { checks, masterCheck: failing === 0 ? "All checks OK" : `${failing} checks failing` };
+  if (failing) return `${failing} ${failing === 1 ? "check" : "checks"} failing`;
+  return checks.some((c) => c.status === "Pending") ? "All checks OK (render check pending)" : "All checks OK";
+}
+
+/**
+ * Record the render check's result as C37: OK, CHECK with the count of
+ * issues as the difference, or n.a. with the reason when the render tools
+ * are missing (the master check then keeps its "pending" qualifier).
+ */
+export function withRenderCheck(checks: CheckResult[], r: { status: "OK" | "CHECK" | "n.a."; issues: string[]; note: string }): { checks: CheckResult[]; masterCheck: string } {
+  const next = checks.map((c) => (c.id !== "C37" ? c : r.status === "n.a." ? { ...c, note: r.note } : { ...c, difference: r.issues.length, tolerance: 0, status: r.status, note: r.note }));
+  return { checks: next, masterCheck: masterCheckOf(next) };
 }

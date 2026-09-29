@@ -8,13 +8,35 @@ import type { CimContext } from "../context.ts";
 import { nonGaap, pageCopy, standardNote } from "../context.ts";
 import type { CimCopy } from "../copy.ts";
 import type { NumRow } from "../design.ts";
-import { costStructure, incomeStatement, keyObservations, marginPanels, monthlyRevenue, observationsBlock, quarterlyRevenue, revenueAdjPanels, revenueByLine, revenueMixChart, usable } from "../exhibits.ts";
+import { costShiftChart, costStructure, incomeStatement, keyObservations, monthlyRevenue, observationsBlock, quarterlyRevenue, revenueAdjPanels, revenueByLine, revenueMixChart, usable } from "../exhibits.ts";
 import { chooseTitle, draft, present, source, verb } from "./common.ts";
 import { fmtPct, k } from "../../util/format.ts";
+import { accountLabel } from "../brief.ts";
 import { at, tableColumns } from "../context.ts";
 import type { PageModule, SectionModule } from "./types.ts";
 
 const SECTION = "Financial performance";
+
+/** "over FY2023–FY2025": the span a fiscal-year change in a title is measured over (spec 6.1: every title figure has its period). */
+const fyRangeOf = (ctx: CimContext): string => `over ${ctx.fy[0]!.label}–${ctx.fy[ctx.fy.length - 1]!.label}`;
+
+/**
+ * What cost of revenue holds and where wages sit, read from the client's own
+ * mapped accounts, so a reader can compare gross margins; nothing the
+ * mapping does not show goes into the note (rule 5).
+ */
+function cogsNote(ctx: CimContext): string | undefined {
+  const latest = at(ctx, ctx.latest);
+  const accounts = (cat: string) => Object.keys(latest.accountLines).filter((a) => latest.accountLines[a] && ctx.ds.lines.some((l) => l.account === a && l.category === cat && l.statement === "pnl"));
+  const cogs = accounts("cogs").map((a) => accountLabel(a).toLowerCase());
+  if (!cogs.length || cogs.length > 4) return undefined;
+  // A serial comma whenever a label holds its own "and" ("equipment and materials, and subcontractors").
+  const comma = cogs.length > 2 || cogs.some((c) => / and /.test(c)) ? "," : "";
+  const list = cogs.length === 1 ? cogs[0]! : `${cogs.slice(0, -1).join(", ")}${comma} and ${cogs[cogs.length - 1]}`;
+  const direct = cogs.some((c) => /wage|labor|labour|payroll/.test(c));
+  const wages = accounts("payroll").length ? `; ${direct ? "other wages are" : "wages are"} in operating expenses` : "";
+  return `Cost of revenue is ${list}${wages}.`;
+}
 
 const s6_1: PageModule = {
   id: "S6.1",
@@ -26,7 +48,7 @@ const s6_1: PageModule = {
   build(ctx) {
     const copy = pageCopy(ctx, "s6_1") ?? fallback61(ctx);
     const is = incomeStatement(ctx, usable(1, 6));
-    const panels = revenueAdjPanels(ctx);
+    const panels = revenueAdjPanels(ctx, false, "reported");
     const obs = observationsBlock("the income statement", keyObservations(ctx, "S6.1", copy.observations, [is]));
     const b = ctx.brief;
     const title = chooseTitle(
@@ -45,7 +67,7 @@ const s6_1: PageModule = {
         rows: [{ columns: [{ span: [1, 6], blocks: [is] }, { span: [7, 12], blocks: present(panels, obs) }] }],
         notes: {
           source: source(ctx.sources.financials),
-          note: standardNote(ctx, "Cost of revenue is equipment, materials and subcontractors; technician wages are in operating expenses."),
+          note: standardNote(ctx, cogsNote(ctx)),
           footnotes: [`Net income before interest, income taxes, depreciation and amortization; includes other income, which the ladder removes as a normalization adjustment. ${nonGaap(ctx).split(";")[0]}.`],
         },
       }),
@@ -56,12 +78,16 @@ const s6_1: PageModule = {
 
 function fallback61(ctx: CimContext): NonNullable<CimCopy["s6_1"]> {
   const b = ctx.brief;
+  // Without a prior-year window there is no change to quote, so each observation states the level.
+  const yoy = b.has("rev.yoy");
   return {
     observations: [
-      { row: "is.revenue", lead: `Revenue ${verb(b.value("rev.yoy"))} {{rev.yoy}} to {{rev.latest}}`, body: `in ${ctx.latest.label}; the change by service line is in the table.` },
-      { row: "is.gp", lead: "Gross profit of {{gp.latest}}", body: "at a {{gm.latest}} margin, {{gm.deltaYoy}} on the prior year." },
+      yoy
+        ? { row: "is.revenue", lead: `Revenue ${verb(b.value("rev.yoy"))} {{rev.yoy}} to {{rev.latest}}`, body: `in ${ctx.latest.label}; the change by service line is in the table.` }
+        : { row: "is.revenue", lead: "Revenue of {{rev.latest}}", body: `in ${ctx.latest.label}; the lines are in the table.` },
+      { row: "is.gp", lead: "Gross profit of {{gp.latest}}", body: `at a {{gm.latest}} margin${yoy ? ", {{gm.deltaYoy}} on the prior year" : ""}.` },
       { row: "is.opex", lead: "Operating expenses of {{opex.latest}}", body: "were {{opexPct.latest}} of revenue, including owner compensation of {{ownerComp.latest}}." },
-      { row: "is.ebitda", lead: "Reported EBITDA of {{repEbitda.latest}}", body: "was a {{repMargin.latest}} margin, {{repMargin.deltaYoy}} on the prior year." },
+      { row: "is.ebitda", lead: "Reported EBITDA of {{repEbitda.latest}}", body: `was a {{repMargin.latest}} margin${yoy ? ", {{repMargin.deltaYoy}} on the prior year" : ""}.` },
     ],
   };
 }
@@ -85,7 +111,7 @@ const s6_2: PageModule = {
       draft(ctx, {
         id: "S6.2",
         section: SECTION,
-        title: chooseTitle(ctx, "S6.2 title", copy?.title, `Revenue reached ${b.t("rev.latest")} in ${ctx.latest.label}, ${b.t("rev.yoy")} above the prior year`),
+        title: chooseTitle(ctx, "S6.2 title", copy?.title, `Revenue reached ${b.t("rev.latest")} in ${ctx.latest.label}${b.has("rev.yoy") ? `, ${b.t("rev.yoy")} ${b.value("rev.yoy")! < 0 ? "below" : "above"} the prior year` : ""}`),
         rows: [{ columns: [{ span: [1, 6], blocks: [table] }, { span: [7, 12], blocks: present(mix, obs) }] }],
         notes: { source: source(ctx.sources.financials), note: standardNote(ctx) },
       }),
@@ -101,31 +127,40 @@ const s6_3: PageModule = {
   absent: () => undefined,
   budget: [1, 1],
   build(ctx) {
-    const copy = pageCopy(ctx, "s6_3") ?? fallback63();
+    const copy = pageCopy(ctx, "s6_3") ?? fallback63(ctx);
     const table = costStructure(ctx, usable(1, 7));
-    const panels = marginPanels(ctx);
+    const shifts = costShiftChart(table);
     const obs = observationsBlock("the cost structure", keyObservations(ctx, "S6.3", copy.observations, [table]));
     const b = ctx.brief;
-    const title = chooseTitle(ctx, "S6.3 title", copy.title, `Gross margin moved ${b.t("gm.delta")} to ${b.t("gm.latest")} and payroll excluding the owner ${b.t("payrollPct.delta")} to ${b.t("payrollPct.latest")} of revenue`);
+    const title = chooseTitle(
+      ctx,
+      "S6.3 title",
+      copy.title,
+      b.has("gm.delta")
+        ? `Gross margin moved ${b.t("gm.delta")} to ${b.t("gm.latest")} and payroll excluding the owner ${b.t("payrollPct.delta")} to ${b.t("payrollPct.latest")} of revenue ${fyRangeOf(ctx)}`
+        : `Gross margin was ${b.t("gm.latest")} and payroll excluding the owner ${b.t("payrollPct.latest")} of revenue in ${ctx.latest.label}`,
+    );
     return [
       draft(ctx, {
         id: "S6.3",
         section: SECTION,
         title,
-        rows: [{ columns: [{ span: [1, 7], blocks: [table] }, { span: [8, 12], blocks: present(panels, obs) }] }],
+        rows: [{ columns: [{ span: [1, 7], blocks: [table] }, { span: [8, 12], blocks: present(shifts, obs) }] }],
         notes: { source: source(ctx.sources.financials), note: standardNote(ctx, "Ratios are of total revenue; changes are in basis points.") },
       }),
     ];
   },
-  fallback: () => ({ s6_3: fallback63() }),
+  fallback: (ctx) => ({ s6_3: fallback63(ctx) }),
 };
 
-function fallback63(): NonNullable<CimCopy["s6_3"]> {
+function fallback63(ctx: CimContext): NonNullable<CimCopy["s6_3"]> {
+  // One fiscal year has no change over the period to quote.
+  const moved = (key: string) => (ctx.brief.has(`${key}.delta`) ? `{{${key}.delta}} over the period; ` : "");
   return {
     observations: [
-      { row: "cost.cogs", lead: "Cost of revenue at {{cogsPct.latest}} of revenue", body: "{{cogsPct.delta}} over the period; the account detail is in the table." },
-      { row: "cost.payroll", lead: "Payroll excluding the owner at {{payrollPct.latest}}", body: "{{payrollPct.delta}} over the period, with owner compensation shown separately." },
-      { row: "cost.margin", lead: "Reported EBITDA margin of {{repMargin.latest}}", body: "{{repMargin.delta}} over the period." },
+      { row: "cost.cogs", lead: "Cost of revenue at {{cogsPct.latest}} of revenue,", body: `${moved("cogsPct")}the account detail is in the table.` },
+      { row: "cost.payroll", lead: "Payroll excluding the owner at {{payrollPct.latest}},", body: `${moved("payrollPct")}with owner compensation shown separately.` },
+      { row: "cost.margin", lead: "Reported EBITDA margin of {{repMargin.latest}},", body: `${moved("repMargin")}after every operating line in the table.` },
     ],
   };
 }
@@ -149,7 +184,10 @@ const s6_4: PageModule = {
       "S6.4 title",
       copy.title,
       b.has(`month.peak.${L}`)
-        ? `Revenue peaks in ${b.t(`month.peak.${L}`)} at ${b.t(`month.peakRevenue.${L}`)}, ${b.t(`month.peakToTrough.${L}`)} the ${b.t(`month.trough.${L}`)} low, and trailing-12 revenue reached ${b.t("month.t12Latest")}`
+        ? [
+            `Revenue peaks in ${b.t(`month.peak.${L}`)} at ${b.t(`month.peakRevenue.${L}`)}, ${b.t(`month.peakToTrough.${L}`)} the ${b.t(`month.trough.${L}`)} low, and trailing-12 revenue reached ${b.t("month.t12Latest")}`,
+            `Revenue peaks in ${b.t(`month.peak.${L}`)} at ${b.t(`month.peakRevenue.${L}`)}, ${b.t(`month.peakToTrough.${L}`)} the ${b.t(`month.trough.${L}`)} low`,
+          ]
         : `Monthly revenue through ${monthLabel(ctx.out.asOfDate.slice(0, 7))}`,
     );
     return [

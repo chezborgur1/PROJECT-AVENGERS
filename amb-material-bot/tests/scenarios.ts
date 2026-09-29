@@ -16,6 +16,7 @@ const SAMPLE = path.join(REPO, "samples/project-ridgeline");
 export const MONTHLY_PNL = "QuickBooks Profit and Loss FY23-FY25 (monthly).csv";
 export const ANNUAL_PNL = "QuickBooks Profit and Loss FY23-FY25.csv";
 const BALANCE_SHEET = "QuickBooks Balance Sheet FY23-FY25.csv";
+const BANK = "Bank transactions 2025 (checking).csv";
 
 type Grid = string[][];
 const read = (file: string): Grid => parse(fs.readFileSync(file, "utf8"), { relax_column_count: true, skip_empty_lines: false, bom: true }) as Grid;
@@ -136,5 +137,13 @@ export function annualWithProForma(): Scenario {
   const file = path.join(dir, "adjustments.csv");
   const [header, ...lines] = fs.readFileSync(file, "utf8").trimEnd().split("\n");
   fs.writeFileSync(file, `${header},pnl_line\n${lines.map((l) => `${l},`).join("\n")}\nPF1,PF,New commercial maintenance contract,Run-rate,Accepted,Documented,"Adds a signed contract at its annual value.",Contract,,0,0,40000,Revenue\n`);
+  return scenario(dir);
+}
+
+/** The bank transactions dated three years earlier, so every bank month falls before the P&L months and no proof of cash is possible. */
+export function bankOutsideGrid(): Scenario {
+  const dir = copySample();
+  const file = path.join(dir, BANK);
+  write(file, read(file).map((r, i) => (i === 0 || !r[0] ? r : [r[0].replace(/^2025-/, "2022-"), ...r.slice(1)])));
   return scenario(dir);
 }

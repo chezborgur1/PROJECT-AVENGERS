@@ -1,4 +1,4 @@
-import { addMonths, monthKey, type DealForm, type FinancialDataset } from "../domain/financials.ts";
+import { addMonths, monthKey, type DealForm, type FinancialDataset, type PremisesArrangement } from "../domain/financials.ts";
 import { fiscalYearEndMonth, isPassThrough, type RequestRow } from "../requests/schema.ts";
 
 export const PROJECTION_YEARS = 5;
@@ -35,16 +35,38 @@ export interface DealAssumptions {
   /** Months of LTM payroll held back on an asset purchase (guide 5.6). */
   reconciliationHoldbackMonths: number;
   deferredCapex: number;
+  /** How a post-closing working-capital true-up is paid (guide 5.6); Stock by default only when buyer stock is meant to be tax-deferred. */
+  trueUpSettlement: "Cash" | "Stock" | "Share-adjusting escrow";
+  /** "Stock consideration intended tax-deferred?" (guide 5.5): turns on the boot flag on Deal Structure. */
+  stockTaxDeferred: boolean;
+  /** Deferred revenue and customer deposits: an operating liability in NWC (AMB default) or a debt-like deduction (guide 5.6). */
+  deferredRevenueTreatment: "NWC (operating liability)" | "Debt-like";
+  /** Guide 5.5 "Real estate" block; empty when no source states it. */
+  premisesArrangement: "" | "Leased from third party" | "Owned by seller, offered for lease" | "Owned by seller, offered for sale" | "Owned by operating company";
 }
 
-/** Pro forma methods an annual-mode scenario applies per expense line (guide 5.5 scenario block). */
+const PREMISES_LABEL: Record<PremisesArrangement, DealAssumptions["premisesArrangement"]> = {
+  leased_from_third_party: "Leased from third party",
+  owned_by_seller_offered_for_lease: "Owned by seller, offered for lease",
+  owned_by_seller_offered_for_sale: "Owned by seller, offered for sale",
+  owned_by_operating_company: "Owned by operating company",
+};
+
+/** The arrangement the intake states; an owner-held site outranks a leased one, since it is the one that needs the Real Estate work. */
+function premisesFrom(ds: FinancialDataset): DealAssumptions["premisesArrangement"] {
+  const arrangements = (ds.intake?.locations ?? []).map((l) => l.arrangement);
+  const owned = arrangements.find((x) => x !== "leased_from_third_party");
+  if (owned) return PREMISES_LABEL[owned];
+  return arrangements.length ? "Leased from third party" : "";
+}
+
+/** Pro forma methods a Main Street scenario applies per expense line (guide 5.5 scenario block). */
 export type ScenarioMethod = "3-year average" | "Latest year" | "% of sales, 3-year blended" | "Contracted" | "Input";
 
 /** One column of the Low / Mid / High block (guide 5.2A, 5.5). Mid is the base case. */
 export interface ScenarioDrivers {
   revenueGrowth: number;
   methods: { cogs: ScenarioMethod; payroll: ScenarioMethod; rent: ScenarioMethod; marketing: ScenarioMethod; otherOpex: ScenarioMethod };
-  multiple: number;
 }
 
 /** Step sizes for the two-way grids (guide 5.5); midpoints link to the base case. */
@@ -100,7 +122,7 @@ export interface Assumptions {
   recast: RecastAssumptions;
   deal: DealAssumptions;
   sensitivity: SensitivityAssumptions;
-  /** Annual-only mode: the Pro Forma Low / Mid / High block. Low and High each differ from Mid on growth and one driver (check C29). */
+  /** Main Street mode: the Pro Forma Low / Mid / High block. Low and High each differ from Mid on growth and one driver (check C29). */
   scenarios: Record<"low" | "mid" | "high", ScenarioDrivers>;
 }
 
@@ -269,6 +291,10 @@ export function defaultAssumptions(ds: FinancialDataset, row: RequestRow): Assum
       transactionFees: 0,
       reconciliationHoldbackMonths: dealForm === "asset_purchase" ? 1 : 0,
       deferredCapex: 0,
+      trueUpSettlement: "Cash",
+      stockTaxDeferred: false,
+      deferredRevenueTreatment: "NWC (operating liability)",
+      premisesArrangement: premisesFrom(ds),
     },
     sensitivity: {
       multipleStep: 0.25,
@@ -281,12 +307,13 @@ export function defaultAssumptions(ds: FinancialDataset, row: RequestRow): Assum
       dscrHurdle: 1.25,
     },
     scenarios: {
-      // SUN's pattern (guide F6 §3.3) for Mid: variable costs at the blended ratio, fixed costs at the latest year, other at the average.
-      // Low lets every variable cost scale with sales; High holds payroll at the latest year (operating leverage).
-      // Low and High each differ from Mid on growth and an operating driver (C29), and Low <= Mid <= High on EBITDA.
-      low: { revenueGrowth: round(growth[0]! - 0.03, 4), methods: { cogs: "% of sales, 3-year blended", payroll: "% of sales, 3-year blended", rent: "Latest year", marketing: "% of sales, 3-year blended", otherOpex: "% of sales, 3-year blended" }, multiple: 2.5 },
-      mid: { revenueGrowth: growth[0]!, methods: { cogs: "% of sales, 3-year blended", payroll: "% of sales, 3-year blended", rent: "Latest year", marketing: "Latest year", otherOpex: "3-year average" }, multiple: 3.0 },
-      high: { revenueGrowth: round(growth[0]! + 0.03, 4), methods: { cogs: "% of sales, 3-year blended", payroll: "Latest year", rent: "Latest year", marketing: "3-year average", otherOpex: "3-year average" }, multiple: 3.5 },
+      // Mid is the base window as reported (every line at the latest year, no growth), so the Mid valuation rests on trailing
+      // SDE, as an SBA lender underwrites it, not on a forecast. Low shrinks revenue with every variable cost scaling at its
+      // 3-year blended ratio; High grows it with cost of revenue scaling and payroll held (operating leverage). Low and High
+      // each differ from Mid on growth and an operating driver (C29), and Low <= Mid <= High on EBITDA.
+      low: { revenueGrowth: -0.03, methods: { cogs: "% of sales, 3-year blended", payroll: "% of sales, 3-year blended", rent: "Latest year", marketing: "Latest year", otherOpex: "Latest year" } },
+      mid: { revenueGrowth: 0, methods: { cogs: "Latest year", payroll: "Latest year", rent: "Latest year", marketing: "Latest year", otherOpex: "Latest year" } },
+      high: { revenueGrowth: 0.03, methods: { cogs: "% of sales, 3-year blended", payroll: "Latest year", rent: "Latest year", marketing: "Latest year", otherOpex: "Latest year" } },
     },
   };
 }

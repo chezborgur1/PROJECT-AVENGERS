@@ -8,8 +8,10 @@
 // design/FINAL_DESIGN_SPEC.md, so copy that passes the lint fits the page.
 
 import { z } from "zod";
+import type { FinancialDataset } from "../domain/financials.ts";
 import type { Brief } from "./brief.ts";
 import { unknownTokens } from "./brief.ts";
+import { titleWrap } from "./design.ts";
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -82,7 +84,16 @@ export const CimCopySchema = z.object({
   s2_4: z.object({ title: Title, observations: observations(2, 3, "the facilities and systems tables", "s2_4.observations") }).optional(),
   s3_1: z.object({ title: Title, observations: observations(2, 3, "the market and competitor tables", "s3_1.observations") }).optional(),
   s4_1: z.object({ title: Title, observations: observations(3, 4, "the top-10 list and the customer mix table", "s4_1.observations") }).optional(),
-  s4_2: z.object({ title: Title, observations: observations(3, 4, "the account and revenue retention tables", "s4_2.observations") }).optional(),
+  s4_2: z
+    .object({
+      title: Title,
+      observations: observations(3, 4, "the account and revenue retention tables", "s4_2.observations"),
+      takeaway: z
+        .string()
+        .optional()
+        .describe("Callout body, 30 to 50 words: the listed accounts' share of revenue, so the retention figures read at their scope, and what the rest of revenue is and how it renews"),
+    })
+    .optional(),
   s5_1: z.object({ title: Title, observations: observations(2, 3, "the organization table", "s5_1.observations") }).optional(),
   s5_2: z.object({ title: Title, observations: observations(2, 3, "the headcount tables", "s5_2.observations") }).optional(),
   s6_1: z.object({ title: Title, observations: observations(4, 5, "the income statement", "s6_1.observations") }).optional(),
@@ -100,7 +111,7 @@ export const CimCopySchema = z.object({
     .optional(),
   s7_2: z.object({ title: Title, observations: observations(2, 3, "the owner compensation table", "s7_2.observations") }).optional(),
   s8_1: z.object({ title: Title, observations: observations(2, 3, "the balance sheet and working capital tables", "s8_1.observations") }).optional(),
-  s9_1: z.object({ title: Title, observations: observations(2, 3, "the growth levers table", "s9_1.observations") }).optional(),
+  s9_1: z.object({ title: Title, observations: observations(2, 4, "the growth levers table", "s9_1.observations") }).optional(),
   s10_1: z
     .object({
       title: Title,
@@ -237,9 +248,20 @@ export function lintText(text: string, path: string): LintIssue[] {
   return out;
 }
 
+/** The last line of a title when it is a widow (spec 6.1): one or two short words alone on the line, as the title box wraps it. */
+export function titleWidow(title: string): string | undefined {
+  const lines = titleWrap(title);
+  const last = lines[lines.length - 1]!;
+  return lines.length > 1 && last.split(/\s+/).length < 3 && last.length < 20 ? last : undefined;
+}
+
 /** Title rules (guide 4.5, spec 6.1): a finding with a figure, at most 130 characters, sentence case, no final stop. */
 export function lintTitle(title: string, path: string): LintIssue[] {
   const out: LintIssue[] = [];
+  // Fit the title to one line or give its second line some weight.
+  const widow = titleWidow(title);
+  if (widow) out.push({ path, issue: `title leaves "${widow}" alone on its last line (widow)`, text: title });
+  if (title.length > 110) out.push({ path, issue: `title is ${title.length} characters (target 60 to 110)`, text: title });
   if (!HAS_FIGURE.test(title)) out.push({ path, issue: "title carries no figure (a label, not a finding)", text: title });
   if (title.length > 130) out.push({ path, issue: `title is ${title.length} characters (cap 130)`, text: title });
   if (title.length < 40) out.push({ path, issue: `title is ${title.length} characters (60 to 110 expected)`, text: title });
@@ -260,6 +282,7 @@ const BUDGETS: { match: RegExp; max: number }[] = [
   { match: /\.considerations\[\d+\]\.evidence$/, max: 42 },
   { match: /^s1_4\.rows\[\d+\]\.(shows|addressed)$/, max: 46 },
   { match: /^s7_1\.takeaway$/, max: 60 },
+  { match: /^s4_2\.takeaway$/, max: 50 },
   { match: /^s10_1\.(transaction|transition|premises)$/, max: 80 },
   { match: /^s10_1\.process$/, max: 50 },
 ];
@@ -299,6 +322,32 @@ export function lintCopy(copy: CimCopy, brief?: Brief): LintIssue[] {
     } else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) walk(x, path ? `${path}.${k}` : k);
   };
   walk({ ...copy, open_questions: [] }, "");
+  return issues;
+}
+
+/**
+ * Names the CIM must never print (guide 1.4, Q12): every listed customer and
+ * every employee outside management, who appear only by code or role. The
+ * owner and the management roster are named in the deck on purpose.
+ */
+export function protectedNames(ds: FinancialDataset): string[] {
+  const named = new Set([...(ds.intake?.management ?? []).map((m) => m.name.toLowerCase()), ...(ds.recastInputs?.owners ?? []).map((o) => o.name.toLowerCase())]);
+  const staff = (ds.payroll?.employees ?? []).filter((e) => e.name && !e.isOwner && !e.isManagement && !named.has(e.name.toLowerCase())).map((e) => e.name!);
+  const customers = (ds.customers?.customers ?? []).flatMap((c) => (c.name ? [c.name] : []));
+  return [...new Set([...customers, ...staff].map((n) => n.trim()).filter((n) => n.length >= 3))];
+}
+
+/** Every copy string that prints a protected name; any hit blocks the copy (a customer or staff member named in a buyer document). */
+export function lintNames(copy: CimCopy, names: string[]): LintIssue[] {
+  const issues: LintIssue[] = [];
+  const patterns = names.map((n) => ({ n, re: new RegExp(`(^|[^\\p{L}])${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^\\p{L}])`, "iu") }));
+  const walk = (v: unknown, path: string) => {
+    if (typeof v === "string") {
+      for (const { n, re } of patterns) if (re.test(v)) issues.push({ path, issue: `names "${n}", who appears in the CIM only by code or role`, text: v });
+    } else if (Array.isArray(v)) v.forEach((x, i) => walk(x, `${path}[${i}]`));
+    else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) walk(x, path ? `${path}.${k}` : k);
+  };
+  walk(copy, "");
   return issues;
 }
 

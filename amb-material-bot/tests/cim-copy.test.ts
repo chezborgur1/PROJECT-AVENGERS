@@ -91,7 +91,9 @@ describe("numbers brief", () => {
     const brief = buildContext({ row, ds, out, copy: { open_questions: [] }, firm, date: new Date() }).brief;
     expect(brief.value("adjEbitda.FY2025")).toBeCloseTo(371_865, 0);
     expect(brief.value("sde.FY2025")).toBeCloseTo(547_915, 0);
-    expect(brief.t("replacementCost")).toBe("$109,250");
+    // Prose money, like every other amount in a title: $95,000 plus 15% prints $109.3K, never $109.2K from float noise.
+    expect(brief.t("replacementCost")).toBe("$109.3K");
+    expect(brief.t("replacementSalary")).toBe("$95,000");
     expect(brief.resolve("Adj. EBITDA of {{adjEbitda.latest}}")).toBe("Adj. EBITDA of $371.9K");
     expect(unknownTokens("{{rev.latest}} and {{rev.nowhere}}", brief)).toEqual(["rev.nowhere"]);
   });
@@ -126,17 +128,22 @@ describe("formats", () => {
   it("prints table figures in whole thousands with en-dash zeros and bracketed negatives", () => {
     expect(k(2_406_800, { dollar: true })).toBe("$2,407");
     expect(k(-938_800)).toBe("(939)");
-    expect(k(400)).toBe("–");
+    // A real amount under $500 prints 0, so the column visibly foots; only a true zero is the dash.
+    expect(k(400)).toBe("0");
+    expect(k(0)).toBe("–");
     expect(fmtPct(-0.032)).toBe("(3.2%)");
     expect(fmtGrowth(0, 5)).toBe("n.m.");
-    expect(fmtBps(0.61, 0.6189)).toBe("+89 bps");
+    expect(fmtBps(0.61, 0.6189)).toBe("+90 bps");
   });
 
   it("writes prose money and margin changes the way AMB writes them", () => {
     expect(fmtMoney(3_040_800)).toBe("$3.04M");
     expect(fmtMoney(371_865)).toBe("$371.9K");
     expect(fmtMoney(-24_600)).toBe("–$24.6K");
-    expect(describeDelta(0.61, 0.6189)).toBe("up 89 bps");
+    // Changes are taken between the levels as printed: 61.0% to 61.9% is 90 bps, not the 89 of the unrounded ratios.
+    expect(describeDelta(0.61, 0.6189)).toBe("up 90 bps");
+    expect(fmtBps(0.2131, 0.2134)).toBe("–");
+    expect(fmtMoney(3_100)).toBe("$3.1K");
     expect(describeDelta(0.076, 0.1223)).toBe("up 4.6 pts");
     expect(describeDelta(0.026, 0.02601)).toBe("flat");
   });

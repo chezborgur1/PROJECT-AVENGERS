@@ -25,10 +25,11 @@ import { CHART_COLOR } from "./chartData.ts";
 import { readCharts } from "./charts.ts";
 import { roundTo } from "./deal.ts";
 import { excelSerial } from "./periods.ts";
-import { expectations } from "./sheet.ts";
+import { clippedTexts, expectations } from "./sheet.ts";
 import { COLOR } from "./styles.ts";
 import type { ModelOutput } from "./types.ts";
 import { planOptionsUsedFor, planWorkbook, type PlanOptions, type WorkbookPlan } from "./workbook.ts";
+import { MONTHLY_NAMES } from "./workbook/data.ts";
 
 export type Scalar = number | string | boolean | null;
 
@@ -51,7 +52,7 @@ export const NAMED_OUTPUTS = [
   "AsOfDate", "FYEMonth", "PrintMode", "MainStreetMode", "Rev_FY", "Rev_LTM", "Rev_PF", "GP_FY", "GP_LTM", "RepEBITDA_FY", "RepEBITDA_LTM",
   "SDE_FY", "SDE_LTM", "AdjEBITDA_FY", "AdjEBITDA_LTM", "PFAdjEBITDA", "Customers_Latest", "Top10Share_LTM", "GDR_LTM", "NDR_LTM",
   "Headcount_Latest", "NWC_Peg", "MasterCheck", "DealForm", "NWC_Latest", "NWC_vsPeg", "DefRev_Latest", "LOIDate", "SigningDate",
-  "EffectiveDate", "ChartStart", "ChartEnd",
+  "EffectiveDate", "ChartStart", "ChartEnd", "Offer_Count", "Offer_Reference", "Offer_Headline_1", "Offer_CashAtClose_1",
 ];
 
 const EXCEL_EPOCH = Date.UTC(1899, 11, 30);
@@ -395,6 +396,16 @@ function engineValues(model: ModelOutput, name: string): (number | string)[] | u
     case "SigningDate":
     case "EffectiveDate":
       return undefined;
+    case "Offer_Count": return model.deal ? [model.deal.length] : undefined;
+    case "Offer_Reference": return model.deal?.[0] ? [model.deal[0].name] : undefined;
+    case "Offer_Headline_1": return model.deal?.[0] ? [model.deal[0].purchasePrice / K] : undefined;
+    case "Offer_CashAtClose_1": return model.deal?.[0] ? [model.deal[0].cashAtClose / K] : undefined;
+  }
+  const monthly = /^Monthly_(.+)$/.exec(name);
+  if (monthly) {
+    const key = MONTHLY_NAMES.find(([n]) => n === monthly[1])?.[1];
+    const series = key ? model.monthly?.series[key] : undefined;
+    return series?.map((v) => v / K);
   }
   const scale = (v: number) => (THOUSANDS.has(name) ? v / K : v);
   const v = (n as unknown as Record<string, unknown>)[name];
@@ -435,6 +446,17 @@ export async function verifyWorkbook(file: string, model: ModelOutput, options?:
   if (fileTabs.join("|") !== planTabs.join("|")) lint.push({ cell: "(workbook)", issue: `tab order ${fileTabs.join(", ")} differs from the plan ${planTabs.join(", ")}` });
 
   for (const p of plan.plans) {
+    // Printed text that runs into a filled neighbour is cut at the cell edge in print (C37, guide 5.11).
+    for (const c of clippedTexts(p)) lint.push({ cell: `'${p.name}'!${c.cell}`, issue: `text cut at its cell edge in print: "${c.text.slice(0, 40)}"` });
+    // Every formula on an output tab carries the engine's value, so none is evaluated for errors only (the row-2 title and the Print toggle are furniture).
+    if (p.output) {
+      for (const [key, spec] of p.cells) {
+        if (!spec.f || spec.expect !== undefined) continue;
+        const [r, c] = key.split(":").map(Number) as [number, number];
+        if ((r === 2 && c === 2) || (p.toggle && r === p.toggle.row && c === p.toggle.col)) continue;
+        lint.push({ cell: `'${p.name}'!${colName(c)}${r}`, issue: "formula without an engine expectation" });
+      }
+    }
     for (const { row, col, spec } of expectations(p)) {
       const got = value(p.name, row, col);
       const want = spec.expect!;
@@ -462,7 +484,8 @@ export async function verifyWorkbook(file: string, model: ModelOutput, options?:
           if (hexOf(c.font) === COLOR.input) lint.push({ cell: at, issue: "formula in blue input colour (guide 5.9)" });
         } else if (outputTabs.has(ws.name) && typeof v === "number") {
           const colour = hexOf(c.font);
-          if (colour !== COLOR.input && colour !== COLOR.white && colour !== COLOR.helper) lint.push({ cell: at, issue: `typed number in ${colour}, not a blue input (C18)` });
+          // A placeholder input awaiting a quote is typed in Pending red (guide 5.9), still an input.
+          if (colour !== COLOR.input && colour !== COLOR.white && colour !== COLOR.helper && colour !== COLOR.pending) lint.push({ cell: at, issue: `typed number in ${colour}, not a blue input (C18)` });
         }
       });
     });
@@ -486,8 +509,54 @@ export async function verifyWorkbook(file: string, model: ModelOutput, options?:
     if (!same) mismatches.push({ cell: ranges[0]!, label: `named output ${name}`, workbook: got.join(", "), engine: want.join(", ") });
   }
 
+  lintTypedCopies(workbook, outputTabs, lint);
+  await lintConditionalFormats(file, lint);
   await lintCharts(file, plan, { workbook, value }, lint);
   return { formulas, compared, errors, mismatches, lint, ok: errors.length === 0 && mismatches.length === 0 && lint.length === 0 };
+}
+
+/** An absolute file path in a cell: a client's folder name must never print on a buyer-version workbook. */
+const FILE_PATH = /(^|[\s(])(\/[^\s/]+){2,}|[A-Za-z]:\\|\\\\[^\s\\]+\\/;
+
+/** Tabs whose typed numbers are inputs by design: the advisor's schedule and assumptions, and the data behind the model. */
+const INPUT_TABS = /^(Assumptions|Adjustments|Databook|Mapping|Raw - .*)$/;
+
+/**
+ * Two writer-side lints over typed cells (guide 5.7 C18; confidentiality):
+ * no text cell carries a file path, and no typed number on an output tab
+ * copies a Databook balance, which must be a link so it moves with the data.
+ */
+function lintTypedCopies(workbook: ExcelJS.Workbook, outputTabs: Set<string>, lint: VerifyResult["lint"]): void {
+  const databook = new Set<number>();
+  workbook.getWorksheet("Databook")?.eachRow((r) => r.eachCell((c) => {
+    if (typeof c.value === "number" && Math.abs(c.value) >= 100) databook.add(Math.round(c.value * 100));
+  }));
+  workbook.eachSheet((ws) => {
+    ws.eachRow((r, rowNumber) => {
+      r.eachCell((c, colNumber) => {
+        const at = `'${ws.name}'!${colName(colNumber)}${rowNumber}`;
+        const v = c.value;
+        if (typeof v === "string" && FILE_PATH.test(v)) lint.push({ cell: at, issue: "file path in a cell value; write the file name only" });
+        if (typeof v !== "number" || !outputTabs.has(ws.name) || INPUT_TABS.test(ws.name)) return;
+        // At $000s a copied balance is either fractional or at least 100; small whole numbers are counts and settings.
+        if ((Math.abs(v) >= 100 || !Number.isInteger(v)) && databook.has(Math.round(v * 1000 * 100))) lint.push({ cell: at, issue: `typed ${v} copies a Databook balance; link it (C18)` });
+      });
+    });
+  });
+}
+
+/** Every conditional format must carry a style: an empty dxf draws nothing (the sensitivity frontier once lost its box this way). */
+async function lintConditionalFormats(file: string, lint: VerifyResult["lint"]): Promise<void> {
+  const zip = await JSZip.loadAsync(fs.readFileSync(file));
+  const styles = await zip.file("xl/styles.xml")!.async("string");
+  const dxfs = [...(/<dxfs[^>]*>([\s\S]*?)<\/dxfs>/.exec(styles)?.[1] ?? "").matchAll(/<dxf\/>|<dxf>[\s\S]*?<\/dxf>/g)].map((m) => m[0]);
+  for (const name of Object.keys(zip.files).filter((f) => /^xl\/worksheets\/sheet\d+\.xml$/.test(f))) {
+    const xml = await zip.file(name)!.async("string");
+    for (const m of xml.matchAll(/<conditionalFormatting sqref="([^"]+)">[\s\S]*?<cfRule [^>]*dxfId="(\d+)"/g)) {
+      const dxf = dxfs[Number(m[2])];
+      if (!dxf || dxf === "<dxf/>" || dxf === "<dxf></dxf>") lint.push({ cell: `${name} ${m[1]!.slice(0, 40)}`, issue: "conditional format with an empty style (dxf)" });
+    }
+  }
 }
 
 /**

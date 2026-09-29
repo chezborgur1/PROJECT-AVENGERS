@@ -59,14 +59,15 @@ and 36 monthly columns) and balance sheets, a year of bank transactions,
 intake notes and their structured `intake.json`, an adjustments schedule, a
 customer list, a payroll register, operating KPIs, mapping overrides, and
 `cim-copy.fixture.json`, the reviewed CIM copy used when no API key is set.
-The result is a 38-tab workbook with every check OK and a 23-page CIM.
+The result is a 38-tab workbook with every check OK, the render check (C37)
+included, and a 21-page CIM.
 
 Optional tools, used when installed:
 
 | Tool | Used for | Without it |
 |---|---|---|
-| LibreOffice (`soffice`) | The CIM's PDF; the LibreOffice recalculation test | The .pptx is still written; `run-summary.md` says why there is no PDF |
-| `python3` with PyMuPDF | The CIM's page images, rasterized from the PDF | No page images |
+| LibreOffice (`soffice`) | The CIM's PDF; the workbook render check (C37); the LibreOffice recalculation test | The .pptx is still written; `run-summary.md` says why there is no PDF; C37 stays `Pending` and the master check says so |
+| `python3` with PyMuPDF | The CIM's page images, rasterized from the PDF; measuring the workbook's rendered pages for C37 | No page images; C37 stays `Pending` |
 | Georgia, or its metric twin Gelasio | Title widths in the PDF (titles are set in Georgia) | LibreOffice substitutes a face with other widths; the .pptx is unaffected |
 
 ### What needs an API key
@@ -196,8 +197,7 @@ engagement letters.
   seller's guidance.
 - **Not built yet:** the Offer Comparison and Real Estate tabs (checks
   C23 to C27 and C31 to C33 read `n.a.`), the top-vendor and won/lost-by-month
-  chart exhibits (they need vendor-level GL and customer revenue by month),
-  and the automated render check of the workbook (C37 reads `n.a.`).
+  chart exhibits (they need vendor-level GL and customer revenue by month).
 - **`intake.yaml` is not read**; `intake.json` is the structured form.
 - **The Claude drafting path** is covered by type checks and the shared
   copy lint; the offline tests exercise the fixture and templated paths.

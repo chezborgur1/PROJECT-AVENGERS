@@ -21,7 +21,7 @@ Advisory Services (sell-side M&A for Main Street / lower middle market).
 - `src/requests/`: request-list schema, CSV store, queue ordering
 - `src/ingest/`: one reader per source (QuickBooks export and API, bank CSV, Claude PDF and intake extraction, Word notes, adjustments / customers / payroll / KPI / intake.json files); `merge.ts` builds the `FinancialDataset`
 - `src/domain/`: the contract types and period helpers (`financials.ts`) and account mapping (`chartOfAccounts.ts`)
-- `src/model/`: `engine.ts` (the numbers), `workbook.ts` + `workbook/*.ts` (the tabs), `charts.ts` (native chart injection), `verifyWorkbook.ts` (independent formula evaluation against the engine)
+- `src/model/`: `engine.ts` (the numbers), `workbook.ts` + `workbook/*.ts` (the tabs), `charts.ts` (native chart injection), `verifyWorkbook.ts` (independent formula evaluation against the engine), `renderCheck.ts` (C37: the written workbook rendered by LibreOffice and measured page by page)
 - `src/cim/`: `planner.ts` + `sections/*.ts` (which pages the data supports), `exhibits.ts`, `brief.ts` (figure tokens), `copy.ts` (schema and voice lint), `narrative.ts` (Claude, fixture or template copy), `design.ts` (layout and drawing), `render.ts` (PDF and PNGs), `deck.ts` (`buildCim`)
 - `src/pipeline.ts`: one request end to end, and the two review files
 
@@ -33,5 +33,7 @@ Advisory Services (sell-side M&A for Main Street / lower middle market).
 - The CIM never carries a valuation, multiple, asking price or offer structure. Those stay on the model's internal tabs.
 - CIM hard bans (guide 2.10, 4.4; `design.ts` has no primitive for the shapes, `copy.ts` lints the words): numbered badges, rounded card grids, stat tiles, letter-spaced caps kickers, decorative shapes, icon rows, accent stripes, full-width header bars, centred body text, stock phrases, labels as titles, em dashes in prose.
 - Only `accepted` adjustments enter the ladder and the CIM.
+- Every printed workbook tab sets 9 pt body text at 7 pt or more (`fitPrintWidth` in `src/model/sheet.ts`); C37 proves it on the written file, and the master check reads "(render check pending)" until it has run.
+- CIM titles wrap without a widow (`titleWrap`, measured in Georgia Bold 20), and the columns of a row end within 0.50 in (`layoutPage` resizes a chart to balance them; anything left is a build note in `run-summary.md`).
 - Real client data (source files, outputs, the live request list, `.qbo-tokens.json`, `.env`) is git-ignored. Keep it that way. Samples must stay fictional; `tests/ingest-sample.test.ts` fails if the Ridgeline folder and the fixture diverge.
 - Claude calls go through `src/util/claude.ts` (structured outputs + server-side refusal fallback).

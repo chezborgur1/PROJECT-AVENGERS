@@ -10,7 +10,7 @@ import { confirm, pageCopy, PER_MANAGEMENT, standardNote } from "../context.ts";
 import type { CimCopy } from "../copy.ts";
 import { spanW } from "../design.ts";
 import { capacityFacts, facilities, keyObservations, milestones, observationsBlock, revenueByLine, revenueMixChart, serviceLines, unitEconomics, usable } from "../exhibits.ts";
-import { chooseTitle, draft, present, source } from "./common.ts";
+import { chooseTitle, draft, present, source, verb } from "./common.ts";
 import type { PageModule, SectionModule } from "./types.ts";
 
 const SECTION = "Company overview";
@@ -70,7 +70,7 @@ const s2_2: PageModule = {
         section: SECTION,
         title,
         rows: [{ columns: [{ span: [1, 6], blocks: present(mix, svc) }, { span: [7, 12], blocks: present(byLine, ms, obs) }] }],
-        notes: { source: source(ctx.sources.financials, "Management"), note: standardNote(ctx, "Shares are of total revenue after discounts."), footnotes: [PER_MANAGEMENT] },
+        notes: { source: source(ctx.sources.financials, "Management"), note: standardNote(ctx, "Shares are of revenue before discounts and refunds, rounded to add to 100%."), footnotes: [PER_MANAGEMENT] },
         carries: [byLine ? "S6.2" : "", ms ? "S2.1" : ""].filter(Boolean),
       }),
     ];
@@ -88,7 +88,7 @@ function fallback22(ctx: CimContext): NonNullable<CimCopy["s2_2"]> {
   const lines = ctx.out.periods[ctx.latest.key]!.revenueLines.filter((l) => l.amount > 0);
   const obs = lines.slice(0, 3).map((l) => {
     const s = slugOf(ctx, l.label);
-    return { row: `rev.line.${l.account}`, lead: `${l.label}: {{line.${s}.latest}}, {{line.${s}.share0.${ctx.latest.key}}} of revenue,`, body: `{{line.${s}.yoy}} change on the prior year; ${confirm(ctx, "driver", `What drove the change in ${l.label.toLowerCase()} revenue`)}.` };
+    return { row: `rev.line.${l.account}`, lead: `${l.label}: {{line.${s}.latest}}, {{line.${s}.share0.${ctx.latest.key}}} of revenue,`, body: `${ctx.brief.has(`line.${s}.yoy`) ? `{{line.${s}.yoy}} change on the prior year` : "no prior-year revenue to compare"}; ${confirm(ctx, "driver", `What drove the change in ${l.label.toLowerCase()} revenue`)}.` };
   });
   return { observations: obs.length >= 2 ? obs : [...obs, { row: "", lead: "Revenue of {{rev.latest}}", body: `in ${ctx.latest.label}.` }] };
 }
@@ -108,9 +108,7 @@ const s2_3: PageModule = {
     // Suppliers are a row here unless S5.5 gives them their own table on the people page.
     const fac = carries(ctx, "S2.3", "S2.4") || carries(ctx, "S2.3", "S2.5") ? facilities(ctx, spanW(8, 12), !ctx.present.has("S5.5")) : undefined;
     const obs = observationsBlock("unit economics", keyObservations(ctx, "S2.3", copy.observations, present(ue, cap)));
-    const b = ctx.brief;
-    const f0 = ctx.fy[0]!.key;
-    const title = chooseTitle(ctx, "S2.3 title", copy.title, `Revenue per field employee rose from ${b.maybe(`hc.revPerField.${f0}`) ?? "n.a."} to ${b.maybe(`hc.revPerField.${ctx.latest.key}`) ?? "n.a."} as revenue grew ${b.maybe("rev.total") ?? b.t("rev.yoy")}`);
+    const title = chooseTitle(ctx, "S2.3 title", copy.title, unitTitle(ctx));
     return [
       draft(ctx, {
         id: "S2.3",
@@ -125,12 +123,33 @@ const s2_3: PageModule = {
   fallback: (ctx) => ({ s2_3: fallback23(ctx) }),
 };
 
+/**
+ * The unit-economics title from the fiscal-year columns the table shows, so
+ * every figure in it is on the page: revenue per field employee (or per
+ * employee) first and last year, and revenue growth across the same years.
+ */
+function unitTitle(ctx: CimContext): string {
+  const b = ctx.brief;
+  const f0 = ctx.fy[0]!;
+  const fl = ctx.fy[ctx.fy.length - 1]!;
+  const [key, what] = b.has(`hc.revPerField.${fl.key}`) ? ["hc.revPerField", "Revenue per field employee"] : ["hc.revPerEmployee", "Revenue per employee"];
+  const to = b.maybe(`${key}.${fl.key}`);
+  const from = b.maybe(`${key}.${f0.key}`);
+  if (!to) return `${ctx.short} produced ${b.t("rev.latest")} of revenue in ${ctx.latest.label}`;
+  if (f0 === fl || !from) return `${what} was ${to} in ${fl.label} on revenue of ${b.t(`rev.${fl.key}`)}`;
+  const moved = verb((b.value(`${key}.${fl.key}`) ?? 0) - (b.value(`${key}.${f0.key}`) ?? 0), "rose", "fell");
+  return `${what} ${moved} from ${from} in ${f0.label} to ${to} in ${fl.label} as revenue ${verb(b.value("rev.total"))} ${b.t("rev.total")}`;
+}
+
 function fallback23(ctx: CimContext): NonNullable<CimCopy["s2_3"]> {
-  const f0 = ctx.fy[0]!.key;
+  const f0 = ctx.fy[0]!;
+  const fl = ctx.fy[ctx.fy.length - 1]!;
   return {
     observations: [
-      { row: "ue.revField", lead: `Revenue per field employee of {{hc.revPerField.${ctx.latest.key}}}`, body: `compares with {{hc.revPerField.${f0}}} in ${ctx.fy[0]!.label}; ${confirm(ctx, "capacity driver", "What changed field productivity")}.` },
-      { row: "ue.labor", lead: `Payroll at {{hc.laborPct.${ctx.latest.key}}} of revenue`, body: `excludes the owner, whose pay is restated in the EBITDA ladder.` },
+      f0 === fl
+        ? { row: "ue.revField", lead: `Revenue per field employee of {{hc.revPerField.${fl.key}}}`, body: `in ${fl.label}; ${confirm(ctx, "capacity driver", "What drives field productivity")}.` }
+        : { row: "ue.revField", lead: `Revenue per field employee of {{hc.revPerField.${fl.key}}}`, body: `in ${fl.label} compares with {{hc.revPerField.${f0.key}}} in ${f0.label}; ${confirm(ctx, "capacity driver", "What changed field productivity")}.` },
+      { row: "ue.labor", lead: `Payroll at {{hc.laborPct.${fl.key}}} of revenue`, body: `excludes the owner, whose pay is restated in the EBITDA ladder.` },
     ],
   };
 }

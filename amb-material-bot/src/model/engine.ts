@@ -9,6 +9,7 @@
 // payroll analytics, valuation, deal structure, sensitivities, checks and
 // the named outputs of guide 5.14.
 
+import path from "node:path";
 import { chartExhibits } from "./chartData.ts";
 import {
   ADJUSTMENT_TIERS,
@@ -28,7 +29,7 @@ import {
   type MonthKey,
 } from "../domain/financials.ts";
 import type { Assumptions, ScenarioDrivers } from "./assumptions.ts";
-import { customerActiveAt, customerAnalytics, headcountAnalytics, isFieldDepartment, onPayrollAt } from "./analytics.ts";
+import { customerActiveAt, customerAnalytics, customerListYears, headcountAnalytics, isFieldDepartment, onPayrollAt, touchedYears } from "./analytics.ts";
 import { computeChecks } from "./checks.ts";
 import { dealStructure, sensitivityGrids, valuationDetail } from "./deal.ts";
 import { debtLikeSummary, historicalCashFlow, nwcAnalysis } from "./nwc.ts";
@@ -350,23 +351,27 @@ function summaryLineFor(category: IsCategory, account: string, ds: FinancialData
   return IS_LABELS[category];
 }
 
-/** The Pro Forma Low / Mid / High column of annual-only mode (guide 5.2A, 5.5). */
-function buildScenario(name: ProFormaScenario["name"], drivers: ScenarioDrivers, ds: FinancialDataset, a: Assumptions, schedule: Adjustment[], latestFy: number): ProFormaScenario {
-  const years = ds.years;
-  const latest = ds.pnl[latestFy]!;
-  const sum = (c: IsCategory) => years.reduce((s, y) => s + ds.pnl[y]![c], 0);
-  const revenue = latest.revenue * (1 + drivers.revenueGrowth);
+/**
+ * One Pro Forma Low / Mid / High column of the Main Street scenario block
+ * (guide 5.2A, 5.5): the base window's P&L with revenue grown and each
+ * expense line restated by its method, over the base window's schedule.
+ * `base` is the latest fiscal year in annual-only mode and the LTM window
+ * otherwise; `history` is the full fiscal years the 3-year methods read.
+ */
+function buildScenario(name: ProFormaScenario["name"], drivers: ScenarioDrivers, base: Record<IsCategory, number>, history: Record<IsCategory, number>[], baseAmounts: Map<Adjustment, number | null>, a: Assumptions): ProFormaScenario {
+  const sum = (c: IsCategory) => history.reduce((s, y) => s + y[c], 0);
+  const revenue = base.revenue * (1 + drivers.revenueGrowth);
   const byMethod = (c: IsCategory, method: string): number => {
     switch (method) {
       case "3-year average":
-        return sum(c) / years.length;
+        return sum(c) / history.length;
       case "% of sales, 3-year blended":
         return sum("revenue") ? (sum(c) / sum("revenue")) * revenue : 0;
       default:
-        return latest[c];
+        return base[c];
     }
   };
-  const cats = { ...latest };
+  const cats = { ...base };
   cats.revenue = revenue;
   cats.cogs = byMethod("cogs", drivers.methods.cogs);
   cats.payroll = byMethod("payroll", drivers.methods.payroll);
@@ -374,8 +379,9 @@ function buildScenario(name: ProFormaScenario["name"], drivers: ScenarioDrivers,
   cats.marketing = byMethod("marketing", drivers.methods.marketing);
   cats.other_opex = byMethod("other_opex", drivers.methods.otherOpex);
   const pnl = pnlLinesFrom(cats);
+  // Pro forma rows are run-rate changes to the base window; a scenario restates the lines instead.
   const amounts = new Map<Adjustment, number | null>();
-  for (const r of schedule) amounts.set(r, r.tier === "pro_forma" ? 0 : (r.byFiscalYear[latestFy] ?? 0));
+  for (const [r, v] of baseAmounts) amounts.set(r, r.tier === "pro_forma" ? 0 : v);
   const ladder = buildLadder({ netIncome: pnl.netIncome, revenue: pnl.revenue, amounts, mainStreetMode: a.recast.mainStreetMode });
   ladder.checks = { reportedEbitdaTie: ladder.reportedEbitda - pnl.ebitda, scheduleTieByTier: tierTies(ladder, amounts) };
   return {
@@ -472,10 +478,16 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
 
   // --- Analytics ----------------------------------------------------------------------------
   const gridMonths = grid?.months.map((m) => m.key);
+  // A list with revenue by month prices the latest window exactly. A list by fiscal year is priced over the latest full fiscal year it
+  // carries: an LTM that crosses into a year the list lacks, or holds as year-to-date, would read that year as zero or spread it over twelve months.
+  const listYears = ds.customers ? customerListYears(ds.customers) : new Set<number>();
+  const monthlyList = !!ds.customers?.customers.some((c) => c.revenueByMonth && Object.keys(c.revenueByMonth).length);
+  const customerPeriod = monthlyList ? latest : (hist.filter((c) => c.ref.kind === "fiscal_year" && listYears.has(c.fiscalYear!)).at(-1) ?? latest);
   const customers = ds.customers
     ? customerAnalytics({
         list: ds.customers,
-        period: latest,
+        period: customerPeriod,
+        countWindow: latest,
         fye,
         asOfDate,
         asOfMonth: a.asOfMonth,
@@ -492,7 +504,8 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
         fye,
         window: { revenue: latestValues.pnl.revenue, payroll: latestValues.pnl.payroll },
         fiscalYear: { year: latestFy, revenue: ds.pnl[latestFy]!.revenue, payroll: ds.pnl[latestFy]!.payroll },
-        customersLatest: customers?.latestCount,
+        // A list with a residual (households, members) counts only part of who the staff serve, so no per-employee ratio is drawn from it.
+        customersLatest: ds.customers?.residual ? undefined : customers?.latestCount,
         gridMonths,
       })
     : undefined;
@@ -507,7 +520,11 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
       const end = monthEndDate(c.end);
       const active = ds.customers.customers.filter((x) => customerActiveAt(x, end, fye)).length;
       k.customers = active;
-      if (active) k.revenue_per_customer = p.pnl.revenue / active;
+      // Listed customers' own revenue over the listed count: the households in the residual are not in the count, so total revenue would overstate it.
+      // Only where the list covers the window: every fiscal year it touches a full year of the model that the list carries, and twelve months long.
+      const covered = c.months === 12 && touchedYears([...years, ...listYears], c, fye).every((y) => years.includes(y) && listYears.has(y));
+      const listed = ds.customers.customers.reduce((s, x) => s + amountInWindow({ byFiscalYear: x.revenueByFiscalYear }, windowMonths(c), fye), 0);
+      if (active && covered) k.revenue_per_customer = listed / active;
     }
     if (ds.payroll) {
       const end = monthEndDate(c.end);
@@ -528,9 +545,10 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
   }
 
   // --- Balance sheet, NWC, debt-like, cash flow -----------------------------------------------------
-  const nwc = nwcAnalysis({ ds, dealForm, trailingAt });
+  const deferredAsDebtLike = a.deal.deferredRevenueTreatment === "Debt-like";
+  const nwc = nwcAnalysis({ ds, dealForm, trailingAt, deferredAsDebtLike });
   const latestBsPeriod = ds.balanceSheets?.at(-1);
-  const debtLike = debtLikeSummary(ds, latestBsPeriod ? { values: bsValues(latestBsPeriod.values), asOf: latestBsPeriod.asOf } : undefined);
+  const debtLike = debtLikeSummary(ds, latestBsPeriod ? { values: bsValues(latestBsPeriod.values), asOf: latestBsPeriod.asOf } : undefined, deferredAsDebtLike);
   const cashFlow = historicalCashFlow(
     years,
     (fy) => periods[periodKey({ kind: "fiscal_year", fiscalYear: fy })]?.pnl,
@@ -547,19 +565,30 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
     ladder: pfCol ? periods[pfCol.key]!.ladder : latestValues.ladder,
     fundedDebt: debtLike?.fundedDebt ?? legacy.historical.at(-1)?.bs?.debt ?? 0,
     debtLike: debtLike?.debtLike ?? 0,
-    cash: latestValues.bs?.cash ?? 0,
+    // Cash comes from the same dated sheet as the debt, so both sides of the bridge are at one date.
+    cash: latestBsPeriod ? bsValues(latestBsPeriod.values).cash : 0,
+    bsAsOf: latestBsPeriod?.period.key,
     nwcVsPeg: nwc?.latestVsPeg ?? 0,
     payroll: latestValues.pnl.payroll,
     sellerRetainedNwc: nwc?.sellerRetainedNwc ?? 0,
+    assetsAtClose: latestValues.bs ? { equipment: latestValues.bs.fixedAssets, inventory: latestValues.bs.inventory } : undefined,
   };
-  const { detail: valuationDetailOut, summary: valuation } = valuationDetail(valuationInputs);
+  // --- Main Street scenarios ---------------------------------------------------------------------------
+  // Annual-only data is always read in Main Street mode (guide 5.2A); monthly data builds the block when the mode rule says Main Street.
+  let scenarios: ProFormaScenario[] | undefined;
+  if (a.sourceGranularity === "annual" || mode.mode === "mainStreet") {
+    const annualOnly = a.sourceGranularity === "annual";
+    const base = annualOnly ? ds.pnl[latestFy]! : categoryTotals(ds, latest);
+    const history = annualOnly ? years.map((y) => ds.pnl[y]!) : hist.filter((c) => c.group === "Full Year").map((c) => categoryTotals(ds, c));
+    const baseAmounts = new Map<Adjustment, number | null>(schedule.map((r) => [r, annualOnly ? (r.byFiscalYear[latestFy] ?? 0) : (amountsByColumn.get(latest.key)?.get(r) ?? 0)]));
+    scenarios = (["low", "mid", "high"] as const).map((k) => buildScenario(k === "low" ? "Low" : k === "mid" ? "Mid" : "High", a.scenarios[k], base, history, baseAmounts, a));
+  }
+  const { detail: valuationDetailOut, summary: valuation } = valuationDetail({ ...valuationInputs, scenarioLadders: scenarios && mode.mode === "mainStreet" ? { low: scenarios[0]!.ladder, mid: scenarios[1]!.ladder, high: scenarios[2]!.ladder } : undefined });
   const deal = [dealStructure(valuationInputs, valuationDetailOut)];
   const sensitivities = sensitivityGrids(valuationInputs, valuationDetailOut, deal[0]!);
 
-  // --- Annual-only scenarios ---------------------------------------------------------------------------
-  const scenarios = a.sourceGranularity === "annual" ? (["low", "mid", "high"] as const).map((k) => buildScenario(k === "low" ? "Low" : k === "mid" ? "Mid" : "High", a.scenarios[k], ds, a, schedule, latestFy)) : undefined;
-
   // --- Databook -------------------------------------------------------------------------------------
+  // Files are named, never located: a source folder's path usually carries the client's real name (guide 5.1 raw tabs).
   const suggested = new Set(ds.suggestedAddbacks.map((s) => s.account));
   const refFor = (account: string) => schedule.find((r) => r.origin !== "pnl" && r.sourceDocument.includes(account))?.ref;
   const databookPnl: DatabookRow[] = grid
@@ -571,7 +600,7 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
         personal: suggested.has(l.account),
         adjustmentRef: refFor(l.account),
         source: l.source,
-        file: l.file,
+        file: path.basename(l.file),
         mappedBy: l.mappedBy,
         byMonth: l.amounts,
         byFiscalYear: Object.fromEntries(years.map((y) => [y, grid.months.filter((m) => m.fiscalYear === y).reduce((s, m) => s + (l.amounts[m.key] ?? 0), 0)])),
@@ -584,7 +613,7 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
         personal: suggested.has(l.account),
         adjustmentRef: refFor(l.account),
         source: l.source,
-        file: l.file,
+        file: path.basename(l.file),
         mappedBy: l.mappedBy,
         byFiscalYear: Object.fromEntries(years.map((y) => [y, ds.lines.filter((x) => x.statement === "pnl" && x.account === l.account && x.year === y).reduce((s, x) => s + x.amount, 0)])),
       }));
@@ -599,7 +628,7 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
     section: l.section,
     category: l.category as BsCategory,
     source: l.source,
-    file: l.file,
+    file: path.basename(l.file),
     mappedBy: l.mappedBy,
     byMonth: Object.fromEntries(bsSheets.filter((s) => s.lines.some((x) => x.account === l.account)).map((s) => [s.key, s.lines.filter((x) => x.account === l.account).reduce((t, x) => t + x.amount, 0)])),
   }));
@@ -646,6 +675,8 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
     Monthly: monthly ? { ...monthly.series.series } : {},
   };
 
+  // Proof of Cash needs at least one bank month inside the grid; with none there is nothing to compare, and the tab would total an empty range.
+  const proofOfCash = !!ds.depositsByMonth && !!grid && Object.keys(ds.depositsByMonth).some((m) => grid.values[m]);
   const built: string[] = [];
   const omitted: { id: string; reason: string }[] = [];
   const module = (id: string, condition: boolean, reason: string) => (condition ? built.push(id) : omitted.push({ id, reason }));
@@ -662,7 +693,7 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
   module("S8.2 Net working capital", !!nwc, "No balance sheet");
   module("S8.3 Capex and cash conversion", cashFlow.length > 0, "Fewer than two balance sheets");
   module("S9.1 Opportunity sizing", (ds.intake?.growthLevers.length ?? 0) > 0, "No growth levers in the notes");
-  module("Proof of Cash", !!ds.depositsByMonth && !!grid, "No bank source or no monthly grid");
+  module("Proof of Cash", proofOfCash, !ds.depositsByMonth || !grid ? "No bank source or no monthly grid" : "Bank months outside the P&L months");
   module("Real Estate", !!ds.intake?.locations.some((l) => l.arrangement !== "leased_from_third_party"), "Premises leased from a third party");
 
   const draft: Omit<ModelOutput, "checks" | "masterCheck" | "namedOutputs" | "modules"> = {
@@ -700,7 +731,7 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
       offerComparison: false,
       realEstate: false,
       strips: a.sourceGranularity === "monthly",
-      proofOfCash: !!ds.depositsByMonth && !!grid,
+      proofOfCash,
       annualMode: a.sourceGranularity === "annual",
     },
   });

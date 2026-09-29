@@ -38,11 +38,17 @@ export interface ValuationInputs {
   fundedDebt: number;
   debtLike: number;
   cash: number;
+  /** Month of the balance sheet the bridge reads (debt, debt-like items and cash); absent when the sources have none. */
+  bsAsOf?: string;
   nwcVsPeg: number;
   /** Twelve months of payroll for the reconciliation holdback. */
   payroll: number;
   /** The seller-retained working capital memo on an asset purchase. */
   sellerRetainedNwc: number;
+  /** Fixed assets (net) and inventory on the latest balance sheet, the tangible classes of the Form 8594 allocation. */
+  assetsAtClose?: { equipment: number; inventory: number };
+  /** Main Street mode: each case's pro forma ladder from the scenario block, so Low, Mid and High differ on earnings, not only on the multiple. */
+  scenarioLadders?: Record<"low" | "mid" | "high", Ladder>;
 }
 
 function financing(a: Assumptions, purchasePrice: number, cashFlowAvailable: number): FinancingCase {
@@ -61,6 +67,11 @@ function financing(a: Assumptions, purchasePrice: number, cashFlowAvailable: num
   };
 }
 
+/** Cash flow available for debt service: SDE less replacement compensation and the reserve (Main Street), else PF Adj. EBITDA less maintenance capex. */
+function cashFlowAvailable(a: Assumptions, mode: DealMode, ladder: Ladder): number {
+  return mode === "mainStreet" ? ladder.sde + ladder.marketReplacement + ladder.capitalReserve : ladder.pfAdjEbitda - a.recast.capitalReserve;
+}
+
 /** Earnings the valuation capitalises: SDE in Main Street mode, Adj. EBITDA otherwise. */
 export function earningsBasis(mode: DealMode, ladder: Ladder): number {
   return mode === "mainStreet" ? ladder.sde : ladder.adjEbitda;
@@ -69,10 +80,9 @@ export function earningsBasis(mode: DealMode, ladder: Ladder): number {
 export function valuationDetail(inp: ValuationInputs): { detail: ValuationDetail; summary: ValuationSummary } {
   const { a, mode, ladder, pnl } = inp;
   const multiples = mode === "mainStreet" ? a.sdeMultiples : a.ebitdaMultiples;
-  const earnings = earningsBasis(mode, ladder);
-  // Cash flow available for debt service: SDE less replacement compensation and the reserve (Main Street), else PF Adj. EBITDA less maintenance capex.
-  const cfa = mode === "mainStreet" ? ladder.sde + ladder.marketReplacement + ladder.capitalReserve : ladder.pfAdjEbitda - a.recast.capitalReserve;
-  const caseFor = (multiple: number): MainStreetValuationCase => {
+  const caseFor = (multiple: number, caseLadder: Ladder): MainStreetValuationCase => {
+    const earnings = earningsBasis(mode, caseLadder);
+    const cfa = cashFlowAvailable(a, mode, caseLadder);
     const businessValuation = earnings * multiple;
     const totalInvestment = roundTo(businessValuation + a.deal.deferredCapex, -1);
     return {
@@ -86,7 +96,8 @@ export function valuationDetail(inp: ValuationInputs): { detail: ValuationDetail
       financing: financing(a, totalInvestment, cfa),
     };
   };
-  const cases = { low: caseFor(multiples[0]), mid: caseFor(multiples[1]), high: caseFor(multiples[2]) };
+  const sl = inp.scenarioLadders;
+  const cases = { low: caseFor(multiples[0], sl?.low ?? ladder), mid: caseFor(multiples[1], sl?.mid ?? ladder), high: caseFor(multiples[2], sl?.high ?? ladder) };
   const implied = (c: MainStreetValuationCase) => ({
     reportedEbitda: ladder.reportedEbitda ? c.totalInvestment / ladder.reportedEbitda : 0,
     adjEbitda: ladder.adjEbitda ? c.totalInvestment / ladder.adjEbitda : 0,
@@ -102,7 +113,7 @@ export function valuationDetail(inp: ValuationInputs): { detail: ValuationDetail
   };
   // EV-to-equity bridge. On an asset purchase the seller keeps cash and settles liens from proceeds; debt-like items stay with the seller.
   const asset = inp.dealForm === "asset_purchase";
-  const bridge = { fundedDebt: inp.fundedDebt, debtLike: asset ? 0 : inp.debtLike, cash: asset ? 0 : inp.cash, nwcVsPeg: asset ? 0 : inp.nwcVsPeg };
+  const bridge = { fundedDebt: inp.fundedDebt, debtLike: asset ? 0 : inp.debtLike, cash: asset ? 0 : inp.cash, nwcVsPeg: asset ? 0 : inp.nwcVsPeg, ...(inp.bsAsOf ? { asOf: inp.bsAsOf } : {}) };
   const equity = (ev: number) => ev - bridge.fundedDebt - bridge.debtLike + bridge.cash + bridge.nwcVsPeg;
   const summary: ValuationSummary = {
     method: mode === "mainStreet" ? "sde_multiple" : "adj_ebitda_multiple",
@@ -119,7 +130,7 @@ const pct = (v: number) => `${Math.round(v * 100)}%`;
 
 /** The one structure column the bot builds by default (guide 5.5 "Traditional": cash plus a seller note). */
 export function dealStructure(inp: ValuationInputs, detail: ValuationDetail): DealStructureColumn {
-  const { a, mode, dealForm, ladder } = inp;
+  const { a, mode, dealForm } = inp;
   const d = a.deal;
   const asset = dealForm === "asset_purchase";
   const purchasePrice = detail.cases.mid.totalInvestment;
@@ -127,8 +138,9 @@ export function dealStructure(inp: ValuationInputs, detail: ValuationDetail): De
   const sellerNote = purchasePrice * d.sellerNotePct;
   const escrow = cashAtClose * d.escrowPct;
   const reconciliationHoldback = asset ? (inp.payroll / 12) * d.reconciliationHoldbackMonths : 0;
+  // The holdback is paid out of the purchase price into escrow (the proceeds below deduct it), so it is a memo inside the price, not a use of its own.
   const uses = { purchasePrice, transactionFees: d.transactionFees, workingCapitalFunding: 0, reconciliationHoldback, total: 0 };
-  uses.total = uses.purchasePrice + uses.transactionFees + uses.workingCapitalFunding + uses.reconciliationHoldback;
+  uses.total = uses.purchasePrice + uses.transactionFees + uses.workingCapitalFunding;
   const buyerEquity = uses.total * d.equityInjectionPct;
   const sources = { seniorLoan: uses.total - sellerNote - buyerEquity, sellerNote, rolloverEquity: 0, buyerEquity, total: 0 };
   sources.total = sources.seniorLoan + sources.sellerNote + sources.rolloverEquity + sources.buyerEquity;
@@ -154,13 +166,15 @@ export function dealStructure(inp: ValuationInputs, detail: ValuationDetail): De
     sellerNotePrincipal: sellerNote,
     totalConsideration: closingCash + reconciliationHoldback + escrow + sellerNote,
     sellerRetainedNwc: asset ? inp.sellerRetainedNwc : 0,
+    sellerRetainedCash: asset ? inp.cash : 0,
   };
 
   const seniorService = annualDebtService(d.loanRate, d.loanTermYears, sources.seniorLoan);
   // The seller note pays quarterly; year-one service is four quarterly payments of its level amortisation.
   const noteQuarters = d.sellerNoteTermMonths / 3;
   const noteService = noteQuarters ? -pmt(d.sellerNoteRate / 4, noteQuarters, sellerNote) * Math.min(4, noteQuarters) : 0;
-  const cashFlowAvailable = mode === "mainStreet" ? ladder.sde + ladder.marketReplacement + ladder.capitalReserve : ladder.pfAdjEbitda - a.recast.capitalReserve;
+  // The structure prices at the Mid case, so it services debt from the Mid case's cash flow.
+  const cashFlowAvailable = detail.cases.mid.financing.cashFlowAvailable;
   const totalService = seniorService + noteService;
 
   const basisLabel = mode === "mainStreet" ? "SDE" : "Adj. EBITDA";
@@ -181,6 +195,17 @@ export function dealStructure(inp: ValuationInputs, detail: ValuationDetail): De
     "Asset vs. Stock Sale": asset ? "Asset sale" : "Stock sale",
     "Target Timing": "[Confirm: LOI date, signing and effective closing date]",
   };
+  // Form 8594: tangible classes at book value until an appraisal or agreed schedule replaces them; goodwill takes the residual.
+  let allocation: DealStructureColumn["allocation"];
+  if (asset) {
+    const leased = d.premisesArrangement === "Leased from third party";
+    const land = leased ? 0 : null;
+    const building = leased ? 0 : null;
+    const equipment = inp.assetsAtClose?.equipment ?? 0;
+    const inventory = inp.assetsAtClose?.inventory ?? 0;
+    const nonCompete = 0;
+    allocation = { land, building, equipment, inventory, nonCompete, goodwill: purchasePrice - (land ?? 0) - (building ?? 0) - equipment - inventory - nonCompete };
+  }
   if (mode !== "mainStreet") terms["Total Valuation"] = `${usd(purchasePrice)} (${a.ebitdaMultiples[1].toFixed(1)}x ${basisLabel})`;
 
   return {
@@ -202,6 +227,7 @@ export function dealStructure(inp: ValuationInputs, detail: ValuationDetail): De
     proceeds,
     debtService: { seniorLoan: seniorService, sellerNote: noteService, total: totalService, cashFlowAvailable, dscr: totalService ? cashFlowAvailable / totalService : 0 },
     terms,
+    allocation,
   };
 }
 
@@ -227,7 +253,8 @@ export function sensitivityGrids(inp: ValuationInputs, detail: ValuationDetail, 
     {
       key: "valuation",
       title: `${valueLabel} Based on ${earningsLabel} Multiple & ${earningsLabel}`,
-      colAxis: { label: `${earningsLabel} Multiple (x)`, values: multiples, fmt: FMT.multiple },
+      // A step finer than 0.1x prints at two decimals, so 2.25x never reads as 2.3x over a body of 2.25 × earnings.
+      colAxis: { label: `${earningsLabel} Multiple (x)`, values: multiples, fmt: Number.isInteger(Math.round(s.multipleStep * 1e6) / 1e5) ? FMT.multiple : FMT.multiple2 },
       rowAxis: { label: `${earningsLabel} ($000s)`, values: earnings, fmt: FMT.currency },
       body: earnings.map((e) => multiples.map((m) => e * m)),
       base: mid.businessValuation,

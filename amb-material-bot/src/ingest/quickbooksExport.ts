@@ -10,7 +10,7 @@
 //   ,Service Revenue,"812,400.00","901,250.00",... (account, indented)
 //   Total Income,...                               (computed, skipped)
 
-import { monthLabel, monthKey, type BooksBasis } from "../domain/financials.ts";
+import { fiscalYearOf, monthLabel, monthKey, parseMonthKey, type BooksBasis } from "../domain/financials.ts";
 import { readTable, parseAmount, parsePeriodLabel, type Period } from "../util/tables.ts";
 import { reportToLines, type ReportKind, type ReportRow } from "./reportTable.ts";
 import type { IngestExtract } from "./extract.ts";
@@ -122,12 +122,19 @@ function popTo(stack: { depth: number; label: string }[], depth: number, topSect
   }
 }
 
-/** How a partial fiscal year is carried: as a YTD window when the months are known, otherwise left out. */
-export function partialYearNote(p: { year: number; months: number }, file: string, monthly: boolean, lastMonth?: string): string {
+/**
+ * How a partial fiscal year is carried. With months, the year holding the
+ * last month becomes the YTD window; a partial year before the first full
+ * one is left out, since the grid starts at a full fiscal year. Without
+ * months a partial year is left out.
+ */
+export function partialYearNote(p: { year: number; months: number }, file: string, monthly: boolean, lastMonth?: string, fyEndMonth = 12): string {
   const name = file.split("/").pop();
-  return monthly && lastMonth
+  if (!monthly || !lastMonth) return `FY${p.year} covers ${p.months} months in ${name} and is excluded (full years only; a monthly export would give a YTD column).`;
+  const { year, month } = parseMonthKey(lastMonth);
+  return fiscalYearOf(year, month, fyEndMonth) === p.year
     ? `FY${p.year} covers ${p.months} months in ${name}; carried as YTD ${monthLabel(lastMonth)}, not as a full year.`
-    : `FY${p.year} covers ${p.months} months in ${name} and is excluded (full years only; a monthly export would give a YTD column).`;
+    : `FY${p.year} covers ${p.months} months in ${name}, before the first full fiscal year; those months are left out of the model.`;
 }
 
 export async function parseQuickbooksExport(file: string, fyEndMonth: number): Promise<IngestExtract> {
@@ -137,7 +144,7 @@ export async function parseQuickbooksExport(file: string, fyEndMonth: number): P
   const { rows, periods } = gridToReport(grid, kind, fyEndMonth);
   const result = reportToLines(rows, periods, kind, fyEndMonth);
   const lastMonth = result.monthly?.months[result.monthly.months.length - 1];
-  const notes = [...result.partialYears.map((p) => partialYearNote(p, file, Boolean(result.monthly), lastMonth)), ...misalignedNotes(result.misaligned, file, fyEndMonth)];
+  const notes = [...result.partialYears.map((p) => partialYearNote(p, file, Boolean(result.monthly), lastMonth, fyEndMonth)), ...misalignedNotes(result.misaligned, file, fyEndMonth)];
   const out: IngestExtract = {
     kind: "quickbooks_export",
     file,

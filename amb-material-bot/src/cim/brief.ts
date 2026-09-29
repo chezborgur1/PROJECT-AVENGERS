@@ -10,7 +10,7 @@
 import type { FinancialDataset, KpiSeries } from "../domain/financials.ts";
 import { monthLabel } from "../domain/financials.ts";
 import type { ModelOutput, PeriodColumn, PeriodValues } from "../model/types.ts";
-import { cagr, describeDelta, fmtCount, fmtDollars, fmtMoney, fmtPct, growth } from "../util/format.ts";
+import { cagr, describeDelta, fmtCount, fmtDollars, fmtMoney, fmtPct, growth, wholeShares } from "../util/format.ts";
 
 export interface Figure {
   key: string;
@@ -113,6 +113,21 @@ type Getter = (p: PeriodValues) => number;
 const pctAbs = (v: number, dp = 1): string => (Number.isFinite(v) ? fmtPct(Math.abs(v), dp) : "n.a.");
 const dirOf = (v: number): string => (v < 0 ? " (decline)" : "");
 
+/**
+ * The revenue mix every page uses: each service line's share of revenue
+ * before discounts and refunds (the base the lines add to), exact and in
+ * whole percent adding to 100. The chart, the service-line table and the
+ * prose tokens all read it, so they cannot disagree (guide 4.8).
+ */
+export function revenueMix(p: PeriodValues, accounts: string[]): { exact: number[]; whole: number[] } {
+  const amounts = accounts.map((a) => Math.max(0, p.revenueLines.find((x) => x.account === a)?.amount ?? 0));
+  const base = amounts.reduce((s, v) => s + v, 0);
+  return { exact: amounts.map((v) => (base ? v / base : 0)), whole: wholeShares(amounts) };
+}
+
+/** Smallest group whose pay the CIM may show: below it, one person's salary could be read off the table (guide 1.4). */
+export const MIN_PAY_GROUP = 3;
+
 export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: BriefPeriods): Brief {
   const b = new Brief();
   const { fy, latest, prior, ltm, pf } = periods;
@@ -132,16 +147,22 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
     if (prior) b.add(`${key}.prior`, fmtMoney(get(P(prior))), get(P(prior)), `${label}, ${prior.label}`);
     if (!withGrowth) return;
     if (prior) {
-      const g = growth(get(P(prior)), lv);
-      b.add(`${key}.yoy`, pctAbs(g), g, `${label} growth ${prior.label} to ${latest.label}${dirOf(g)}`);
-      const d = lv - get(P(prior));
+      const pv = get(P(prior));
+      const g = growth(pv, lv);
+      if (Number.isFinite(g)) b.add(`${key}.yoy`, pctAbs(g), g, `${label} growth ${prior.label} to ${latest.label}${dirOf(g)}`);
+      // From a loss to a profit there is no growth rate to quote, only the turn.
+      else if (pv < 0 && lv > 0) b.add(`${key}.turn`, `turned positive in ${latest.label}`, null, `${label} moved from a loss in ${prior.label} to a profit in ${latest.label}`);
+      const d = lv - pv;
       b.add(`${key}.change`, fmtMoney(Math.abs(d)), d, `${label} change ${prior.label} to ${latest.label}${dirOf(d)}`);
     }
     if (span >= 2) {
       const g = cagr(get(P(first)), get(P(last)), span);
       if (Number.isFinite(g)) b.add(`${key}.cagr`, pctAbs(g), g, `${label} CAGR ${first.label}–${last.label}${dirOf(g)}`);
+    }
+    // Growth across the fiscal years shown, whatever the latest window: the figure a fiscal-year table beside an LTM headline can quote.
+    if (span >= 1) {
       const t = growth(get(P(first)), get(P(last)));
-      if (Number.isFinite(t)) b.add(`${key}.total`, pctAbs(t, 0), t, `${label} total growth ${first.label}–${last.label}${dirOf(t)}`);
+      if (Number.isFinite(t)) b.add(`${key}.total`, pctAbs(t, span >= 2 ? 0 : 1), t, `${label} total growth ${first.label}–${last.label}${dirOf(t)}`);
     }
   };
 
@@ -170,6 +191,8 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
   money("marketing", "Marketing", (p) => p.pnl.marketing);
   money("otherOpex", "Other operating expenses", (p) => p.pnl.otherOpex);
   money("opex", "Total operating expenses", (p) => p.pnl.totalOpex);
+  money("opexExOwner", "Operating expenses excluding owner compensation (the summary income statement's line)", (p) => p.pnl.totalOpex - p.pnl.ownerComp);
+  ratio("opexExOwnerPct", "Operating expenses excluding owner compensation as % of revenue", of((p) => p.pnl.totalOpex - p.pnl.ownerComp));
   money("otherItems", "Other income less other expense", (p) => p.pnl.otherItemsNet, false);
   money("da", "Depreciation and amortization", (p) => p.pnl.da);
   money("interest", "Interest expense", (p) => p.pnl.interest);
@@ -181,6 +204,7 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
   money("s3", "Capital reserve [S3], as a positive amount", (p) => -p.ladder.capitalReserve, false);
   money("ownerAboveMarket", "Owner compensation above the market replacement cost ([S1] + [S2])", (p) => p.ladder.ownerCompNormalization, false);
   money("adjEbitda", "Adj. EBITDA", (p) => p.ladder.adjEbitda);
+  money("adjBeforeReserve", "Adj. EBITDA before the capital reserve [S3] (the pre-capex basis a buyer may compare on)", (p) => p.ladder.adjEbitda - p.ladder.capitalReserve, false);
   money("adjTotal", "Total adjustments from Reported EBITDA to Adj. EBITDA", (p) => p.ladder.adjEbitda - p.ladder.reportedEbitda, false);
   money("pfAdjEbitda", "PF Adj. EBITDA", (p) => p.ladder.pfAdjEbitda, false);
   ratio("gm", "Gross margin", of((p) => p.pnl.grossProfit));
@@ -197,7 +221,7 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
   if (rs) {
     b.add("replacementSalary", fmtDollars(rs.replacementSalary), rs.replacementSalary, "Market replacement salary for the working owner (before burden)");
     b.add("burdenPct", fmtPct(rs.burdenPct, 0), rs.burdenPct, "Payroll-tax and benefits burden on the replacement salary");
-    b.add("replacementCost", fmtDollars(rs.replacementSalary * (1 + rs.burdenPct)), rs.replacementSalary * (1 + rs.burdenPct), "Replacement salary including burden ([S2] per year)");
+    b.add("replacementCost", fmtMoney(rs.replacementSalary * (1 + rs.burdenPct)), rs.replacementSalary * (1 + rs.burdenPct), "Replacement salary including burden ([S2] per year)");
   }
   b.add("mode.measure", fmtMoney(out.mode.measure), out.mode.measure, `Main Street test measure (${out.mode.measureLabel}, before the capital reserve)`);
 
@@ -210,19 +234,32 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
       b.add(`adj.${row.ref}.${c.key}`, fmtMoney(Math.abs(v)), v, `[${row.ref}] ${row.description}, ${c.label}${v < 0 ? " (reduces EBITDA)" : ""}`);
     }
   }
+  // The add-backs that rest on the Seller's word alone, sized against the latest margin (spec 4.6: a consideration's answer is quantified).
+  const repRows = out.adjustments.filter(({ row, byColumn }) => row.status === "accepted" && row.tier !== "pro_forma" && row.evidence === "management_representation" && (byColumn[latest.key] ?? 0) > 0);
+  if (repRows.length) {
+    const amount = repRows.reduce((s, r) => s + r.byColumn[latest.key]!, 0);
+    const revenue = P(latest).pnl.revenue;
+    b.add("adj.repOnly.latest", fmtMoney(amount), amount, `Accepted add-backs resting on management representation alone, ${latest.label}`);
+    b.add("adj.repOnly.refs", repRows.map((r) => r.row.ref).join(", "), null, "Refs of those add-backs");
+    if (revenue > 0) b.add("adj.repOnly.bps", `${Math.round((amount / revenue) * 10_000)} bps`, amount / revenue, `Those add-backs as a share of ${latest.label} revenue: the Adj. EBITDA margin without them is lower by this much`);
+  }
 
   // --- Revenue lines and accounts ------------------------------------------------------------
   const lines = P(latest).revenueLines;
   const lineSlugs = slugs(lines.map((l) => l.label));
+  // Shares are of revenue before discounts and refunds, whole percents adding to 100 (revenueMix), as the mix chart and table show them.
+  const mixAccounts = (ds.revenueLines ?? []).filter((l) => !l.contra).map((l) => l.account);
   lines.forEach((l, i) => {
     const slug = lineSlugs[i]!;
     const get: Getter = (p) => p.revenueLines.find((x) => x.account === l.account)?.amount ?? 0;
     b.add(`line.${slug}.label`, l.label, null, `Revenue line ${slug}`);
     money(`line.${slug}`, l.label, get);
-    ratio(`line.${slug}.share`, `${l.label} as % of revenue`, of(get));
+    const k = mixAccounts.indexOf(l.account);
+    if (k < 0) return;
+    ratio(`line.${slug}.share`, `${l.label} as % of revenue before discounts`, (p) => revenueMix(p, mixAccounts).exact[k]!);
     for (const c of cols) {
-      const v = of(get)(P(c));
-      b.add(`line.${slug}.share0.${c.key}`, fmtPct(v, 0), v, `${l.label} as % of revenue (whole percent), ${c.label}`);
+      const whole = revenueMix(P(c), mixAccounts).whole[k]!;
+      b.add(`line.${slug}.share0.${c.key}`, `${whole}%`, whole / 100, `${l.label} as % of revenue before discounts (whole percent; the lines add to 100%), ${c.label}`);
     }
   });
   const accounts = Object.entries(P(latest).accountLines).filter(([, v]) => Math.abs(v) >= 0.01 * P(latest).pnl.revenue);
@@ -263,6 +300,7 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
     const codedRev = coded.reduce((s, m) => s + m.revenue, 0);
     b.add("cust.codedRevenue", fmtMoney(codedRev), codedRev, `Revenue from coded (listed) ${cu.term.toLowerCase()}s, ${cu.period.label}`);
     b.add("cust.codedShare", fmtPct(codedRev / conc.total), codedRev / conc.total, "Coded customers as % of revenue");
+    b.add("cust.codedShare0", fmtPct(codedRev / conc.total, 0), codedRev / conc.total, "Listed (coded) accounts as % of revenue, whole percent: the scope of every retention figure");
     b.add("cust.top10ShareOfCoded", fmtPct(t10rev / codedRev, 0), t10rev / codedRev, "Top 10 as % of coded-customer revenue");
     if (residual) b.add("cust.residualShare", fmtPct(residual.revenue / conc.total), residual.revenue / conc.total, `${residual.type} as % of revenue`);
     const typeSlugs = slugs(coded.map((m) => m.type));
@@ -285,8 +323,14 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
         b.add(`cust.gdr.${k}`, fmtPct(r.dollars.gdr), r.dollars.gdr, `Gross dollar retention in ${k}`);
         b.add(`cust.ndr.${k}`, fmtPct(r.dollars.ndr), r.dollars.ndr, `Net dollar retention in ${k}`);
         b.add(`cust.upsell.${k}`, fmtMoney(r.dollars.upsell), r.dollars.upsell, `Revenue growth from continuing accounts in ${k}`);
+        b.add(`cust.downsell.${k}`, fmtMoney(r.dollars.downsell), r.dollars.downsell, `Revenue decline from continuing accounts that spent less in ${k}`);
+        b.add(`cust.netExpansion.${k}`, fmtMoney(r.dollars.upsell - r.dollars.downsell), r.dollars.upsell - r.dollars.downsell, `Net revenue change from continuing accounts (upsell less downsell) in ${k}`);
         b.add(`cust.churnRevenue.${k}`, fmtMoney(r.dollars.churn), r.dollars.churn, `Prior-year revenue of accounts lost in ${k}`);
         b.add(`cust.newRevenue.${k}`, fmtMoney(r.dollars.newRevenue), r.dollars.newRevenue, `Revenue from accounts won in ${k}`);
+        // What the customer list billed in the year beyond the bridge's ending revenue: the lost accounts' revenue before they left.
+        const billed = (ds.customers?.customers ?? []).reduce((s, c) => s + (c.revenueByFiscalYear[Number(fyKey)] ?? 0), 0);
+        const lostBilled = billed - r.dollars.endingRevenue;
+        if (lostBilled > 0) b.add(`cust.lostBilled.${k}`, fmtMoney(lostBilled), lostBilled, `Revenue billed in ${k} by accounts lost during ${k}, which the ending revenue of the bridge leaves out`);
       }
     }
     if (cu.retention) b.add("cust.medianTenure", `${cu.retention.medianTenureYears.toFixed(1)} years`, cu.retention.medianTenureYears, "Median tenure of active accounts");
@@ -306,8 +350,11 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
       const s = depSlugs[i]!;
       b.add(`hc.dept.${s}.label`, d.department, null, `Department ${s}`);
       b.add(`hc.dept.${s}.count`, fmtCount(d.count), d.count, `${d.department}: employees`);
-      b.add(`hc.dept.${s}.avgComp`, fmtMoney(d.avgComp), d.avgComp, `${d.department}: average compensation including employer costs`);
-      b.add(`hc.dept.${s}.pctRevenue`, fmtPct(d.pctRevenue), d.pctRevenue, `${d.department}: compensation as % of revenue`);
+      // Pay is shown only for groups of three or more, so no figure is one person's salary (guide 1.4).
+      if (d.count >= MIN_PAY_GROUP) {
+        b.add(`hc.dept.${s}.avgComp`, fmtMoney(d.avgComp), d.avgComp, `${d.department}: average compensation including employer costs`);
+        b.add(`hc.dept.${s}.pctRevenue`, fmtPct(d.pctRevenue), d.pctRevenue, `${d.department}: compensation as % of revenue`);
+      }
       b.add(`hc.dept.${s}.tenure`, `${d.avgTenureYears.toFixed(1)} years`, d.avgTenureYears, `${d.department}: average tenure`);
     });
     for (const [fyKey, r] of Object.entries(hc.rollForwardByFiscalYear)) {
@@ -325,7 +372,12 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
   for (const c of cols) {
     const k = P(c).kpis;
     if (k.revenue_per_employee) b.add(`hc.revPerEmployee.${c.key}`, fmtMoney(k.revenue_per_employee), k.revenue_per_employee, `Revenue per employee, ${c.label}`);
-    if (k.revenue_per_field_employee) b.add(`hc.revPerField.${c.key}`, fmtMoney(k.revenue_per_field_employee), k.revenue_per_field_employee, `Revenue per field employee, ${c.label}`);
+    if (k.revenue_per_field_employee) {
+      b.add(`hc.revPerField.${c.key}`, fmtMoney(k.revenue_per_field_employee), k.revenue_per_field_employee, `Revenue per field employee, ${c.label}`);
+      // The field headcount behind the ratio, at the period's end, so prose compares year-end field staff with year-end field staff.
+      const field = P(c).pnl.revenue / k.revenue_per_field_employee;
+      b.add(`hc.fieldEnd.${c.key}`, fmtCount(field), field, `Field employees (FTE) at the end of ${c.label}`);
+    }
     if (k.labor_cost_pct_revenue !== undefined) b.add(`hc.laborPct.${c.key}`, fmtPct(k.labor_cost_pct_revenue), k.labor_cost_pct_revenue, `Payroll excluding the owner as % of revenue, ${c.label}`);
     if (k.recurring_revenue_pct !== undefined) b.add(`recurringShare.${c.key}`, fmtPct(k.recurring_revenue_pct), k.recurring_revenue_pct, `Recurring revenue lines as % of revenue, ${c.label}`);
   }
@@ -392,7 +444,8 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
       b.add(`month.trough.${c.key}`, monthLabel(mo.months[trough]!.key), null, `Lowest revenue month of ${c.label}`);
       b.add(`month.troughRevenue.${c.key}`, fmtMoney(revs[trough]!), revs[trough]!, `Revenue in the lowest month of ${c.label}`);
       const ratioPT = revs[peak]! / revs[trough]!;
-      b.add(`month.peakToTrough.${c.key}`, `${ratioPT.toFixed(2)}x`, ratioPT, `Highest month ÷ lowest month, ${c.label}`);
+      // Multiples print at one decimal (spec 4.1).
+      b.add(`month.peakToTrough.${c.key}`, `${ratioPT.toFixed(1)}x`, ratioPT, `Highest month ÷ lowest month, ${c.label}`);
       const neg = idx.filter((i) => adj[i]! < 0).length;
       b.add(`month.adjNegative.${c.key}`, fmtCount(neg), neg, `Months with negative Adj. EBITDA in ${c.label}`);
       const quarters = [0, 1, 2, 3].map((q) => idx.filter((i) => Math.floor((mo.months[i]!.fiscalMonth - 1) / 3) === q).reduce((s, i) => s + revs[i]!, 0));
@@ -423,6 +476,13 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
     b.add(`bs.debt.${c.key}`, fmtMoney(bs.debt), bs.debt, `Debt at ${c.label} year-end`);
     b.add(`bs.equity.${c.key}`, fmtMoney(bs.equity), bs.equity, `Equity at ${c.label} year-end`);
     b.add(`bs.fixedAssets.${c.key}`, fmtMoney(bs.fixedAssets), bs.fixedAssets, `Net fixed assets at ${c.label} year-end`);
+  }
+  // The latest dated sheet, year-end or not, so working capital can be quoted for a client whose sheets fall mid-year.
+  const lastNwc = out.nwc?.periods[out.nwc.periods.length - 1];
+  if (lastNwc) {
+    const at = monthLabel(lastNwc.month);
+    b.add("nwc.latest", fmtMoney(lastNwc.lines.adjustedNwc), lastNwc.lines.adjustedNwc, `Adjusted net working capital at ${at}`);
+    b.add("nwc.pct.latest", fmtPct(lastNwc.lines.pctLtmRevenue), lastNwc.lines.pctLtmRevenue, `NWC as % of the twelve months' revenue to ${at}`);
   }
   for (const p of out.nwc?.periods ?? []) {
     const fyCol = fy.find((c) => c.end === p.month);

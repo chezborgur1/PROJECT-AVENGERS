@@ -15,6 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import pptxgenModule from "pptxgenjs";
 import JSZip from "jszip";
+import { EN_DASH } from "../util/format.ts";
 
 // pptxgenjs ships CommonJS-style typings, so under NodeNext the default
 // import is typed as the module object. At runtime the ESM build's default
@@ -224,8 +225,34 @@ export function proseHeight(paragraphs: Paragraph[], w: number, pt = 9.5): numbe
   return r3(h);
 }
 
-/** Georgia Bold 20 sets about 85 characters per line across the content width. */
-export const titleLines = (title: string): number => Math.max(1, Math.ceil(title.length / 85));
+// Georgia Bold advance widths (1/1000 em, ASCII 32-126), read from Gelasio, its
+// metric-compatible render substitute. Georgia's old-style figures differ in
+// width ("1" is narrow), so a character count misjudges where a title wraps.
+const GEORGIA_BOLD = [254,376,510,703,641,879,799,269,447,447,482,703,328,379,328,472,701,490,626,625,649,599,648,554,676,648,367,367,703,703,703,548,967,758,757,715,834,721,671,807,913,446,595,817,686,1023,839,820,701,820,797,649,684,833,762,1126,809,732,689,447,472,447,703,703,500,596,646,531,663,572,393,577,680,354,346,632,344,1016,690,636,658,648,520,513,397,677,567,863,588,562,525,500,388,500,703];
+const GEORGIA_WIDE: Record<string, number> = { "–": 703, "—": 928, "÷": 703, "’": 269, "‘": 269, "“": 519, "”": 519, "·": 338, "×": 703 };
+const TITLE_PT = 20;
+
+/** The lines an action title wraps to: Georgia Bold 20 across the content width, greedy by word, as the title box sets it. */
+export function titleWrap(title: string): string[] {
+  const width = (t: string) => {
+    let units = 0;
+    for (const ch of t) {
+      const c = ch.codePointAt(0)!;
+      units += c >= 32 && c < 127 ? GEORGIA_BOLD[c - 32]! : (GEORGIA_WIDE[ch] ?? 703);
+    }
+    return (units / 1000) * (TITLE_PT / 72);
+  };
+  const lines: string[] = [];
+  let line = "";
+  for (const word of printed(title).split(/\s+/).filter(Boolean)) {
+    const next = line ? `${line} ${word}` : word;
+    if (line && width(next) > CONTENT_W) {
+      lines.push(line);
+      line = word;
+    } else line = next;
+  }
+  return [...lines, line];
+}
 
 // ---------------------------------------------------------------------------
 // Block model
@@ -293,8 +320,6 @@ export interface TextTableSpec {
   refCol?: number;
   totalRow?: number;
   firstBold?: boolean;
-  /** Fill the first column's cells with the tint (the S10.1 term table). */
-  tintFirstCol?: boolean;
   /** Rows whose first cell is bold even when `firstBold` is off (anchor rows of the process table). */
   boldRows?: number[];
   /** Stable key per row an observation can point at; the observation's letter lands in `obsCol`. */
@@ -534,9 +559,116 @@ function stackHeight(blocks: Block[], w: number): number {
  * (`fitOverflow`) until it fits or nothing is left to give, in which case the
  * page is refused. No exhibit is ever dropped.
  */
+// ---------------------------------------------------------------------------
+// Footing (spec 14): totals against the figures printed above them
+// ---------------------------------------------------------------------------
+
+/** A printed table figure as a number: "$1,964" is 1964, "(25)" is -25, the dash is 0; a %, n.a. or blank is not a figure. */
+function figure(s: string | undefined): number | undefined {
+  if (s === undefined) return undefined;
+  const t = s.trim();
+  if (t === EN_DASH) return 0;
+  const m = /^(\()?\$?([\d,]+)(\))?$/.exec(t);
+  if (!m || !!m[1] !== !!m[3]) return undefined;
+  const v = Number(m[2]!.replace(/,/g, ""));
+  return m[1] ? -v : v;
+}
+
+/**
+ * Whether every total in a table equals the sum of the figures printed above
+ * it, and a trailing LTM or Total column the sum of the months before it. A
+ * total's parts are the lines since the previous total, or that total and the
+ * lines after it (Total assets = Total current assets + the rest); a group
+ * counts only when its printed parts come within 3 of the printed total in
+ * every column, so a total built by subtraction (gross profit) is left alone.
+ * A group that misses by 1 to 3 is rounding, and the page must say so.
+ */
+export function footsWhenDisplayed(spec: NumTableSpec): boolean {
+  const heads = spec.cols.filter((c) => c.kind === "num").map((c) => c.head ?? "");
+  const rows = spec.rows.filter((r) => r.vals);
+  const misses = (total: NumRow, parts: NumRow[]): boolean | undefined => {
+    const diffs: number[] = [];
+    for (let c = 0; c < heads.length; c++) {
+      const t = figure(total.vals![c]);
+      const ps = parts.map((p) => figure(p.vals![c]));
+      if (t === undefined || ps.some((v) => v === undefined)) continue;
+      diffs.push(t - ps.reduce((sum, v) => sum! + v!, 0)!);
+    }
+    if (!diffs.length || diffs.some((d) => Math.abs(d) > 3)) return undefined;
+    return diffs.some((d) => d !== 0);
+  };
+  let lastTotal = -1;
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]!;
+    if (row.type !== "subtotal" && row.type !== "key") continue;
+    const lines = rows.slice(lastTotal + 1, i).filter((r) => r.type === "line" || r.type === "sub");
+    const own = lines.length >= 2 ? misses(row, lines) : undefined;
+    const carried = lastTotal >= 0 && own === undefined ? misses(row, [rows[lastTotal]!, ...lines]) : undefined;
+    if (own || carried) return false;
+    lastTotal = i;
+  }
+  // Months across, then their LTM or total column.
+  const last = heads.length - 1;
+  const months = heads.slice(0, last).filter((h) => /^[A-Z][a-z]{2}-\d{2}$/.test(h)).length;
+  if (last >= 3 && months === last && /^(LTM|Total)/.test(heads[last]!)) {
+    for (const row of rows) {
+      if (row.type === "ratio" || row.type === "section") continue;
+      const t = figure(row.vals![last]);
+      const ps = row.vals!.slice(0, last).map(figure);
+      if (t === undefined || ps.some((v) => v === undefined)) continue;
+      const d = t - ps.reduce((sum, v) => sum! + v!, 0)!;
+      if (d !== 0 && Math.abs(d) <= months / 2) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * An Obs. column no observation keys into is dropped and its width given to
+ * the widest text column (spec 14: no empty columns). Runs once the
+ * observations have lettered their rows.
+ */
+export function dropEmptyObs(spec: PageSpec): void {
+  for (const b of spec.rows.flatMap((r) => [...r.columns.flatMap((c) => c.blocks), ...(r.floating ?? [])])) {
+    if (b.kind === "numTable") {
+      const i = b.spec.cols.findIndex((c) => c.kind === "obs");
+      if (i < 0 || b.spec.rows.some((r) => r.obs)) continue;
+      const w = b.spec.cols[i]!.w;
+      b.spec.cols = b.spec.cols.filter((_, j) => j !== i);
+      const wide = b.spec.cols.reduce((best, c, j) => ((c.kind === "text" || c.kind === "label") && c.w > (b.spec.cols[best]?.w ?? 0) ? j : best), 0);
+      b.spec.cols[wide] = { ...b.spec.cols[wide]!, w: r3(b.spec.cols[wide]!.w + w) };
+    } else if (b.kind === "textTable" && b.spec.obsCol !== undefined) {
+      const i = b.spec.obsCol;
+      if (b.spec.rows.some((r) => cellText(r[i] ?? "").trim())) continue;
+      const w = b.spec.colW[i]!;
+      const keep = (_: unknown, j: number) => j !== i;
+      b.spec.rows = b.spec.rows.map((r) => r.filter(keep));
+      b.spec.head = b.spec.head?.filter(keep);
+      b.spec.aligns = b.spec.aligns?.filter(keep);
+      b.spec.colW = b.spec.colW.filter(keep);
+      const wide = b.spec.colW.reduce((best, v, j) => (v > b.spec.colW[best]! ? j : best), 0);
+      b.spec.colW[wide] = r3(b.spec.colW[wide]! + w);
+      delete b.spec.obsCol;
+    }
+  }
+}
+
+/** The clause a page's note carries when a table on it does not foot as printed (spec 14). */
+export const ROUNDING_CLAUSE = "totals may not sum due to rounding";
+
+/** Append the rounding clause to the page note when any numeric table on the page does not foot as printed. */
+export function noteRounding(spec: PageSpec): void {
+  const tables = spec.rows.flatMap((r) => [...r.columns.flatMap((c) => c.blocks), ...(r.floating ?? [])]).filter((b): b is Extract<Block, { kind: "numTable" }> => b.kind === "numTable");
+  if (tables.every((t) => footsWhenDisplayed(t.spec)) || spec.notes.note?.includes(ROUNDING_CLAUSE)) return;
+  const note = spec.notes.note?.trim();
+  spec.notes = { ...spec.notes, note: note ? `${note.replace(/\.$/, "")}; ${ROUNDING_CLAUSE}.` : `Totals may not sum due to rounding.` };
+}
+
 export function layoutPage(spec: PageSpec): LaidOutPage {
   const warnings: string[] = [];
+  let uneven: Uneven | undefined;
   const attempt = (page: PageSpec): LaidOutPage => {
+    uneven = undefined;
     const placed: PlacedBlock[] = [];
     const hairlines: LaidOutPage["hairlines"] = [];
     let y = BAND.top;
@@ -565,7 +697,8 @@ export function layoutPage(spec: PageSpec): LaidOutPage {
           const last = placed.filter((p) => p.x === c.x && p.y >= tops).at(-1);
           return last ? last.y + last.h : tops;
         });
-        if (Math.max(...ends) - Math.min(...ends) > 0.5) warnings.push(`${page.id}: columns end ${(Math.max(...ends) - Math.min(...ends)).toFixed(2)} in apart`);
+        const gap = Math.max(...ends) - Math.min(...ends);
+        if (gap > BALANCE && !uneven) uneven = { row: ri, long: ends.indexOf(Math.max(...ends)), short: ends.indexOf(Math.min(...ends)), gap };
         for (let i = 0; i < cols.length - 1; i++) {
           const isLast = ri === page.rows.length - 1;
           hairlines.push({ x: hairlineX(cols[i]!.span[1]), y0: tops, y1: isLast ? BAND.bottom : r3(rowBottom) });
@@ -590,13 +723,56 @@ export function layoutPage(spec: PageSpec): LaidOutPage {
   let page = spec;
   for (let guard = 0; guard < 12; guard++) {
     const out = attempt(page);
-    if (out.bottom <= BAND.bottom + 1e-6) return out;
+    if (out.bottom <= BAND.bottom + 1e-6) {
+      const balanced = uneven && balanceColumns(page, uneven);
+      if (balanced) {
+        page = balanced;
+        continue;
+      }
+      if (uneven) warnings.push(`${spec.id}: columns end ${uneven.gap.toFixed(2)} in apart`);
+      return out;
+    }
     const fitted = fitOverflow(page, out);
     if (!fitted) throw new Error(`Page ${spec.id} overflows the content band: ends at ${out.bottom.toFixed(2)} in (guard 6.48)`);
     warnings.push(`${spec.id}: ${fitted.note} to fit the page`);
     page = fitted.page;
   }
   throw new Error(`Page ${spec.id} could not be fitted`);
+}
+
+/** Spec 1: the columns of a row end within 0.50 in of each other. */
+const BALANCE = 0.5;
+/** Chart heights the balancing step may set: a panel stays legible at 2.0 in and never outgrows the band. */
+const CHART_H = { min: 2.0, max: 3.8 };
+
+interface Uneven {
+  row: number;
+  long: number;
+  short: number;
+  gap: number;
+}
+
+/**
+ * Column balance (spec 1): a chart's height is the one free dimension on a
+ * page, so a chart in the short column grows, or else one in the long column
+ * shrinks, by the difference, within CHART_H. Undefined when no chart can
+ * take it up; the page then keeps its layout and the run logs the gap.
+ */
+function balanceColumns(page: PageSpec, u: Uneven): PageSpec | undefined {
+  const row = page.rows[u.row]!;
+  const target = u.gap - BALANCE / 2;
+  const resize = (col: number, by: (h: number) => number): PageSpec | undefined => {
+    const blocks = row.columns[col]!.blocks;
+    const i = blocks.map((b) => b.kind).lastIndexOf("chart");
+    if (i < 0) return undefined;
+    const b = blocks[i] as Extract<Block, { kind: "chart" }>;
+    const from = b.h ?? DEFAULT_CHART_H;
+    const h = r3(Math.min(CHART_H.max, Math.max(CHART_H.min, by(from))));
+    if (Math.abs(h - from) < 0.05) return undefined;
+    const columns = row.columns.map((c, j) => (j === col ? { ...c, blocks: c.blocks.map((x, k) => (k === i ? { ...b, h } : x)) } : c));
+    return { ...page, rows: page.rows.map((r, j) => (j === u.row ? { ...r, columns } : r)) };
+  };
+  return resize(u.short, (h) => h + target) ?? resize(u.long, (h) => h - target);
 }
 
 /** The spec's floor for a table figure (spec 2: "no table figure below 8 pt"). */
@@ -829,6 +1005,10 @@ export function exhibitHeader(slide: Slide, x: number, y: number, w: number, h: 
  */
 export function numTable(slide: Slide, x: number, y: number, spec: NumTableSpec): number {
   const { cols, rows, name } = spec;
+  // A gap column only ever separates two blocks of figures; anywhere else it prints a detached header stub (spec 4.1 [F]).
+  cols.forEach((c, i) => {
+    if (c.kind === "gap" && !(cols[i - 1]?.kind === "num" && cols[i + 1]?.kind === "num")) throw new Error(`Table "${name}": a gap column must sit between two blocks of figures`);
+  });
   const fontSize = spec.fontSize ?? 8.5;
   const heights = numTableRowHeights(spec);
   const colW = cols.map((c) => c.w);
@@ -933,7 +1113,6 @@ export function textTable(slide: Slide, x: number, y: number, spec: TextTableSpe
         if (spec.boldRows?.includes(ri)) o.bold = true;
         if (spec.obsCol === i) Object.assign(o, { color: C.maroon, bold: true, align: "center" });
         if (spec.refCol === i) o.color = C.muted;
-        if (spec.tintFirstCol && i === 0) o.fill = { color: C.tint };
         if (spec.totalRow === ri) Object.assign(o, { bold: true, border: [hair(C.maroon, 0.75), NONE, hair(C.maroon, 0.75), NONE] });
         if (typeof t !== "string") {
           o.bold = false;
@@ -1166,8 +1345,10 @@ export function chart(deck: Deck, slide: Slide, x: number, y: number, w: number,
         dataLabelFormatCode: fmt,
         showLegend: false,
         catAxisLabelColor: C.ink,
+        // Changes can fall below zero; the category labels then stay at the left edge, clear of the bars.
         valAxisMaxVal: Math.ceil(maxOf(spec.values) * 1.25),
-        valAxisMinVal: 0,
+        valAxisMinVal: Math.min(0, Math.floor(Math.min(...spec.values) * 1.25)),
+        catAxisLabelPos: "low",
         catAxisOrientation: "maxMin",
       } as unknown as ChartOpts;
       slide.addChart("bar", [{ name: "Value", labels: nb(spec.labels), values: spec.values }], opts);
@@ -1279,7 +1460,7 @@ export function notesLineCount(n: Notes): number {
 export function drawFurniture(slide: Slide, f: Furniture): void {
   slide.background = { color: C.white };
   if (f.title.length > 130) throw new Error(`Title over 130 characters on page ${f.num}: ${f.title}`);
-  text(slide, f.title, { x: colX(1), y: BAND.titleY, w: CONTENT_W, h: BAND.titleH, fontFace: SERIF, fontSize: 20, bold: true, color: C.maroon, valign: "bottom", lineSpacingMultiple: 1.0 });
+  text(slide, f.title, { x: colX(1), y: BAND.titleY, w: CONTENT_W, h: BAND.titleH, fontFace: SERIF, fontSize: TITLE_PT, bold: true, color: C.maroon, valign: "bottom", lineSpacingMultiple: 1.0 });
   hline(slide, colX(1), BAND.ruleY, CONTENT_W, C.maroon, 0.75);
   const lines = notesLines(f.notes);
   if (notesLineCount(f.notes) > 3) throw new Error(`Notes band on page ${f.num} needs more than three lines`);
@@ -1359,7 +1540,7 @@ export function drawDivider(slide: Slide, code: string, current: SectionEntry, e
 /** Contents (guide 2.9): the section list at cols 1 to 7 with page numbers, no highlight. */
 export function drawContents(slide: Slide, code: string, sections: SectionEntry[], num: number): void {
   slide.background = { color: C.white };
-  text(slide, "Contents", { x: colX(1), y: BAND.titleY, w: CONTENT_W, h: BAND.titleH, fontFace: SERIF, fontSize: 20, bold: true, color: C.maroon, valign: "bottom" });
+  text(slide, "Contents", { x: colX(1), y: BAND.titleY, w: CONTENT_W, h: BAND.titleH, fontFace: SERIF, fontSize: TITLE_PT, bold: true, color: C.maroon, valign: "bottom" });
   hline(slide, colX(1), BAND.ruleY, CONTENT_W, C.maroon, 0.75);
   const w = spanW(1, 7);
   sections.forEach((s, i) => {
@@ -1404,11 +1585,10 @@ function drawBlock(deck: Deck, slide: Slide, p: PlacedBlock): void {
     case "prose":
       prose(slide, p.x, y, p.w, b.paragraphs, b.pt);
       return;
-    case "observations": {
-      const by = exhibitHeader(slide, p.x, p.y, p.w, b.header);
-      observations(slide, p.x, by, p.w, b.items);
+    case "observations":
+      // The header is already drawn above, like every other block's.
+      observations(slide, p.x, y, p.w, b.items);
       return;
-    }
     case "callout":
       callout(slide, p.x, y, p.w, b.lead, b.body);
       return;

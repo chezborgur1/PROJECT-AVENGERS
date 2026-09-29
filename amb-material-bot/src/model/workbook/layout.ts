@@ -275,16 +275,6 @@ export function fyEndKeyOf(fy: number, model: ModelOutput): MonthKey {
   return fiscalYearEndKey(fy, model.fiscalYearEndMonth);
 }
 
-/** Absolute column range of a schedule column over the schedule rows, e.g. `Adjustments!$I$8:$I$24`. */
-export function scheduleColumn(col: number): string {
-  return `${S("adjustments")}$${colLetter(col)}$${rowOf("adjustments", "first")}:$${colLetter(col)}$${rowOf("adjustments", "last")}`;
-}
-
-/** SUMIFS of one schedule row (by its bracketed ref) in a period column, accepted rows only. */
-export function scheduleRef(ref: string, periodCol: number): string {
-  return `SUMIFS(${scheduleColumn(periodCol)},${scheduleColumn(ADJ_REF_COL)},"[${ref}]",${scheduleColumn(ADJ_STATUS_COL)},"Accepted")`;
-}
-
 export const ADJ_REF_COL = 2;
 export const ADJ_TIER_COL = 4;
 export const ADJ_CATEGORY_COL = 5;

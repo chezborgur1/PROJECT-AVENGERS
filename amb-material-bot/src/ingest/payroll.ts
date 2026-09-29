@@ -1,9 +1,10 @@
 // Payroll register (payroll.csv or .xlsx): one row per employee with a
 // name, role, department, hire and termination dates, pay basis, an owner
 // flag and gross wages by fiscal year. Employer taxes and benefits are taken
-// from the file when it has them and otherwise allocated pro rata to wages
-// from the P&L payroll line, so wages plus employer costs tie to the P&L
-// (check C13). Names are kept for the raw tab; the CIM shows only
+// from the file when it has them; otherwise the owner's employer taxes are
+// estimated at statutory rates on the owner's pay and the rest of the P&L
+// payroll line is allocated to staff pro rata to wages, so wages plus
+// employer costs tie to the P&L (check C13). Names are kept for the raw tab; the CIM shows only
 // management names, through the intake facts.
 
 import path from "node:path";
@@ -171,6 +172,28 @@ export interface PayrollContext {
   pnl: Record<number, Record<IsCategory, number>>;
 }
 
+/** Social Security wage base by calendar year (SSA); a later year uses the latest one known. */
+const SS_WAGE_BASE: Record<number, number> = { 2020: 137_700, 2021: 142_800, 2022: 147_000, 2023: 160_200, 2024: 168_600, 2025: 176_100, 2026: 184_500 };
+
+export const EMPLOYER_TAX = { socialSecurity: 0.062, medicare: 0.0145, futa: 0.006, futaWageBase: 7_000 } as const;
+
+export function socialSecurityWageBase(year: number): number {
+  const known = Object.keys(SS_WAGE_BASE).map(Number).sort((a, b) => a - b);
+  const y = Math.min(Math.max(year, known[0]!), known[known.length - 1]!);
+  return SS_WAGE_BASE[y]!;
+}
+
+/**
+ * Employer payroll taxes on one employee's wages at federal statutory rates:
+ * Social Security to the wage base, Medicare on all wages and federal
+ * unemployment on the first $7,000, in whole dollars. State unemployment and
+ * benefits vary by employer and are not estimated.
+ */
+export function employerPayrollTaxes(wages: number, year: number): number {
+  if (wages <= 0) return 0;
+  return Math.round(Math.min(wages, socialSecurityWageBase(year)) * EMPLOYER_TAX.socialSecurity + wages * EMPLOYER_TAX.medicare + Math.min(wages, EMPLOYER_TAX.futaWageBase) * EMPLOYER_TAX.futa);
+}
+
 /** Scale amounts to an exact total in whole dollars, the residual on the largest (the same rule the fixture uses). */
 export function scaleToTotal(raw: number[], total: number): number[] {
   const sum = raw.reduce((s, v) => s + v, 0);
@@ -211,7 +234,6 @@ export function buildPayrollRegister(pf: PayrollFile, ctx: PayrollContext): { pa
   if (laterHires) warnings.push(`${pf.file}: ${laterHires} employee(s) hired after the as-of month (${asOfLabel}) are left out of the register.`);
   if (laterTerms) warnings.push(`${pf.file}: ${laterTerms} departure(s) after the as-of month (${asOfLabel}) are ignored; those employees count as on payroll at ${asOfLabel}.`);
 
-  const staff = kept.filter((r) => !r.isOwner);
   const employerCosts = kept.map(() => ({}) as Record<number, number>);
   const totalsByFiscalYear: Record<number, number> = {};
 
@@ -219,20 +241,28 @@ export function buildPayrollRegister(pf: PayrollFile, ctx: PayrollContext): { pa
     const wages = kept.map((r) => (r.isOwner ? 0 : (r.wagesByFiscalYear[y] ?? 0)));
     const wageTotal = wages.reduce((s, v) => s + v, 0);
     const payrollLine = ctx.pnl[y]?.payroll ?? 0;
-    const fileHasCosts = staff.some((r) => r.employerCostsByFiscalYear?.[y] !== undefined);
+    const fileHasCosts = kept.some((r) => r.employerCostsByFiscalYear?.[y] !== undefined);
+    // The owner's salary is expensed as owner compensation, but the employer taxes on it sit in the payroll line with everyone
+    // else's; they belong to the owner ([S1] adds them back), not to the staff the Headcount tab allocates costs to.
+    let ownerCosts = 0;
     if (fileHasCosts) {
       kept.forEach((r, i) => (employerCosts[i]![y] = r.employerCostsByFiscalYear?.[y] ?? 0));
+      ownerCosts = kept.reduce((s, r, i) => (r.isOwner ? s + employerCosts[i]![y]! : s), 0);
     } else {
-      // The P&L payroll line less gross wages is the employer taxes and benefits pool.
-      let pool = payrollLine - wageTotal;
+      ownerCosts = employerPayrollTaxes(ctx.pnl[y]?.owner_comp ?? 0, y);
+      // The P&L payroll line less gross wages and the owner's employer taxes is the staff's taxes and benefits pool.
+      let pool = payrollLine - wageTotal - ownerCosts;
       if (pool < -1) {
         warnings.push(`FY${y}: wages in ${pf.file} (${money(wageTotal)}) exceed the P&L payroll line (${money(payrollLine)}); employer costs set to zero. Check whether the file includes the owner or contractors.`);
         pool = 0;
+        ownerCosts = 0;
       }
       const alloc = scaleToTotal(wages, Math.max(0, pool));
-      kept.forEach((r, i) => (employerCosts[i]![y] = r.isOwner ? 0 : alloc[i]!));
+      const ownerIndex = kept.findIndex((r) => r.isOwner);
+      kept.forEach((r, i) => (employerCosts[i]![y] = r.isOwner ? (i === ownerIndex ? ownerCosts : 0) : alloc[i]!));
     }
-    const total = kept.reduce((s, r, i) => (r.isOwner ? s : s + (r.wagesByFiscalYear[y] ?? 0) + (employerCosts[i]![y] ?? 0)), 0);
+    // The register ties to the payroll line: staff wages and costs, plus the owner's employer costs.
+    const total = kept.reduce((s, r, i) => (r.isOwner ? s : s + (r.wagesByFiscalYear[y] ?? 0) + (employerCosts[i]![y] ?? 0)), 0) + ownerCosts;
     totalsByFiscalYear[y] = total;
     if (payrollLine && Math.abs(total - payrollLine) / payrollLine > 0.05) {
       warnings.push(`FY${y}: payroll register (${money(total)}) differs from the P&L payroll line (${money(payrollLine)}) by ${((Math.abs(total - payrollLine) / payrollLine) * 100).toFixed(1)}% (check C13).`);

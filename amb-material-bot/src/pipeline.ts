@@ -18,6 +18,8 @@ import { runModel } from "./model/engine.ts";
 import { latestColumn, MODE_LABELS, type ModelOutput, type PeriodColumn } from "./model/types.ts";
 import { writeWorkbook, type WorkbookPlan } from "./model/workbook.ts";
 import { verifyWorkbook, type VerifyResult } from "./model/verifyWorkbook.ts";
+import { withRenderCheck } from "./model/checks.ts";
+import { printedTabsOf, renderCheckWorkbook, type RenderCheckResult } from "./model/renderCheck.ts";
 import { draftCimCopy, type DraftResult } from "./cim/narrative.ts";
 import { buildCim, type CimBuildResult } from "./cim/deck.ts";
 import { fmtDollars, fmtPct } from "./util/format.ts";
@@ -28,6 +30,8 @@ export interface PipelineConfig {
   firm: { name: string; contact: string; email: string; phone: string };
   now?: Date;
   log?: (msg: string) => void;
+  /** Run the C37 render check on the written workbook (default true); it needs LibreOffice and PyMuPDF and says so when they are missing. */
+  renderCheck?: boolean;
 }
 
 export interface PipelineResult {
@@ -71,35 +75,49 @@ export async function processRequest(row: RequestRow, cfg: PipelineConfig): Prom
 
   log(`  Building model: FY${ds.years[0]}–FY${ds.years[ds.years.length - 1]} actuals${ds.monthly ? ` (${ds.monthly.months.length} months)` : " (annual only)"} + 5 projected years`);
   const assumptions = defaultAssumptions(ds, row);
-  const model = runModel(ds, assumptions);
+  let model = runModel(ds, assumptions);
 
   const folder = path.join(cfg.outputDir, safe(`${row.request_id} ${row.code_name}`));
   fs.mkdirSync(folder, { recursive: true });
   const workbook = path.join(folder, safe(`${row.code_name} - Financial Model ${MODEL_VERSION}.xlsx`));
   const deck = path.join(folder, safe(`${row.code_name} - CIM.pptx`));
 
-  const plan = await writeWorkbook(
-    { row, dataset: ds, assumptions, model, firmName: cfg.firm.name, preparedOn: now.toISOString().slice(0, 10), version: MODEL_VERSION },
-    workbook,
-  );
-  log("  Verifying workbook formulas against the engine");
-  const verification = await verifyWorkbook(workbook, model);
-  if (!verification.ok) {
-    const detail = [
-      ...verification.errors.map((e) => `${e.cell} ${e.error}`),
-      ...verification.mismatches.map((m) => `${m.cell} ${m.label}: workbook ${String(m.workbook)}, engine ${String(m.engine)}`),
-      ...verification.lint.map((l) => `${l.cell} ${l.issue}`),
-    ];
-    throw new Error(`Workbook failed verification: ${detail.slice(0, 5).join("; ")}`);
+  const writeAndVerify = async (m: ModelOutput): Promise<{ plan: WorkbookPlan; verification: VerifyResult }> => {
+    const plan = await writeWorkbook({ row, dataset: ds, assumptions, model: m, firmName: cfg.firm.name, preparedOn: now.toISOString().slice(0, 10), version: MODEL_VERSION }, workbook);
+    log("  Verifying workbook formulas against the engine");
+    const verification = await verifyWorkbook(workbook, m);
+    if (!verification.ok) {
+      const detail = [
+        ...verification.errors.map((e) => `${e.cell} ${e.error}`),
+        ...verification.mismatches.map((x) => `${x.cell} ${x.label}: workbook ${String(x.workbook)}, engine ${String(x.engine)}`),
+        ...verification.lint.map((l) => `${l.cell} ${l.issue}`),
+      ];
+      throw new Error(`Workbook failed verification: ${detail.slice(0, 5).join("; ")}`);
+    }
+    return { plan, verification };
+  };
+  let { plan, verification } = await writeAndVerify(model);
+  // C37 renders the file as written; its result goes back into the Checks tab, so the workbook is written once more with it.
+  let render: RenderCheckResult | undefined;
+  if (cfg.renderCheck !== false) {
+    log("  Render check (C37): LibreOffice render of the workbook, measured page by page");
+    render = renderCheckWorkbook(workbook, printedTabsOf(plan.plans, row.business_name));
+    const { checks, masterCheck } = withRenderCheck(model.checks, render);
+    model = { ...model, checks, masterCheck, namedOutputs: { ...model.namedOutputs, MasterCheck: masterCheck } };
+    if (render.status !== "n.a.") ({ plan, verification } = await writeAndVerify(model));
   }
 
   log("  Drafting CIM copy");
   const draft = await draftCimCopy({ row, notes: intake.notes, dataset: ds, model, firm: cfg.firm, date: now });
+  if (draft.fallback) log(`  ${draft.fallback}`);
+  // A customer or staff member named in buyer copy is a confidentiality breach, never a warning (guide 1.4).
+  const named = draft.lint.filter((l) => /appears in the CIM only by code or role/.test(l.issue));
+  if (named.length) throw new Error(`CIM copy ${named[0]!.path} ${named[0]!.issue}; remove the name before building the deck`);
   log(`  Building CIM (copy: ${draft.source}), PDF and page images`);
   const cim = await buildCim({ row, ds, out: model, copy: draft.copy, firm: cfg.firm, date: now }, deck, { pdf: true, png: true });
 
-  fs.writeFileSync(path.join(folder, "open-questions.md"), openQuestionsMd({ row, ds, model, cim, draft }));
-  fs.writeFileSync(path.join(folder, "run-summary.md"), summaryMd({ row, now, intake, model, plan, verification, draft, cim, workbook }));
+  fs.writeFileSync(path.join(folder, "open-questions.md"), openQuestionsMd({ row, ds, model, cim, draft, now }));
+  fs.writeFileSync(path.join(folder, "run-summary.md"), summaryMd({ row, now, intake, model, plan, verification, draft, cim, workbook, render }));
 
   return {
     folder,
@@ -118,8 +136,15 @@ export async function processRequest(row: RequestRow, cfg: PipelineConfig): Prom
 
 // --- open-questions.md -------------------------------------------------------------------------
 
-function openQuestionsMd(p: { row: RequestRow; ds: FinancialDataset; model: ModelOutput; cim: CimBuildResult; draft: DraftResult }): string {
-  const { row, ds, model, cim, draft } = p;
+/** Days after the as-of date past which the financials read as stale to a buyer, who asks first for the current year to date (PE reader). */
+const STALE_DAYS = 120;
+
+function openQuestionsMd(p: { row: RequestRow; ds: FinancialDataset; model: ModelOutput; cim: CimBuildResult; draft: DraftResult; now: Date }): string {
+  const { row, ds, model, cim, draft, now } = p;
+  const age = (now.getTime() - Date.parse(`${model.asOfDate}T00:00:00Z`)) / 86_400_000;
+  const prevMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+  const lastFull = monthLabel(`${prevMonth.getUTCFullYear()}-${String(prevMonth.getUTCMonth() + 1).padStart(2, "0")}`);
+  const stale = age > STALE_DAYS ? [`The financials end at ${monthLabel(model.asOfDate.slice(0, 7))}, ${Math.round(age)} days before this run: request the P&L and balance sheet year to date through ${lastFull}, so the model can add YTD and LTM columns (guide 5.2).`] : [];
   const boxes = (items: string[], none: string) => (items.length ? items.map((i) => `- [ ] ${i}`) : [`- ${none}`]);
   const schedule = model.adjustments.map((a) => a.row);
 
@@ -146,7 +171,7 @@ function openQuestionsMd(p: { row: RequestRow; ds: FinancialDataset; model: Mode
     ...boxes(toReview, "None: every schedule row is accepted or excluded."),
     "",
     "## Data issues to resolve",
-    ...boxes(ds.warnings, "None."),
+    ...boxes([...stale, ...ds.warnings], "None."),
   ];
   if (draft.lint.length) {
     lines.push("", "## CIM copy that fails the house-style lint", ...boxes(draft.lint.map((i) => `${i.path}: ${i.issue}${i.text ? ` ("${i.text.slice(0, 120)}")` : ""}`), "None."));
@@ -219,6 +244,7 @@ function summaryMd(p: {
   draft: DraftResult;
   cim: CimBuildResult;
   workbook: string;
+  render?: RenderCheckResult;
 }): string {
   const { row, intake, model, verification: v, draft, cim } = p;
   const ds = intake.dataset;
@@ -238,7 +264,7 @@ function summaryMd(p: {
     "",
     "## Deliverables",
     `- ${path.basename(p.workbook)}: ${p.plan.plans.length} tabs, ${model.masterCheck}.`,
-    `- ${path.basename(cim.pptx)}: ${cim.plan.pages.length} pages, ${cim.openQuestions.length ? `a draft until its ${plural(cim.openQuestions.length, "open question")} ${cim.openQuestions.length === 1 ? "is" : "are"} resolved` : "no open questions"}. Copy: ${COPY_SOURCES[draft.source]}.`,
+    `- ${path.basename(cim.pptx)}: ${cim.plan.pages.length} pages, ${cim.openQuestions.length ? `a draft until its ${plural(cim.openQuestions.length, "open question")} ${cim.openQuestions.length === 1 ? "is" : "are"} resolved` : "no open questions"}. Copy: ${COPY_SOURCES[draft.source]}.${draft.fallback ? ` ${draft.fallback}` : ""}`,
     cim.pdf ? `- ${path.basename(cim.pdf)}` : `- No PDF: ${renderNotes.join(" ")}`,
     cim.pngs.length ? `- ${path.basename(path.dirname(cim.pngs[0]!))}/: ${plural(cim.pngs.length, "page image")}` : "- No page images (they are rendered from the PDF).",
     "- open-questions.md",
@@ -265,6 +291,7 @@ function summaryMd(p: {
     "",
     "## Model",
     `- Verification: ${plural(v.formulas, "formula")} evaluated independently; ${count(v.compared)} cells and named outputs compared with the engine: ${plural(v.errors.length, "error")}, ${plural(v.mismatches.length, "mismatch", "mismatches")}, ${plural(v.lint.length, "lint finding")}.`,
+    `- Render check (C37): ${p.render ? p.render.note : "not run (renderCheck off)"}.`,
     `- Tabs: ${p.plan.plans.map((s) => s.name).join(", ")}.`,
     `- Modules built: ${model.modules.built.join(", ") || "none"}.`,
     ...model.modules.omitted.map((m) => `- Not built: ${m.id} (${m.reason}).`),

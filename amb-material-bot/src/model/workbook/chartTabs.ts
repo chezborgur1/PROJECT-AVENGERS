@@ -99,11 +99,12 @@ export function planChartTab(ctx: TabContext, tab: ChartTab): SheetBuilder | und
     // Chart-data rows for this exhibit.
     b.text(r, 2, `${e.id}: ${e.title}`, { font: { bold: true } });
     r++;
-    let categories = { ref: `'${SHEET[tab]}'!${addr(axisRow, FIRST_DATA_COL, { row: true, col: true })}:${addr(axisRow, FIRST_DATA_COL + e.categories.length - 1, { row: true, col: true })}`, labels: e.categories.map((m) => axisLabel(m, n)) };
+    // Monthly exhibits read the axis-label row; others (tenure buckets, types) carry their own category row, whose labels are not months.
+    const categoryRow = e.monthly ? axisRow : r;
+    const categories = { ref: `'${SHEET[tab]}'!${addr(categoryRow, FIRST_DATA_COL, { row: true, col: true })}:${addr(categoryRow, FIRST_DATA_COL + e.categories.length - 1, { row: true, col: true })}`, labels: e.monthly ? e.categories.map((m) => axisLabel(m, n)) : e.categories };
     if (!e.monthly) {
       b.text(r, 2, "Category", { style: "helper" });
       e.categories.forEach((label, i) => b.text(r, FIRST_DATA_COL + i, label, { style: "helper", align: { horizontal: "right" } }));
-      categories = { ref: `'${SHEET[tab]}'!${addr(r, FIRST_DATA_COL, { row: true, col: true })}:${addr(r, FIRST_DATA_COL + e.categories.length - 1, { row: true, col: true })}`, labels: e.categories };
       r++;
     }
     const rowOfSeries: Record<string, number> = {};

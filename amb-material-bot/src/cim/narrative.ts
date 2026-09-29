@@ -19,7 +19,7 @@ import { assertFinished, claude, claudeAvailable, CLAUDE_MODEL, fallbackOptions 
 import type { CimContext, Firm } from "./context.ts";
 import { buildContext } from "./context.ts";
 import type { CimCopy, LintIssue } from "./copy.ts";
-import { BANNED_PHRASES, CimCopySchema, lintCopy } from "./copy.ts";
+import { BANNED_PHRASES, CimCopySchema, lintCopy, lintNames, protectedNames } from "./copy.ts";
 import type { Block } from "./design.ts";
 import type { DeckPlan } from "./planner.ts";
 import { planDeck } from "./planner.ts";
@@ -40,6 +40,8 @@ export interface DraftResult {
   source: "claude" | "fixture" | "template";
   /** Lint issues left in the copy (guide 4.4); empty for clean copy. */
   lint: LintIssue[];
+  /** Why Claude's draft was not used when a key was set (an API error, a cut-off draft, a protected name): run-summary.md says so. */
+  fallback?: string;
 }
 
 /** The reviewed copy a sample request folder may carry, used only when no API key is set. */
@@ -55,16 +57,32 @@ function baseline(n: NarrativeContext): { ctx: CimContext; plan: DeckPlan } {
   return { ctx, plan: planDeck(ctx) };
 }
 
+/**
+ * The copy for the deck. With an API key Claude drafts it; any failure
+ * (network, rate limit, refusal, a cut-off or unparsable draft, or a draft
+ * that names a customer or staff member) falls back to the reviewed fixture
+ * or the templated copy, so the request still delivers, and the reason goes
+ * to run-summary.md. The workbook is already written by then.
+ */
 export async function draftCimCopy(n: NarrativeContext): Promise<DraftResult> {
   const { ctx, plan } = baseline(n);
+  const names = protectedNames(n.dataset);
+  const lint = (copy: CimCopy) => [...lintCopy(copy, ctx.brief), ...lintNames(copy, names)];
+  let fallback: string | undefined;
   if (claudeAvailable()) {
-    const copy = await draftWithClaude(n, ctx, plan);
-    return { copy, source: "claude", lint: lintCopy(copy, ctx.brief) };
+    try {
+      const copy = await draftWithClaude(n, ctx, plan);
+      const named = lintNames(copy, names);
+      if (named.length) throw new Error(`the draft ${named[0]!.issue}`);
+      return { copy, source: "claude", lint: lint(copy) };
+    } catch (e) {
+      fallback = `Claude's draft was not used (${(e as Error).message}); the copy below is the fallback.`;
+    }
   }
   const fixture = loadFixture(n.row, ctx.legalName);
-  if (fixture) return { copy: fixture, source: "fixture", lint: lintCopy(fixture, ctx.brief) };
+  if (fixture) return { copy: fixture, source: "fixture", lint: lint(fixture), fallback };
   const copy = templateCopy(ctx);
-  return { copy, source: "template", lint: lintCopy(copy, ctx.brief) };
+  return { copy, source: "template", lint: lint(copy), fallback };
 }
 
 /** The request folder's copy fixture, when it exists and names this business. */
@@ -102,6 +120,8 @@ How the copy must read (AMB house style):
 - One claim per sentence; median sentence 14 to 20 words, never over 32. No triads of adjectives, no stacked clauses.
 - State a negative with the fact that bounds it. Say what is not assumed ("Nothing pro forma is included").
 - Attribute what is not verified: facts from the intake notes are management's; mark them with the footnote marker " (1)" where the page's footnote (1) reads "Per management; not independently verified."
+- Customers and employees outside the management roster appear only by their code ("C-001") or their role ("a lead technician"), never by name, even when the intake notes name them. The owner and the listed management team may be named.
+- Buyer-facing voice: never describe the data work, a missing document, a proxy used for lack of a source, or anything left for the advisor; those go to open_questions only.
 - No em dashes, no exclamation marks, no rhetorical questions, no italics for emphasis. Ranges use an en dash with no spaces.
 - Never judge price or attractiveness. Never mention a valuation, asking price, multiple or offer structure.
 - Banned words and constructions (fail the lint): ${BANNED_PHRASES.join(", ")}; "strong", "solid", "healthy", "significant", "substantial", "meaningful", "leading", "diversified" without a number in the same sentence; "Furthermore", "Moreover", "Additionally" as openers; "leverage" as a verb; "we", "our", "us" outside the transaction section (s10_1).
@@ -146,11 +166,13 @@ async function draftWithClaude(n: NarrativeContext, ctx: CimContext, plan: DeckP
     .list()
     .map((f) => `{{${f.key}}} = ${f.text}  (${f.label})`)
     .join("\n");
+  // Streamed with a large budget: a 20-54 page deck's copy plus adaptive thinking can run past what a single non-streamed response allows.
   const request = async (extra: string): Promise<CimCopy> => {
-    const response = await claude().beta.messages.parse({
+    const stream = claude().beta.messages.stream({
       model: CLAUDE_MODEL,
-      max_tokens: 24000,
+      max_tokens: 64000,
       ...fallbackOptions(),
+      betas: [...fallbackOptions().betas, "structured-outputs-2025-12-15"],
       thinking: { type: "adaptive" },
       output_config: { effort: "high", format: betaZodOutputFormat(CimCopySchema) },
       system: SYSTEM,
@@ -177,9 +199,18 @@ ${n.notes || "(no intake notes provided)"}
         },
       ],
     });
+    const response = await stream.finalMessage();
     assertFinished(response.stop_reason, "the CIM copy");
-    if (!response.parsed_output) throw new Error("Could not parse the CIM copy from Claude");
-    return response.parsed_output;
+    const text = response.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("");
+    const parsed = CimCopySchema.safeParse((() => {
+      try {
+        return JSON.parse(text);
+      } catch {
+        return undefined;
+      }
+    })());
+    if (!parsed.success) throw new Error("Could not parse the CIM copy from Claude");
+    return parsed.data;
   };
   const first = await request("");
   const issues = lintCopy(first, ctx.brief);

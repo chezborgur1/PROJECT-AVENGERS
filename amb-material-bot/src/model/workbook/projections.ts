@@ -30,7 +30,7 @@ export function planProjections(ctx: TabContext): SheetBuilder {
   b.widths(firstProj, lastValue, WIDTH.value);
   b.spacerCol(lastValue + 1);
   b.width(notesCol, WIDTH.notes);
-  b.anatomy({ subtitle: "Projections: driver-based income statement, balance sheet and cash flow ($000s)", lastCol: notesCol, toggleCol: lastValue, masterToggle: ctx.masterToggle });
+  b.anatomy({ subtitle: "Projections: Driver-Based Income Statement, Balance Sheet and Cash Flow ($000s)", lastCol: notesCol, toggleCol: lastValue, masterToggle: ctx.masterToggle });
   b.text(3, lastValue - 1, "Print", { align: { horizontal: "right" } });
   b.tier1(5, [{ from: openCol, to: openCol, label: "Opening" }, { from: firstProj, to: lastValue, label: "Projection" }, { from: notesCol, to: notesCol, label: "Notes" }]);
   b.tier2(6, { from: openCol, to: lastValue }, [], "Projections");

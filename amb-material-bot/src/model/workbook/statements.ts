@@ -18,11 +18,11 @@ import {
   adjMonthStart,
   adjustmentsLayout,
   applyPeriodWidths,
+  fiscalYearWindow,
   gridMonths,
   periodLayout,
   prorationFormula,
   S,
-  scheduleRef,
   SHEET,
   sumifsFormula,
   valueSpans,
@@ -122,11 +122,11 @@ export function planPnlSummary(ctx: TabContext): SheetBuilder {
     if (l.deltas && spec.value) writeDeltas(b, rr, l, spec.kind, deltaValues(model, l, (p) => spec.value!({ pnl: p.pnl, ladder: p.ladder, revenueLines: p.revenueLines }) / K));
     if (l.scenarios) writeScenarioCells(b, rr, spec, l, model);
   }
-  // Basis notes for the PF column's restated lines.
-  for (const adj of model.adjustments) {
-    if (adj.row.tier !== "pro_forma" || adj.row.status !== "accepted" || !adj.row.pnlLine) continue;
-    const key = rows.find((x) => x.category === adj.row.pnlLine)?.key;
-    if (key) b.note(b.r(key), l.notesCol, `PF: ${adj.row.pfMethod ?? "Pro forma"} [${adj.row.ref}]`);
+  // Column Q (guide 5.2): what each line reads, from the Databook mapping, and for the PF column's restated lines the method.
+  for (const spec of rows) {
+    const pf = model.adjustments.find((a) => a.row.tier === "pro_forma" && a.row.status === "accepted" && a.row.pnlLine && a.row.pnlLine === spec.category);
+    const text = [pnlBasis(spec, model), pf ? `PF: ${pf.row.pfMethod ?? "Pro forma"} [${pf.row.ref}]` : ""].filter(Boolean).join("; ");
+    if (text) b.note(b.r(spec.key), l.notesCol, text);
   }
 
   // KPI block (guide 5.1 row 5; DATA_CONTRACT §5.9).
@@ -162,7 +162,8 @@ export function planPnlSummary(ctx: TabContext): SheetBuilder {
     b.checkCf(linesCheckRow, l.firstCol, l.lastValueCol);
   }
   b.note(lastPrinted, 2, monthly ? "Note: every period column is a SUMIFS over the Monthly P&L grid for the window in the helper rows below. Margins divide by total revenue." : `Note: full fiscal years only; source: ${model.databook?.pnl[0]?.file ?? "annual P&L"}. Pro forma columns apply the scenario methods on Assumptions.`);
-  b.print({ area: `B2:${addr(lastPrinted, l.notesCol)}`, landscape: true, fitToWidth: 1, fitToHeight: 0, titlesRow: "5:6" });
+  // The figures print one landscape page wide and the Basis column prints apart beside the repeated labels, so neither squeezes the other.
+  b.print({ areas: [`B2:${addr(lastPrinted, l.lastValueCol)}`, `${addr(7, l.notesCol)}:${addr(b.r(rows[rows.length - 1]!.key), l.notesCol)}`], landscape: true, fitToWidth: 1, fitToHeight: 0, titlesRow: "2:6", titlesCol: "B:B" });
   b.furniture(ctx.codeName, ctx.asOfLabel);
   b.freeze(7, 3);
   const fyCols = l.cols.filter((c) => c.column.ref.kind === "fiscal_year");
@@ -182,6 +183,40 @@ export function planPnlSummary(ctx: TabContext): SheetBuilder {
   }
   if (pf) named("Rev_PF", "revenue", [pf]);
   return b;
+}
+
+/** Width of a Basis column printed as its own range (the ladder, the P&L Summary): the page holds it beside the labels at full scale. */
+const BASIS_APART = 85;
+
+/**
+ * The Basis cell of a P&L Summary line: the source accounts it sums (from the
+ * Databook mapping, the first few named and the rest counted so the note stays
+ * on one line) or how a total is formed.
+ */
+function pnlBasis(spec: ReturnType<typeof pnlRows>[number], model: ModelOutput): string {
+  const accounts = (pick: (d: NonNullable<ModelOutput["databook"]>["pnl"][number]) => boolean) => [...new Set((model.databook?.pnl ?? []).filter(pick).map((d) => d.account.split(":").pop()!.trim()))];
+  const list = (names: string[]) => {
+    if (!names.length) return "";
+    let out = names[0]!;
+    let k = 1;
+    for (; k < names.length && `${out}, ${names[k]}`.length <= 36; k++) out = `${out}, ${names[k]}`;
+    return `${names.length === 1 ? "Account" : "Accounts"}: ${out}${k < names.length ? ` and ${names.length - k} more (Databook)` : ""}`;
+  };
+  if (spec.account) return list([spec.account.split(":").pop()!.trim()]);
+  if (spec.contra) return list(contraAccounts(model).map((a) => a.split(":").pop()!.trim()));
+  if (spec.category) return list(accounts((d) => d.category === spec.category));
+  const formed: Record<string, string> = {
+    revenue: "Sum of the revenue lines",
+    revenue_growth: "Against the same window a year earlier",
+    gross_profit: "Total revenue less cost of revenue",
+    total_opex: "Sum of the operating expense lines",
+    reported_ebitda: "Gross profit less opex, plus other income less other expense",
+    ebit: "Reported EBITDA less depreciation and amortization",
+    ebt: "EBIT less interest expense",
+    net_income: "Pre-tax income less income taxes (C04 ties it to the grid)",
+  };
+  if (spec.kind === "margin") return "Of total revenue";
+  return formed[spec.key] ?? "";
 }
 
 interface KpiRow {
@@ -208,11 +243,23 @@ function kpiRows(model: ModelOutput, customerYears: number[]): KpiRow[] {
       fmt: FMT.body,
       cell: (c, col, _at, h, pv) => ({ f: activeCount(addr(h.end, col, { row: true }), monthPeriod(c.end, model.fiscalYearEndMonth).fiscalYear, customerYears), expect: pv.kpis.customers ?? 0 }),
     });
+    // Listed customers' revenue in the window (each fiscal year of the raw list prorated by the months it contributes), over the listed count.
+    const listedRevenue = (h: { start: number; end: number }, col: number) =>
+      prorationFormula(
+        customerYears.map((y) => {
+          const w = fiscalYearWindow(y, model);
+          const raw = `${S("rawCustomers")}$${colLetter(RAW_CUSTOMER_COLS.firstFy + customerYears.indexOf(y))}:$${colLetter(RAW_CUSTOMER_COLS.firstFy + customerYears.indexOf(y))}`;
+          return { amountCell: `SUMIFS(${raw},${S("rawCustomers")}$${colLetter(RAW_CUSTOMER_COLS.code)}:$${colLetter(RAW_CUSTOMER_COLS.code)},"<>Residual")`, startCell: w.start, endCell: w.end };
+        }),
+        addr(h.start, col, { row: true }),
+        addr(h.end, col, { row: true }),
+      );
     rows.push({
       key: "kpi_revenue_per_customer",
-      label: `Revenue per ${model.customers.term.toLowerCase()} ($)`,
+      label: `Revenue per listed ${model.customers.term.toLowerCase()} ($)`,
       fmt: FMT.currency,
-      cell: (_c, _col, at, _h, pv) => ({ f: `IFERROR(${at("revenue")}*${K}/${at("kpi_customers")},"n.a.")`, expect: ratio(pv.kpis.revenue_per_customer) }),
+      // The engine leaves the ratio out where the list does not cover the window (a YTD, or a year it lacks), and the cell reads n.a. there too.
+      cell: (_c, col, at, h, pv) => (pv.kpis.revenue_per_customer === undefined ? undefined : { f: `IFERROR((${listedRevenue(h, col)})/${at("kpi_customers")},"n.a.")`, expect: ratio(pv.kpis.revenue_per_customer) }),
     });
   }
   if (model.headcount) {
@@ -306,48 +353,80 @@ function writeScenarioCells(b: SheetBuilder, r: number, spec: ReturnType<typeof 
 
 // --- Adj. EBITDA ladder --------------------------------------------------------------------------
 
+/**
+ * How a ladder line reads the schedule, keyed to schedule rows and never to a
+ * ref string, so a row inserted on the Adjustments tab renumbers the refs and
+ * the ladder follows (guide 5.3). `rows` are the schedule rows (indices into
+ * model.adjustments) the line stands for; a fixed rung ([D1]–[D3], [S1]–[S3])
+ * also has `match` and sums accepted rows of its tier and category over whole
+ * columns, so accepting a row on the tab flows into the rung and its label.
+ */
+interface LadderSource {
+  rows: number[];
+  match?: { tier: Adjustment["tier"]; category?: Adjustment["category"] };
+  /** Memo rows are listed whatever their status; every other line counts accepted rows only. */
+  anyStatus?: boolean;
+}
+
 interface LadderRow {
   key: string;
+  /** The label as it prints; lines with a source build it by formula from the schedule's description and ref cells. */
   label: string;
+  /** Fixed wording before the refs ("(+) Interest Expense"), or none when the label is the row's own description. */
+  fixed?: string;
   kind: "section" | "line" | "keyTotal" | "margin" | "subtotal" | "spacer" | "check";
-  ref?: string;
+  source?: LadderSource;
+  /** The line's tier, for the PF-only rule. */
+  tier?: Adjustment["tier"];
   value?: (v: ModelOutput["periods"][string]) => number;
 }
 
 function ladderRows(model: ModelOutput): LadderRow[] {
   const adj = model.adjustments;
-  const accepted = (tier: Adjustment["tier"]) => adj.filter((x) => x.row.tier === tier && x.row.status === "accepted");
-  const latestKey = model.columns.filter((c) => !c.projected).at(-1)!.key;
-  const signLabel = (x: (typeof adj)[number]) => {
-    const amount = x.byColumn[latestKey] ?? Object.values(x.byColumn).find((v) => v !== 0) ?? 0;
-    return `${amount < 0 ? "(-)" : "(+)"} ${x.row.description} [${x.row.ref}]`;
+  const indexed = adj.map((x, i) => ({ x, i }));
+  // Every Normalization and Pro forma row has a line, gated on its Status cell, so accepting a row on the Adjustments tab moves
+  // the ladder; a row not yet accepted shows its label and a dash.
+  const ofTier = (tier: Adjustment["tier"]) => indexed.filter(({ x }) => x.row.tier === tier);
+  const refsOf = (rows: number[]) => rows.map((i) => `[${adj[i]!.row.ref}]`).join(" ");
+  const fixedLine = (key: string, fixed: string, tier: Adjustment["tier"], category: Adjustment["category"], value: LadderRow["value"]): LadderRow => {
+    const rows = indexed.filter(({ x }) => x.row.tier === tier && x.row.category === category).map(({ i }) => i);
+    const acceptedRows = rows.filter((i) => adj[i]!.row.status === "accepted");
+    return { key, label: acceptedRows.length ? `${fixed} ${refsOf(acceptedRows)}` : fixed, fixed, kind: "line", source: { rows, match: { tier, category } }, tier, value };
+  };
+  // A signed line takes its sign from the row's fiscal years together, so a one-year add-back keeps its sign in every column.
+  const signed = ({ x, i }: { x: (typeof adj)[number]; i: number }): LadderRow => {
+    const total = Object.values(x.row.byFiscalYear).reduce((s, v) => s + v, 0);
+    return { key: `adj_${x.row.ref}`, label: `${total < 0 ? "(-)" : "(+)"} ${x.row.description} [${x.row.ref}]`, kind: "line", source: { rows: [i] }, tier: x.row.tier, value: undefined };
   };
   const rows: LadderRow[] = [
     { key: "net_income", label: "Net Income", kind: "line", value: (v) => v.ladder.netIncome },
     { key: "sec_definitional", label: "Definitional Adjustments", kind: "section" },
-    { key: "d_interest", label: "(+) Interest Expense [D1]", kind: "line", ref: "D1", value: (v) => v.ladder.definitional.interest },
-    { key: "d_taxes", label: "(+) Income Taxes [D2]", kind: "line", ref: "D2", value: (v) => v.ladder.definitional.taxes },
-    { key: "d_da", label: "(+) Depreciation & Amortization [D3]", kind: "line", ref: "D3", value: (v) => v.ladder.definitional.da },
+    fixedLine("d_interest", "(+) Interest Expense", "definitional", "interest", (v) => v.ladder.definitional.interest),
+    fixedLine("d_taxes", "(+) Income Taxes", "definitional", "taxes", (v) => v.ladder.definitional.taxes),
+    fixedLine("d_da", "(+) Depreciation & Amortization", "definitional", "da", (v) => v.ladder.definitional.da),
     { key: "reported_ebitda", label: "Reported EBITDA", kind: "keyTotal", value: (v) => v.ladder.reportedEbitda },
     { key: "reported_margin", label: "% Margin", kind: "margin", value: (v) => v.ladder.reportedMargin },
     { key: "sec_normalization", label: "Normalization Adjustments", kind: "section" },
-    ...accepted("normalization").map<LadderRow>((x) => ({ key: `adj_${x.row.ref}`, label: signLabel(x), kind: "line", ref: x.row.ref, value: (v) => v.ladder.normalization.find((i) => i.ref === x.row.ref)?.amount ?? 0 })),
+    ...ofTier("normalization").map((r) => ({ ...signed(r), value: (v: ModelOutput["periods"][string]) => v.ladder.normalization.find((i) => i.ref === r.x.row.ref)?.amount ?? 0 })),
     { key: "total_normalization", label: "Total Normalization Adjustments", kind: "subtotal", value: (v) => v.ladder.totalNormalization },
     { key: "sec_owner", label: "Owner Compensation", kind: "section" },
-    { key: "s1", label: "(+) Owner Compensation [S1]", kind: "line", ref: "S1", value: (v) => v.ladder.ownerCompAsPaid },
+    // [S1] is one working owner's total compensation (guide 5.4): the salary row and, once accepted, the payroll taxes on it.
+    fixedLine("s1", "(+) Owner Compensation", "owner_compensation", "owner_compensation", (v) => v.ladder.ownerCompAsPaid),
     { key: "sde", label: "Seller's Discretionary Earnings (SDE)", kind: "keyTotal", value: (v) => v.ladder.sde },
     { key: "sde_margin", label: "% Margin", kind: "margin", value: (v) => v.ladder.sdeMargin },
-    { key: "s2", label: "(-) Market Replacement Compensation [S2]", kind: "line", ref: "S2", value: (v) => v.ladder.marketReplacement },
-    { key: "s3", label: "(-) Capital Reserve (Maintenance Capex) [S3]", kind: "line", ref: "S3", value: (v) => v.ladder.capitalReserve },
+    fixedLine("s2", "(-) Market Replacement Compensation", "owner_compensation", "replacement_cost", (v) => v.ladder.marketReplacement),
+    fixedLine("s3", "(-) Capital Reserve (Maintenance Capex)", "owner_compensation", "capital_reserve", (v) => v.ladder.capitalReserve),
     { key: "adj_ebitda", label: "Adj. EBITDA", kind: "keyTotal", value: (v) => v.ladder.adjEbitda },
     { key: "adj_margin", label: "% Margin", kind: "margin", value: (v) => v.ladder.adjMargin },
     { key: "sec_pf", label: "Pro Forma Adjustments", kind: "section" },
-    ...accepted("pro_forma").map<LadderRow>((x) => ({ key: `adj_${x.row.ref}`, label: signLabel(x), kind: "line", ref: x.row.ref, value: (v) => v.ladder.proForma.find((i) => i.ref === x.row.ref)?.amount ?? 0 })),
+    ...ofTier("pro_forma").map((r) => ({ ...signed(r), value: (v: ModelOutput["periods"][string]) => v.ladder.proForma.find((i) => i.ref === r.x.row.ref)?.amount ?? 0 })),
     { key: "total_pro_forma", label: "Total Pro Forma Adjustments", kind: "subtotal", value: (v) => v.ladder.totalProForma },
     { key: "pf_adj_ebitda", label: "PF Adj. EBITDA", kind: "keyTotal", value: (v) => v.ladder.pfAdjEbitda },
     { key: "pf_margin", label: "% Margin", kind: "margin", value: (v) => v.ladder.pfMargin },
     { key: "sec_memo", label: "Memo: Other Considerations (not included above)", kind: "section" },
-    ...adj.filter((x) => x.row.tier === "memo").map<LadderRow>((x) => ({ key: `adj_${x.row.ref}`, label: `${x.row.description} [${x.row.ref}]`, kind: "line", ref: x.row.ref, value: (v) => v.ladder.memo.find((i) => i.ref === x.row.ref)?.amount ?? 0 })),
+    ...indexed
+      .filter(({ x }) => x.row.tier === "memo")
+      .map<LadderRow>(({ x, i }) => ({ key: `adj_${x.row.ref}`, label: `${x.row.description} [${x.row.ref}]`, kind: "line", source: { rows: [i], anyStatus: true }, tier: "memo", value: (v) => v.ladder.memo.find((m) => m.ref === x.row.ref)?.amount ?? 0 })),
     { key: "sp_check", label: "", kind: "spacer" },
     { key: "check_reported", label: "Check: Reported EBITDA less (Net Income + D1:D3)", kind: "check" },
     { key: "check_schedule", label: "Check: Adjustments schedule less ladder, by tier", kind: "check" },
@@ -355,36 +434,75 @@ function ladderRows(model: ModelOutput): LadderRow[] {
   return rows;
 }
 
+/** Whole column of the Adjustments tab: a row appended anywhere in the schedule is counted (guide 5.5, dynamic ranges). */
+const schedCol = (col: number) => `${S("adjustments")}$${colLetter(col)}:$${colLetter(col)}`;
+
+/** Accepted schedule rows of a tier (and category) in one period column, over whole columns. */
+function scheduleSum(periodCol: number, match: NonNullable<LadderSource["match"]>): string {
+  const category = match.category ? `,${schedCol(ADJ_CATEGORY_COL)},"${ADJUSTMENT_CATEGORY_LABELS[match.category]}"` : "";
+  return `SUMIFS(${schedCol(periodCol)},${schedCol(ADJ_TIER_COL)},"${ADJUSTMENT_TIER_LABELS[match.tier]}"${category},${schedCol(ADJ_STATUS_COL)},"Accepted")`;
+}
+
+/** A cell of schedule row `i` (resolved once the Adjustments tab has laid out its rows). */
+const schedRowCell = (i: number, col: number, absCol = false) => `${S("adjustments")}${absCol ? "$" : ""}${colLetter(col)}@{adjustments.row${i}}`;
+
+/** A ladder line's amount in one schedule column: a fixed rung's accepted rows by tier and category, else its linked rows gated on status (memo rows are not gated). */
+function lineFormula(source: LadderSource, col: number): string {
+  if (source.match) return scheduleSum(col, source.match);
+  const terms = source.rows.map((i) => {
+    const cell = schedRowCell(i, col);
+    return source.anyStatus ? `N(${cell})` : `IF(${schedRowCell(i, ADJ_STATUS_COL, true)}="Accepted",N(${cell}),0)`;
+  });
+  return terms.length ? terms.join("+") : "0";
+}
+
+/** The label formula: a fixed rung's wording and the refs of its accepted rows, or a linked row's own description and ref. */
+function labelFormula(spec: LadderRow, model: ModelOutput): string | undefined {
+  const rows = spec.source?.rows;
+  if (!rows?.length) return undefined;
+  const ref = (i: number) => schedRowCell(i, ADJ_REF_COL, true);
+  if (spec.fixed !== undefined) return `"${spec.fixed}"&${rows.map((i) => `IF(${schedRowCell(i, ADJ_STATUS_COL, true)}="Accepted"," "&${ref(i)},"")`).join("&")}`;
+  const i = rows[0]!;
+  const text = schedRowCell(i, 3, true);
+  if (spec.tier === "memo") return `${text}&" "&${ref(i)}`;
+  const fy = adjustmentsLayout(model).cols.filter((c) => c.column.ref.kind === "fiscal_year");
+  const sum = `SUM(${schedRowCell(i, fy[0]!.col, true)}:$${colLetter(fy[fy.length - 1]!.col)}@{adjustments.row${i}})`;
+  return `IF(${sum}<0,"(-) ","(+) ")&${text}&" "&${ref(i)}`;
+}
+
 export function planLadder(ctx: TabContext): SheetBuilder {
   const { model } = ctx;
   const b = new SheetBuilder("ladder", SHEET.ladder);
   const l = periodLayout(model, 3);
   applyPeriodWidths(b, l);
+  // The Basis column prints as its own range beside the repeated labels, so it can be wide enough to keep every line of the
+  // ladder within three lines (C37); at 60 the longer bases stretched their rows on the figures page.
+  b.width(l.notesCol, BASIS_APART);
   b.anatomy({ subtitle: "Adjusted EBITDA and SDE ($000s)", lastCol: l.notesCol, toggleCol: l.lastValueCol, masterToggle: ctx.masterToggle });
   b.text(3, l.lastValueCol - 1, "Print", { align: { horizontal: "right" } });
   b.tier1(5, [...l.groups, { from: l.notesCol, to: l.notesCol, label: "Basis" }]);
   b.tier2(6, { from: l.firstCol, to: l.lastValueCol }, [], "Adj. EBITDA");
+  b.cell(6, l.notesCol, { style: "header", v: "Basis (from the Adjustments schedule)", role: "text", align: { horizontal: "left" } });
   if (l.deltas) {
     b.cell(6, l.deltas.dollar, { style: "header", v: "($)", role: "text" });
     b.cell(6, l.deltas.pct, { style: "header", v: "(%)", role: "text" });
   }
   if (l.scenarios) ["Low", "Mid", "High"].forEach((h, i) => b.cell(6, l.scenarios!.low + i, { style: "header", v: h, role: "text" }));
-  b.cell(6, l.notesCol, { style: "header", v: "Basis (from the Adjustments schedule)", role: "text", align: { horizontal: "left" } });
 
   const rows = ladderRows(model);
   let r = 8;
   for (const spec of rows) b.row(spec.key, r++);
-  const lastPrinted = r;
-  writePeriodHelpers(b, l, model, lastPrinted + 3);
+  const noteRow = r + 1;
+  writePeriodHelpers(b, l, model, noteRow + 3);
   const spans = valueSpans(l);
   const adjL = adjustmentsLayout(model);
-  const pnlCol = (col: number) => colLetter(col);
   const ltmCol = l.cols.find((c) => c.column.ref.kind === "ltm" && !c.column.priorYear);
-  const columnsForRow = l.cols;
 
   for (const spec of rows) {
     const rr = b.r(spec.key);
     const next = rows[rows.indexOf(spec) + 1];
+    const labelF = labelFormula(spec, model);
+    const labelStyle = spec.kind === "keyTotal" ? "keyTotal" : spec.kind === "subtotal" ? "subtotal" : spec.kind === "margin" ? "margin" : spec.kind === "check" ? "check" : spec.key === "net_income" ? "lineFirst" : "line";
     switch (spec.kind) {
       case "section":
         b.section(rr, spec.label, spans);
@@ -393,31 +511,25 @@ export function planLadder(ctx: TabContext): SheetBuilder {
         b.spacerRow(rr);
         continue;
       case "keyTotal":
-        b.text(rr, 2, spec.label, { style: "keyTotal" });
         b.keyTotalBox([rr, next?.kind === "margin" ? rr + 1 : rr], spans);
         break;
       case "subtotal":
-        b.text(rr, 2, spec.label, { style: "subtotal" });
         b.subtotalBorder(rr, spans);
         break;
-      case "margin":
-        b.text(rr, 2, spec.label, { style: "margin", align: { horizontal: "left", indent: 1 } });
-        break;
-      case "check":
-        b.text(rr, 2, spec.label, { style: "check" });
-        break;
       default:
-        b.text(rr, 2, spec.label, { style: spec.key === "net_income" ? "lineFirst" : "line" });
     }
+    // Labels of lines that read the schedule are formulas on its description and ref cells; the rest are the guide's wording.
+    if (labelF) b.formula(rr, 2, labelF, { style: labelStyle, role: "text", expect: spec.label, label: `label ${spec.key}` });
+    else b.text(rr, 2, spec.label, { style: labelStyle, ...(spec.kind === "margin" ? { align: { horizontal: "left", indent: 1 } } : {}) });
     const fmt = spec.kind === "margin" ? FMT.pct1 : spec.kind === "check" ? FMT.check : spec.key === "net_income" || spec.kind === "keyTotal" || spec.kind === "subtotal" ? FMT.currency : FMT.body;
     const style = spec.kind === "margin" ? "margin" : spec.kind === "check" ? "check" : spec.kind === "keyTotal" ? "keyTotal" : spec.kind === "subtotal" ? "subtotal" : spec.key === "net_income" ? "lineFirst" : "line";
-    for (const { column, col } of columnsForRow) {
+    for (const { column, col } of l.cols) {
       const pv = model.periods[column.key]!;
-      const at = (key: string) => `${pnlCol(col)}${b.r(key)}`;
-      // The PF column starts from LTM: its net income, definitional and normalization rows read the LTM column of the schedule.
+      const at = (key: string) => `${colLetter(col)}${b.r(key)}`;
+      // The PF column starts from LTM: its net income and the check read the LTM column of the P&L.
       const isPf = column.ref.kind === "pf";
-      const pnlColLetter = isPf && ltmCol ? pnlCol(ltmCol.col) : pnlCol(col);
-      const schedCol = adjL.byKey[column.key]!;
+      const pnlColLetter = isPf && ltmCol ? colLetter(ltmCol.col) : colLetter(col);
+      const sc = adjL.byKey[column.key]!;
       let f: string | undefined;
       let expect: number | string | undefined = spec.value ? spec.value(pv) / K : undefined;
       switch (spec.key) {
@@ -428,7 +540,8 @@ export function planLadder(ctx: TabContext): SheetBuilder {
           f = `${at("net_income")}+${at("d_interest")}+${at("d_taxes")}+${at("d_da")}`;
           break;
         case "total_normalization":
-          f = sumRows(b, rows, "adj_N", pnlCol(col)) ?? tierTotal("tier_normalization", schedCol);
+          // The schedule's accepted rows by SUMIFS, so the total moves with the schedule even for a row the ladder does not list; the check below compares it with the lines.
+          f = scheduleSum(sc, { tier: "normalization" });
           break;
         case "sde":
           f = `${at("reported_ebitda")}+${at("total_normalization")}+${at("s1")}`;
@@ -437,7 +550,7 @@ export function planLadder(ctx: TabContext): SheetBuilder {
           f = `${at("sde")}+${at("s2")}+${at("s3")}`;
           break;
         case "total_pro_forma":
-          f = sumRows(b, rows, "adj_PF", pnlCol(col)) ?? tierTotal("tier_pro_forma", schedCol);
+          f = scheduleSum(sc, { tier: "pro_forma" });
           break;
         case "pf_adj_ebitda":
           f = `${at("adj_ebitda")}+${at("total_pro_forma")}`;
@@ -447,7 +560,7 @@ export function planLadder(ctx: TabContext): SheetBuilder {
         case "adj_margin":
         case "pf_margin": {
           const base = spec.key === "reported_margin" ? "reported_ebitda" : spec.key === "sde_margin" ? "sde" : spec.key === "adj_margin" ? "adj_ebitda" : "pf_adj_ebitda";
-          f = `IFERROR(${at(base)}/${S("pnl")}${pnlCol(col)}${rowOf("pnl", "revenue")},"n.m.")`;
+          f = `IFERROR(${at(base)}/${S("pnl")}${colLetter(col)}${rowOf("pnl", "revenue")},"n.m.")`;
           expect = pv.pnl.revenue ? spec.value!(pv) : "n.m.";
           break;
         }
@@ -456,38 +569,37 @@ export function planLadder(ctx: TabContext): SheetBuilder {
           expect = 0;
           break;
         case "check_schedule": {
-          const tier = (key: string) => `${S("adjustments")}${colLetter(schedCol)}${rowOf("adjustments", key)}`;
-          f = `ABS(${tier("tier_definitional")}-(${at("d_interest")}+${at("d_taxes")}+${at("d_da")}))+ABS(${tier("tier_normalization")}-${at("total_normalization")})+ABS(${tier("tier_s1")}+${tier("tier_s2")}+${tier("tier_s3")}-(${at("s1")}+${at("s2")}+${at("s3")}))+ABS(${tier("tier_pro_forma")}-${at("total_pro_forma")})`;
+          // Check C06: the whole schedule by tier against the ladder's lines, so an accepted row the ladder does not list shows here as a difference.
+          const tier = (t: Adjustment["tier"]) => scheduleSum(sc, { tier: t });
+          const lines = (prefix: string) => sumRows(b, rows, prefix, colLetter(col)) ?? "0";
+          f = `ABS(${tier("definitional")}-(${at("d_interest")}+${at("d_taxes")}+${at("d_da")}))+ABS(${tier("normalization")}-${lines("adj_N")})+ABS(${tier("owner_compensation")}-(${at("s1")}+${at("s2")}+${at("s3")}))+ABS(${tier("pro_forma")}-N(${lines("adj_PF")}))`;
           expect = 0;
           break;
         }
         default:
-          if (spec.ref) {
-            if (spec.key.startsWith("adj_PF") && !isPf) {
+          if (spec.source) {
+            if (spec.tier === "pro_forma" && !isPf) {
               b.na(rr, col, "n.a.", { style: "line" });
               continue;
             }
-            f = scheduleRef(spec.ref, schedCol);
+            f = lineFormula(spec.source, sc);
           }
       }
       if (f === undefined) continue;
       b.formula(rr, col, f, { style, fmt, expect, tol: spec.kind === "check" ? 1e-6 : undefined, label: `${spec.key} ${column.label}` });
     }
     if (spec.kind === "check") b.checkCf(rr, l.firstCol, l.lastValueCol);
-    if (l.deltas && spec.value && !spec.key.startsWith("adj_PF")) writeDeltas(b, rr, l, spec.kind === "keyTotal" || spec.kind === "subtotal" || spec.kind === "margin" || spec.kind === "check" ? spec.kind : "line", deltaValues(model, l, (p) => spec.value!(p) / K));
+    const basis = basisFormula(spec, model);
+    if (basis) b.formula(rr, l.notesCol, basis.f, { style: "note", role: "text", expect: basis.text, label: `basis ${spec.key}` });
+    if (l.deltas && spec.value && spec.tier !== "pro_forma") writeDeltas(b, rr, l, spec.kind === "keyTotal" || spec.kind === "subtotal" || spec.kind === "margin" || spec.kind === "check" ? spec.kind : "line", deltaValues(model, l, (p) => spec.value!(p) / K));
     if (l.scenarios && spec.value) writeLadderScenarios(b, rr, spec, l, model, rows);
-    if (spec.ref) {
-      // The basis wraps like a definitions panel; finalizeNotes grows the row to fit.
-      b.formula(rr, l.notesCol, `INDEX(${S("adjustments")}$${colLetter(ADJ_BASIS_COL)}:$${colLetter(ADJ_BASIS_COL)},MATCH("[${spec.ref}]",${S("adjustments")}$${colLetter(ADJ_REF_COL)}:$${colLetter(ADJ_REF_COL)},0))`, {
-        style: "note",
-        expect: model.adjustments.find((x) => x.row.ref === spec.ref)?.row.basis ?? "",
-        label: `basis ${spec.ref}`,
-      });
-    }
   }
+
   const mainStreet = model.mode.mode === "mainStreet";
-  b.note(lastPrinted, 2, `Note: margins divide by total revenue. ${mainStreet ? "Main Street mode: SDE is the headline; the capital reserve [S3] is deducted below SDE." : "Lower-middle-market mode: [S3] is zero and the CIM collapses [S1] and [S2] into one owner compensation normalization line."} The PF column starts from LTM net income and adds the accepted pro forma rows below Adj. EBITDA.`);
-  b.print({ area: `B2:${addr(lastPrinted, l.notesCol)}`, landscape: true, fitToWidth: 1, fitToHeight: 0, titlesRow: "5:6" });
+  b.note(noteRow, 2, `Note: margins divide by total revenue. ${mainStreet ? "Main Street mode: SDE is the headline; the capital reserve [S3] is deducted below SDE." : "Lower-middle-market mode: [S3] is zero and the CIM collapses [S1] and [S2] into one owner compensation normalization line."} The PF column starts from LTM net income and adds the accepted pro forma rows below Adj. EBITDA. Each line links to its schedule row, so a row inserted on the Adjustments tab renumbers the refs here.`);
+  // Two ranges: the figures one landscape page wide, then the Basis column beside the repeated labels. Printed together the
+  // 60-wide Basis pushed the figures under the 7 pt floor and the fit squeezed Basis to a narrow column of tall rows.
+  b.print({ areas: [`B2:${addr(noteRow, l.lastValueCol)}`, `${addr(7, l.notesCol)}:${addr(r - 1, l.notesCol)}`], landscape: true, fitToWidth: 1, fitToHeight: 0, titlesRow: "2:6", titlesCol: "B:B" });
   b.furniture(ctx.codeName, ctx.asOfLabel);
   b.freeze(7, 3);
   const fyCols = l.cols.filter((c) => c.column.ref.kind === "fiscal_year");
@@ -503,15 +615,28 @@ export function planLadder(ctx: TabContext): SheetBuilder {
   return b;
 }
 
+/**
+ * Column Q of the ladder (guide 5.4): each line's Basis from the schedule,
+ * linked, beside its figures. A fixed rung carries the basis of each of its
+ * accepted rows; a line of its own carries its row's basis whatever its status.
+ */
+function basisFormula(spec: LadderRow, model: ModelOutput): { f: string; text: string } | undefined {
+  const rows = spec.source?.rows;
+  if (!rows?.length) return undefined;
+  const one = (i: number) => `${schedRowCell(i, ADJ_REF_COL, true)}&" "&${schedRowCell(i, ADJ_BASIS_COL, true)}`;
+  const text = (i: number) => `[${model.adjustments[i]!.row.ref}] ${model.adjustments[i]!.row.basis}`;
+  if (spec.fixed === undefined) return { f: one(rows[0]!), text: text(rows[0]!) };
+  const status = (i: number) => `${schedRowCell(i, ADJ_STATUS_COL, true)}="Accepted"`;
+  const accepted = rows.filter((i) => model.adjustments[i]!.row.status === "accepted");
+  const f = rows.length === 1 ? `IF(${status(rows[0]!)},${one(rows[0]!)},"")` : `TRIM(${rows.map((i) => `IF(${status(i)},${one(i)}&" ","")`).join("&")})`;
+  // TRIM also folds runs of spaces inside the text, so the expectation does too.
+  return { f, text: rows.length === 1 ? accepted.map(text).join("") : accepted.map(text).join(" ").replace(/ {2,}/g, " ").trim() };
+}
+
 /** SUM over a tier's ladder rows, or undefined when the tier has no accepted rows. */
 function sumRows(b: SheetBuilder, rows: LadderRow[], prefix: string, col: string): string | undefined {
   const keys = rows.filter((x) => x.key.startsWith(prefix)).map((x) => `${col}${b.r(x.key)}`);
   return keys.length ? `SUM(${keys[0]}:${keys[keys.length - 1]})` : undefined;
-}
-
-/** A tier's accepted total for one schedule column, for a ladder subtotal whose tier has no rows to list. */
-function tierTotal(key: string, schedCol: number): string {
-  return `${S("adjustments")}${colLetter(schedCol)}${rowOf("adjustments", key)}`;
 }
 
 /** Annual-only mode: the ladder's Low / Mid / High columns read the scenario P&L and the latest year's schedule. */
@@ -536,7 +661,7 @@ function writeLadderScenarios(b: SheetBuilder, r: number, spec: LadderRow, l: Pe
         f = `${at("net_income")}+${at("d_interest")}+${at("d_taxes")}+${at("d_da")}`;
         break;
       case "total_normalization":
-        f = sumRows(b, rows, "adj_N", colLetter(col)) ?? tierTotal("tier_normalization", latestSched);
+        f = sumRows(b, rows, "adj_N", colLetter(col)) ?? scheduleSum(latestSched, { tier: "normalization" });
         break;
       case "sde":
         f = `${at("reported_ebitda")}+${at("total_normalization")}+${at("s1")}`;
@@ -561,7 +686,7 @@ function writeLadderScenarios(b: SheetBuilder, r: number, spec: LadderRow, l: Pe
         break;
       }
       default:
-        if (spec.ref && !spec.key.startsWith("adj_PF")) f = scheduleRef(spec.ref, latestSched);
+        if (spec.source && spec.tier !== "pro_forma") f = lineFormula(spec.source, latestSched);
     }
     if (f !== undefined) b.formula(r, col, f, { style, fmt, expect, label: `${spec.key} ${sc.name}` });
   });
@@ -571,14 +696,17 @@ function writeLadderScenarios(b: SheetBuilder, r: number, spec: LadderRow, l: Pe
 
 const TEXT_HEADERS = ["Ref", "Adjustment", "Tier", "Category", "Basis", "Source document", "Evidence", "Status", "In CIM", "P&L line", "PF method"];
 /**
- * Text-block widths sum to 158 so the block prints as one landscape page at
- * 80% and the periods as a second, with Ref and Adjustment repeated (the
- * guide's single-page fit put Arial 9 near 4 pt).
+ * Widths of D:L. The tab prints as two ranges, the schedule text (B:L) and
+ * the periods (N onward) with Ref and Adjustment repeated as title columns,
+ * both fitted to one landscape page wide: one range at a single-page fit put
+ * Arial 9 near 4 pt. The text block stays near 160 wide so it prints at about
+ * 80% (Arial 9 at 7 pt or more).
  */
-const TEXT_WIDTHS = [7, 22, 13, 14, 36, 18, 13, 9, 6, 9, 11];
+const TEXT_WIDTHS_D_TO_L = [11, 12, 34, 16, 12, 9, 6, 8, 10];
+const REF_WIDTH = 7;
 
 const STATUS_LABEL: Record<Adjustment["status"], string> = { proposed: "Proposed", supported: "Supported", accepted: "Accepted", excluded: "Excluded" };
-const EVIDENCE_LABEL = { documented: "Documented", management_representation: "Management representation" } as const;
+const EVIDENCE_LABEL = { documented: "Documented", management_representation: "Management representation", pending: "To be requested" } as const;
 
 export function planAdjustments(ctx: TabContext): SheetBuilder {
   const { model } = ctx;
@@ -590,7 +718,10 @@ export function planAdjustments(ctx: TabContext): SheetBuilder {
   const lastMonthCol = n ? monthStart + n - 1 : monthStart - 1;
   const lastCol = n ? lastMonthCol : l.lastValueCol;
   b.width(1, WIDTH.gutter);
-  TEXT_WIDTHS.forEach((w, i) => b.width(2 + i, w));
+  b.width(2, REF_WIDTH);
+  // Column C repeats with B on the period pages; holdTitleInTitleColumns widens it when the company name needs more room there.
+  b.width(3, WIDTH.labelAdjustments);
+  TEXT_WIDTHS_D_TO_L.forEach((w, i) => b.width(4 + i, w));
   b.spacerCol(13);
   for (let c = l.firstCol; c <= l.lastValueCol; c++) b.width(c, WIDTH.value);
   for (const s of l.spacers) b.spacerCol(s);
@@ -598,7 +729,7 @@ export function planAdjustments(ctx: TabContext): SheetBuilder {
     b.widths(monthStart, lastMonthCol, WIDTH.value);
     b.outlineCols(monthStart, lastMonthCol, 1);
   }
-  b.anatomy({ subtitle: "Recast and adjustments schedule ($000s; positive increases EBITDA)", lastCol: l.lastValueCol, toggleCol: l.lastValueCol, masterToggle: ctx.masterToggle });
+  b.anatomy({ subtitle: "Recast and Adjustments Schedule ($000s)", lastCol: l.lastValueCol, toggleCol: l.lastValueCol, masterToggle: ctx.masterToggle });
   b.text(3, l.lastValueCol - 1, "Print", { align: { horizontal: "right" } });
   b.tier1(5, [{ from: 2, to: 12, label: "Schedule" }, ...l.groups, ...(n ? [{ from: monthStart, to: lastMonthCol, label: "Monthly ($000s)" }] : [])]);
   TEXT_HEADERS.forEach((h, i) => b.cell(6, 2 + i, { style: "header", v: h, role: "text", align: { horizontal: i < 8 ? "left" : "center" } }));
@@ -610,13 +741,20 @@ export function planAdjustments(ctx: TabContext): SheetBuilder {
   const last = first + adj.length - 1;
   b.row("first", first);
   b.row("last", last);
-  const tierFirst = last + 3;
+  // The ladder links to each schedule row by its position here.
+  adj.forEach((_, i) => b.row(`row${i}`, first + i));
+  const noteRow = last + 2;
+  // The period pages print from a compact copy of the schedule's figures, one line per adjustment: the schedule rows grow to
+  // fit their Basis text, and printed beside the periods those heights stretched every period page (guide 5.11).
+  const compactHead = noteRow + 2;
+  const compactFirst = compactHead + 1;
+  const tierFirst = compactFirst + adj.length + 2;
   const tierKeys = ["tier_definitional", "tier_normalization", "tier_s1", "tier_s2", "tier_s3", "tier_pro_forma", "tier_memo"] as const;
   tierKeys.forEach((k, i) => b.row(k, tierFirst + i));
   b.row("tierFirst", tierFirst);
   b.row("tierLast", tierFirst + tierKeys.length - 1);
-  const lastPrinted = tierFirst + tierKeys.length + 1;
-  const helpers = writePeriodHelpers(b, l, model, lastPrinted + 2);
+  const lastPrinted = tierFirst + tierKeys.length - 1;
+  const helpers = writePeriodHelpers(b, l, model, lastPrinted + 3);
   const monthHeaderRow = n ? `$${colLetter(monthStart)}$6:$${colLetter(lastMonthCol)}$6` : "";
   const monthRowRange = (r: number) => `$${colLetter(monthStart)}${r}:$${colLetter(lastMonthCol)}${r}`;
   const fyCols = l.cols.filter((c) => c.column.ref.kind === "fiscal_year");
@@ -703,25 +841,40 @@ export function planAdjustments(ctx: TabContext): SheetBuilder {
       b.formula(r, col, f, { fmt: FMT.body, expect: engine, label: `${row.ref} ${column.label} (prorated)` });
     }
     if (idx > 0 && adj[idx - 1]!.row.tier !== row.tier) for (let c = 2; c <= lastCol; c++) b.cell(r, c, { border: { top: "thin" } });
+
+    // The compact line for print: Ref and Adjustment (the repeated title columns) and each period figure, linked.
+    const cr = compactFirst + idx;
+    b.formula(cr, 2, addr(r, ADJ_REF_COL), { expect: `[${row.ref}]`, label: `print ref ${row.ref}`, align: { horizontal: "left" } });
+    b.formula(cr, 3, addr(r, 3), { expect: row.description, label: `print label ${row.ref}`, align: { horizontal: "left", wrap: true } });
+    for (const { column, col } of l.cols) {
+      if (isPf && column.ref.kind !== "pf") b.na(cr, col, "n.a.", { style: "line" });
+      else b.formula(cr, col, addr(r, col), { fmt: FMT.body, expect: (x.byColumn[column.key] ?? 0) / K, label: `print ${row.ref} ${column.label}` });
+    }
+    if (idx > 0 && adj[idx - 1]!.row.tier !== row.tier) for (let c = 2; c <= l.lastValueCol; c++) if (c <= 3 || c >= l.firstCol) b.cell(cr, c, { border: { top: "thin" } });
   });
+  b.text(compactHead, 3, "Figures by period (links)", { style: "subsection", align: { horizontal: "left", wrap: false } });
 
   // Ladder totals by tier (accepted rows), per period and per month, for the ladder and the monthly grid.
   b.section(tierFirst - 1, "Ladder totals by tier (accepted rows)", [[2, 12], ...valueSpans(l), ...(n ? [[monthStart, lastMonthCol] as [number, number]] : [])]);
   const tierSpecs: { key: (typeof tierKeys)[number]; label: string; crit: (col: number) => string; series: string; byColumn: (key: string) => number }[] = [
     { key: "tier_definitional", label: "Definitional [D]", crit: (c) => `${col(c)},${col(ADJ_TIER_COL)},"Definitional",${col(ADJ_STATUS_COL)},"Accepted"`, series: "definitional", byColumn: (k) => sumTier(model, k, (r) => r.tier === "definitional") },
     { key: "tier_normalization", label: "Normalization [N]", crit: (c) => `${col(c)},${col(ADJ_TIER_COL)},"Normalization",${col(ADJ_STATUS_COL)},"Accepted"`, series: "total_normalization", byColumn: (k) => sumTier(model, k, (r) => r.tier === "normalization") },
-    { key: "tier_s1", label: "Owner compensation as paid [S1]", crit: (c) => `${col(c)},${col(ADJ_CATEGORY_COL)},"Owner compensation",${col(ADJ_STATUS_COL)},"Accepted"`, series: "owner_comp_as_paid", byColumn: (k) => sumTier(model, k, (r) => r.category === "owner_compensation") },
-    { key: "tier_s2", label: "Market replacement compensation [S2]", crit: (c) => `${col(c)},${col(ADJ_CATEGORY_COL)},"Replacement cost",${col(ADJ_STATUS_COL)},"Accepted"`, series: "market_replacement", byColumn: (k) => sumTier(model, k, (r) => r.category === "replacement_cost") },
-    { key: "tier_s3", label: "Capital reserve [S3]", crit: (c) => `${col(c)},${col(ADJ_CATEGORY_COL)},"Capital reserve",${col(ADJ_STATUS_COL)},"Accepted"`, series: "capital_reserve", byColumn: (k) => sumTier(model, k, (r) => r.category === "capital_reserve") },
+    // The owner-compensation rungs count only S-tier rows: an owner perk the advisor lists as an N row is a normalization.
+    { key: "tier_s1", label: "Owner compensation [S1]", crit: (c) => `${col(c)},${col(ADJ_TIER_COL)},"Owner compensation",${col(ADJ_CATEGORY_COL)},"Owner compensation",${col(ADJ_STATUS_COL)},"Accepted"`, series: "owner_comp_as_paid", byColumn: (k) => sumTier(model, k, (r) => r.tier === "owner_compensation" && r.category === "owner_compensation") },
+    { key: "tier_s2", label: "Market replacement compensation [S2]", crit: (c) => `${col(c)},${col(ADJ_TIER_COL)},"Owner compensation",${col(ADJ_CATEGORY_COL)},"Replacement cost",${col(ADJ_STATUS_COL)},"Accepted"`, series: "market_replacement", byColumn: (k) => sumTier(model, k, (r) => r.tier === "owner_compensation" && r.category === "replacement_cost") },
+    { key: "tier_s3", label: "Capital reserve [S3]", crit: (c) => `${col(c)},${col(ADJ_TIER_COL)},"Owner compensation",${col(ADJ_CATEGORY_COL)},"Capital reserve",${col(ADJ_STATUS_COL)},"Accepted"`, series: "capital_reserve", byColumn: (k) => sumTier(model, k, (r) => r.tier === "owner_compensation" && r.category === "capital_reserve") },
     { key: "tier_pro_forma", label: "Pro forma [PF]", crit: (c) => `${col(c)},${col(ADJ_TIER_COL)},"Pro forma",${col(ADJ_STATUS_COL)},"Accepted"`, series: "total_pro_forma", byColumn: (k) => sumTier(model, k, (r) => r.tier === "pro_forma") },
     { key: "tier_memo", label: "Memo (listed, never added) [M]", crit: (c) => `${col(c)},${col(ADJ_TIER_COL)},"Memo"`, series: "", byColumn: (k) => sumTier(model, k, (r) => r.tier === "memo", true) },
   ];
+  // The range runs to the blank row under the schedule, so a row inserted anywhere in it, or typed into that blank row, is
+  // counted; whole columns would be circular here. The ladder's check reads whole columns from its own tab.
   function col(c: number): string {
-    return `$${colLetter(c)}$${first}:$${colLetter(c)}$${last}`;
+    return `$${colLetter(c)}$${first}:$${colLetter(c)}$${last + 1}`;
   }
   for (const t of tierSpecs) {
     const r = b.r(t.key);
-    b.text(r, 2, t.label, { style: "line" });
+    // Labels sit in the Adjustment column, which prints beside the periods; the narrow Ref column would wrap them to single words.
+    b.text(r, 3, t.label, { style: "line" });
     for (const { column, col: c } of l.cols) {
       b.formula(r, c, `SUMIFS(${t.crit(c)})`, { fmt: FMT.body, expect: t.byColumn(column.key) / K, label: `${t.key} ${column.label}` });
     }
@@ -733,9 +886,11 @@ export function planAdjustments(ctx: TabContext): SheetBuilder {
       });
     }
   }
-  b.cell(b.r("tier_s3"), 2, { v: `Capital reserve [S3]${model.mode.mode === "mainStreet" ? "" : " (zero outside Main Street mode)"}` });
-  b.note(lastPrinted, 2, "Note: refs number by tier in row order (insert a row and every ref renumbers). Only Accepted rows enter the ladder; Proposed, Supported and Excluded rows stay out of every total. Rows with months are exact for YTD and LTM; rows without months are prorated by fiscal-year months in the window.");
-  b.print({ area: `B2:${addr(lastPrinted, l.lastValueCol)}`, landscape: true, scale: 80, titlesRow: "5:6", titlesCol: "B:C", colBreaks: [12] });
+  b.cell(b.r("tier_s3"), 3, { v: `Capital reserve [S3]${model.mode.mode === "mainStreet" ? "" : " (zero outside Main Street mode)"}` });
+  b.note(noteRow, 2, "Note: a positive amount increases EBITDA. Refs number by tier in row order (insert a row and every ref renumbers). Status is an input: set a row to Accepted and it enters the ladder on Adj. EBITDA, which lists every Normalization and Pro forma row; Proposed, Supported and Excluded rows stay out of every total. Rows with months are exact for YTD and LTM; rows without months are prorated by fiscal-year months in the window.");
+  // Two ranges, each one page wide: the schedule text with its note, then the compact figures and the tier totals with Ref and
+  // Adjustment repeated beside them, so the period pages carry one line per adjustment.
+  b.print({ areas: [`B2:${addr(noteRow, 12)}`, `${addr(compactHead, l.firstCol)}:${addr(lastPrinted, l.lastValueCol)}`], landscape: true, fitToWidth: 1, fitToHeight: 0, titlesRow: "2:6", titlesCol: "B:C" });
   b.furniture(ctx.codeName, ctx.asOfLabel);
   b.freeze(7, 3);
   return b;
@@ -756,7 +911,8 @@ function sumTier(model: ModelOutput, columnKey: string, pick: (r: Adjustment) =>
  * stays typed.
  */
 function allocationFormulas(row: Adjustment, model: ModelOutput, r: number, l: PeriodLayout): ({ f?: string } | undefined)[] | undefined {
-  if (row.origin !== "advisor" && row.origin !== "addbacks_csv") return undefined;
+  // File rows, and the bot's own estimates that follow an account (the owner's payroll taxes follow officer compensation).
+  if (row.origin !== "advisor" && row.origin !== "addbacks_csv" && !(row.origin === "suggested" && row.accounts?.length)) return undefined;
   const grid = model.monthly!;
   const hist = model.columns.filter((c) => !c.projected);
   const accounts = row.accounts ?? [];

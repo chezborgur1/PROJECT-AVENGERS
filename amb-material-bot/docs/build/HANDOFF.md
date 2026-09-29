@@ -169,3 +169,99 @@ Open (not blocking):
 - The data layer's optional type requests (`PayrollRecord.payBasis` optional; `SourceReconciliation.line` + `"deposits"`) are not applied: both change consumers in the model and CIM, and neither blocks anything.
 - `intake.yaml` is not read (no YAML dependency); `intake.json` is the structured form.
 - The Claude drafting path has not been exercised live here (no API key); it is covered by type checks and the shared lint.
+
+---
+
+## Fixer (QA round 1)
+
+Owner: the QA round 1 fixer. Fixed the 66 findings at the root where the finding's evidence could be reproduced; the rest are listed under "Not done" with the reason. Shared types changed additively only (`CheckStatus` gains `"Pending"`; `DealStructureColumn.allocation?`; `ValuationInputs.scenarioLadders?` and `assetsAtClose?`; `DealAssumptions` gains four inputs).
+
+What changed, by area (finding numbers in brackets):
+
+- **Periods and windows** [1, 48, 49, 50, 52, 56, 57]: `scheduleFor` fills [S2] and [S3] in every grid month, stub included, so YTD, LTM and PF agree between engine and workbook for an as-of month that does not close the year. Lower-middle-market deals keep an [S3] row at zero. Balance-sheet columns come from every dated sheet. Stub add-backs follow their account or their dated months. An advisor's [S2] row sets the replacement-salary input, so the engine's recomputed [S2] carries the advisor's amount.
+- **Engine and data** [5, 6, 10, 53, 54, 55, 59, 60, 61, 62, 65, 66]:
+  - Cohorts carry a `Pre-FY` row and are keyed by fiscal year.
+  - The owner's employer payroll taxes are an [S4] row, proposed until accepted.
+  - The Main Street scenario block is built in monthly mode too, and each case is valued on its own pro forma SDE, which turns C29 live.
+  - A shareholder receivable lowers adjusted NWC.
+  - An undated customer is classified by revenue.
+  - Calendar columns that straddle a June fiscal year are left out and reported.
+  - C14 compares only a 12-month deposit year.
+  - Growth from a loss gives a `.turn` token instead of "(decline)".
+  - Department average pay is divided by average FTE.
+  - `clientLabel` keeps proper nouns.
+- **Workbook** [2, 3, 4, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 63]:
+  - Printing: the Print-mode rule skips white header text. Print legibility is planned by `fitPrintWidth` in `src/model/sheet.ts`: text columns narrow first, then the tab turns landscape, with a floor of scale 82. `wrapLongLabels` wraps long labels, `dropEmptyNotesColumn` removes empty notes columns, and `freezeWideOnly` freezes only wide tabs. Adjustments prints the schedule and the values as two areas with repeated titles.
+  - Links instead of typed values: Databook-linked balances replace typed ones, and a lint catches typed copies and file paths.
+  - Valuation and Deal Structure: the SBA-only DSCR sits beside the reference-structure DSCR with the binding case named. The sensitivity frontier box is drawn and the 0.25x axis prints at 0.00x.
+  - Scenarios: the Main Street scenario block is on Assumptions.
+  - Definitions: KPIs have scoped denominators ("per listed customer"). Ladder SUMIFS run over whole columns.
+  - Names: LOIDate, SigningDate, EffectiveDate, Offer_* and Monthly_* are defined.
+  - Ties and schedules: the Databook ties period by period (`SUMXMY2`). Monthly add-backs are formulas on their account. Proof of Cash months come from AsOfDate, with a 5% flag.
+  - Deal Structure: Form 8594 allocation, the stock-consideration tax flag, and credit cards split from liens. True-up, deferred-revenue treatment and premises inputs are on Assumptions.
+  - Presentation: version log order fixed, empty divider, raw tabs in 5.10 formats, n.a. fill, title-case subtitles.
+  - Verifier coverage: every formula on an output tab has an engine expectation, and `verifyWorkbook` lints any that do not.
+- **C37 render check** [3, 13]: see the design below.
+- **CIM** [24 to 47, 51, 64]:
+  - Numbers: the revenue mix uses whole shares that add to 100 on the pre-discount base. Rounding is footed as displayed, with the rounding clause added to the note. Deltas are taken from displayed values. Small amounts print "0". `fmtMoney` rounds to the cent first.
+  - Consistency and page build: one label means one amount (`labelConflicts`). Obs. columns that key nothing are dropped. Gap columns may only separate figures. The Observations header is drawn once.
+  - Typography and titles: curly quotes throughout. Title widows are measured in Georgia Bold 20 (`titleWrap`), and modules may offer title lengths.
+  - Column balance: a chart is resized to balance columns (`layoutPage`). S10.2 merges onto S10.1 in place of the term table. S11.1 definitions run on under Sources.
+  - Commentary: `commentaryDensity` reports commentary under the 120-word floor and equal observation counts on neighbouring pages.
+  - Figures on the page: the add-back quality answer is sized ([N1, N3] at 79 bps). Listed-account retention figures carry a scope takeaway and a reconciliation of the ending revenue. p14 charts the largest cost-ratio changes in place of flat margin bars. Money in the key-figures table is in $000s.
+  - Voice and facts: no data-gap language, and unconfirmed debt repayment stays a `[Confirm]`. Customers and non-management staff are protected by name (`protectedNames`, `lintNames`).
+  - Claude drafting: it streams at 64k tokens and falls back to the reviewed or templated copy with the reason in `DraftResult.fallback`.
+  - S9.1 is held to its guide trigger (see below).
+- **Pipeline** [45, 51]: `open-questions.md` asks for year-to-date statements when the financials are more than 120 days old, and `run-summary.md` records the render check and any drafting fallback.
+
+**Departure recorded: Adj. EBITDA after the capital reserve** [35]. `docs/HOUSE_STYLE.md` 5.4 and Q29 put [S3] below SDE, so Adj. EBITDA is after the reserve. `design/FINAL_DESIGN_SPEC.md` §8 has no [S3]. The build follows the guide, which governs the numbers. Until the owner confirms Q29, every page that quotes Adj. EBITDA says it is after the reserve and gives the pre-reserve figure ($438.7K for Ridgeline FY2025):
+- the p4 title and Quick Stats context
+- the footnote on p4 and p5
+- the `adjBeforeReserve` token
+
+If the owner rules for the spec, the change is the [S3] placement in `src/model/periods.ts` (`buildLadder`) and the workbook ladder rows, and the CIM follows through the brief.
+
+**C37 design.** `src/model/renderCheck.ts` works on a copy of the written workbook:
+- It renders the copy with LibreOffice (`src/util/office.ts`). For each page, PyMuPDF reads the sheet name from the footer, the commonest body span size, and the spans past the right margin.
+- A tab fails for any of these:
+  - its body text is under 7 pt, or under 80% of full size for Sensitivities and 90% for Offer Comparison
+  - it renders no page
+  - text runs past the margin
+- `withRenderCheck` writes the result into C37 and the master check. The pipeline then rewrites and re-verifies the workbook, so the file's Checks tab and Cover carry it.
+- Without soffice or PyMuPDF, C37 stays `Pending` and the master check reads "All checks OK (render check pending)". The option is `renderCheck: false` in `PipelineConfig`. Ridgeline takes about 5 s and passes at 7.2 pt or more on every printed tab.
+
+**S9.1 held to its trigger** [44]. Guide 3.3 builds Opportunity sizing only when a lever has a baseline and a benchmark or management target. The Ridgeline notes give five levers with baselines and no target, so the page is omitted:
+- The levers are named in the executive summary's transaction table.
+- The omission reason ("ask the Seller for a target per lever") is listed in `open-questions.md`.
+- The page returns once a target is in `intake.json`.
+- The deck is now 21 pages.
+
+Not done, and why:
+
+- **Column balance does not throw** [30]. Ridgeline balances on every page, but the templated copy used for a deal without reviewed copy (annual-only test deal: S1.2, S5.1, S7.2, S8.1, S10.1) still leaves gaps of 0.6 to 2.8 in. A throw would fail those builds, so the gap stays a build note in `run-summary.md`. Make it throw once the templated layouts balance.
+- **Commentary under 120 words** [31] remains on most standard pages. Their tables fill the band, and the 30-word observation budget holds each item to about two lines. The planner now reports every such page and equal counts on neighbouring pages; the Ridgeline copy no longer repeats counts. Raising density needs a copy pass and wider observation budgets, page by page, against the layout.
+- **One term per population** [37]: "account" versus "customer" is not linted; that needs a vocabulary rule in `copy.ts` and a copy pass. The cross-page count and revenue disagreements it cited are fixed.
+- **Charts** [42]: the trailing-twelve-month line on the monthly chart needs a combo chart and the chart post-pass reworked for a second series type. A waterfall label outside a small step needs per-point labels in the chart XML. Neither is built.
+- **p12 prose block** [47]: there is no room for 150 words beside the organisation and pay tables without cutting an exhibit.
+- **Workbook anatomy remnants** [4, 19, 22, 23]:
+  - Ladder row heights still vary where basis text wraps.
+  - The Print toggle sits where the plan's toggle column falls on tabs that keep a notes column.
+  - PF-method inputs exist only inside the scenario block.
+  - Raw tab names carry no period suffix, because `S()` resolves sheet names from fixed keys and a dated name would need a rename pass through every reference.
+
+Verification (final run):
+- `npx tsc --noEmit` is clean, also under `--noUnusedLocals --noUnusedParameters`.
+- `npx vitest run`: 23 files, 258 tests passing. New tests: `tests/model-print.test.ts`, `tests/cim-fallback.test.ts`, `tests/cim-qa.test.ts`, `tests/qa-round1-engine.test.ts`, and the "QA round 1 fixes" block in `tests/model-workbook.test.ts`.
+- `npm run demo`:
+  - 10,266 formulas verified, 10,089 cells compared; 0 errors, mismatches or lint findings.
+  - "All checks OK" with C37 run: 31 tabs, smallest body text 7.2 pt, nothing past the margin.
+  - A 21-page deck with its PDF and page images.
+- `recalc.py` on a copy of the workbook: `total_errors: 0` over 10,113 formulas.
+- `validate.py` on the deck: passes.
+
+The page list in the CIM section above (23 pages, S9.1 and S10.2 on their own pages) is superseded: Ridgeline is now 21 pages, with S10.2 carried by S10.1 and S9.1 omitted until a lever has a target.
+
+Needs from others:
+
+- **Owner:** rule on Q29 (capital reserve above or below Adj. EBITDA). The deck discloses both figures meanwhile.
+- **CIM builder:** tighten the templated copy so its pages balance, then make `layoutPage` throw on a column gap (spec 14).

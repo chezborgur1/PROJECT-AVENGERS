@@ -244,6 +244,12 @@ export function ebitda(p: Record<IsCategory, number>): number {
 export type SourceGranularity = "monthly" | "annual";
 export type BooksBasis = "cash" | "accrual";
 export type Evidence = "documented" | "management_representation";
+/**
+ * A schedule row's evidence adds "pending": a row the bot proposes (a flagged
+ * account, an estimate) has no evidence yet, and saying "Management
+ * representation" would claim a statement nobody made.
+ */
+export type AdjustmentEvidence = Evidence | "pending";
 
 // --- Months and periods ----------------------------------------------------
 
@@ -538,7 +544,7 @@ export interface Adjustment {
   basis: string;
   /** "GL detail, account 6420"; "Seller add-back list"; "Lease agreement". */
   sourceDocument: string;
-  evidence: Evidence;
+  evidence: AdjustmentEvidence;
   status: AdjustmentStatus;
   /** Positive increases EBITDA. One entry per fiscal year in `FinancialDataset.years`. */
   byFiscalYear: Record<number, number>;

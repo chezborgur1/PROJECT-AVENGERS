@@ -12,10 +12,12 @@ export interface NwcContext {
   dealForm: DealForm;
   /** Revenue and COGS of the twelve months ending at a month (or the fiscal year when that is all the data has), for the ratios. */
   trailingAt: (month: MonthKey) => { revenue: number; cogs: number } | undefined;
+  /** Deferred revenue and customer deposits moved out of NWC and deducted as debt-like (guide 5.6 override). */
+  deferredAsDebtLike: boolean;
 }
 
 /** The 5.6 lines of one balance sheet. Detail lines the source lacks count as zero and are flagged in `available`. */
-export function nwcLines(p: BalanceSheetPeriod, trailing: { revenue: number; cogs: number } | undefined): { lines: NwcLines; available: Record<BsDetailLine, boolean> } {
+export function nwcLines(p: BalanceSheetPeriod, trailing: { revenue: number; cogs: number } | undefined, deferredAsDebtLike = false): { lines: NwcLines; available: Record<BsDetailLine, boolean> } {
   const d = p.detail ?? {};
   const v = p.values;
   const available = Object.fromEntries(BS_DETAIL_LINES.map((l) => [l, d[l] !== undefined])) as Record<BsDetailLine, boolean>;
@@ -33,7 +35,8 @@ export function nwcLines(p: BalanceSheetPeriod, trailing: { revenue: number; cog
   const totalCurrentLiabExDebt = ap + accrued + deferredRevenue + customerDeposits + otherOcl;
   const reportedNwc = totalCurrentAssetsExCash - totalCurrentLiabExDebt;
   // Balances a buyer settles outside working capital: liabilities removed (NWC rises), a related-party receivable removed (NWC falls).
-  const adjustments = (d.related_party_balances ?? 0) + (d.accrued_interest ?? 0) + (d.income_tax_payable ?? 0) - (d.related_party_receivable ?? 0);
+  // Under the debt-like override, customer money leaves NWC here and is deducted on Debt-Like Items instead, never both (C19).
+  const adjustments = (d.related_party_balances ?? 0) + (d.accrued_interest ?? 0) + (d.income_tax_payable ?? 0) - (d.related_party_receivable ?? 0) + (deferredAsDebtLike ? deferredRevenue + customerDeposits : 0);
   const adjustedNwc = reportedNwc + adjustments;
   const rev = trailing?.revenue ?? 0;
   const cogs = trailing?.cogs ?? 0;
@@ -76,7 +79,7 @@ export function nwcAnalysis(ctx: NwcContext): NwcAnalysis | undefined {
   const periods = ctx.ds.balanceSheets;
   if (!periods?.length) return undefined;
   const rows = periods.map((p) => {
-    const { lines, available } = nwcLines(p, ctx.trailingAt(p.period.key));
+    const { lines, available } = nwcLines(p, ctx.trailingAt(p.period.key), ctx.deferredAsDebtLike);
     return { asOf: p.asOf, month: p.period.key, lines, available, detail: p.detail ?? {} };
   });
   const basis = pegBasis(periods);
@@ -90,7 +93,7 @@ export function nwcAnalysis(ctx: NwcContext): NwcAnalysis | undefined {
     peg,
     latest,
     latestVsPeg: peg === null ? null : latest - peg,
-    deferredRevenueTreatment: "nwc",
+    deferredRevenueTreatment: ctx.deferredAsDebtLike ? "debt_like" : "nwc",
     available: latestRow.available,
   };
   if (ctx.dealForm === "asset_purchase") {
@@ -111,11 +114,17 @@ export function nwcAnalysis(ctx: NwcContext): NwcAnalysis | undefined {
   return out;
 }
 
-export function debtLikeSummary(ds: FinancialDataset, latestBs: { values: BalanceSheetValues; asOf: string } | undefined): DebtLikeSummary | undefined {
+/** Credit card balances: funded debt, but unsecured, so they are paid at close apart from the liens. The workbook matches "*redit card*". */
+export const isCreditCard = (item: string): boolean => /credit card/i.test(item);
+
+/** Deferred revenue and customer deposits, the balances DeferredRevenueTreatment moves between NWC and debt-like. */
+export const isCustomerMoney = (item: string): boolean => /deferred revenue|customer deposit/i.test(item);
+
+export function debtLikeSummary(ds: FinancialDataset, latestBs: { values: BalanceSheetValues; asOf: string } | undefined, deferredAsDebtLike = false): DebtLikeSummary | undefined {
   if (!latestBs) return undefined;
   const items = ds.debtLikeItems?.length
-    ? ds.debtLikeItems.map((i) => ({ item: i.item, balance: i.balance, treatment: i.treatment, status: i.status, payoffLetter: i.payoffLetter, note: i.note }))
-    : [{ item: "Debt per balance sheet (accounts not itemised)", balance: latestBs.values.debt, treatment: "debt" as const, status: "estimated", note: "Itemise from the loan statements" }];
+    ? ds.debtLikeItems.map((i) => ({ item: i.item, balance: i.balance, treatment: deferredAsDebtLike && i.treatment === "nwc" && isCustomerMoney(i.item) ? ("debt_like" as const) : i.treatment, status: i.status, payoffLetter: i.payoffLetter, note: i.note, accounts: i.accounts }))
+    : [{ item: "Debt per balance sheet (accounts not itemised)", balance: latestBs.values.debt, treatment: "debt" as const, status: "estimated", note: "Itemise from the loan statements", accounts: [] as string[] }];
   const sum = (t: DebtLikeSummary["items"][number]["treatment"]) => items.filter((i) => i.treatment === t).reduce((s, i) => s + i.balance, 0);
   return { items, fundedDebt: sum("debt"), debtLike: sum("debt_like"), inNwc: sum("nwc"), asOf: latestBs.asOf };
 }

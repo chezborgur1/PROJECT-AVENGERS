@@ -122,19 +122,24 @@ describe("verifyWorkbook", () => {
     expect(named("SDE_LTM")).toBeCloseTo(547.915, 9);
     expect(named("RepEBITDA_LTM")).toBeCloseTo(319.515, 9);
     expect(named("PFAdjEBITDA")).toBeCloseTo(371.865, 9);
-    expect(named("MasterCheck")).toBe("All checks OK");
+    expect(named("MasterCheck")).toBe("All checks OK (render check pending)");
   }, 120_000);
+
+  /** Row of a P&L Summary label. */
+  const pnlRow = (label: string) => wb.getWorksheet("P&L Summary")!.getColumn(2).values.findIndex((v) => v === label);
 
   it("catches a formula pointing at the wrong row", async () => {
     // Gross Profit FY2025 = Total Revenue - Cost of Revenue; point it at the prior year's cost instead.
-    const out = await tamper(file, "P&L Summary", "E16", (f) => f.replace("E15", "D15"), "wrong-ref");
+    const [gp, cogs] = [pnlRow("Gross Profit"), pnlRow("Cost of Revenue")];
+    const out = await tamper(file, "P&L Summary", `E${gp}`, (f) => f.replace(`E${cogs}`, `D${cogs}`), "wrong-ref");
     const v = await verifyWorkbook(out, model);
     expect(v.ok).toBe(false);
-    expect(v.mismatches.some((m) => m.cell === "'P&L Summary'!E16" || m.label.startsWith("gross_profit"))).toBe(true);
+    expect(v.mismatches.some((m) => m.cell === `'P&L Summary'!E${gp}` || m.label.startsWith("gross_profit"))).toBe(true);
   }, 120_000);
 
   it("reports a circular reference instead of crashing", async () => {
-    const out = await tamper(file, "P&L Summary", "E16", (f) => f.replace("E15", "E16"), "circular");
+    const [gp, cogs] = [pnlRow("Gross Profit"), pnlRow("Cost of Revenue")];
+    const out = await tamper(file, "P&L Summary", `E${gp}`, (f) => f.replace(`E${cogs}`, `E${gp}`), "circular");
     const v = await verifyWorkbook(out, model);
     expect(v.ok).toBe(false);
     expect(v.errors.some((e) => /circular/.test(e.error))).toBe(true);
@@ -159,7 +164,7 @@ describe("LibreOffice recalculation", () => {
     expect(cached("AdjEBITDA_LTM")).toBeCloseTo(371.865, 6);
     expect(cached("SDE_LTM")).toBeCloseTo(547.915, 6);
     expect(cached("RepEBITDA_LTM")).toBeCloseTo(319.515, 6);
-    expect(cached("MasterCheck")).toBe("All checks OK");
+    expect(cached("MasterCheck")).toBe("All checks OK (render check pending)");
   }, 360_000);
 });
 
@@ -234,7 +239,10 @@ describe("house style (guide 5.8-5.13)", () => {
     expect(asOf.font?.color?.argb).toBe("FF0000FF");
     const pnl = wb.getWorksheet("P&L Summary")!;
     expect(pnl.getCell("E9").font?.color?.argb).toBe("FF008000");
-    expect(pnl.getCell("E16").font?.color?.argb).toBe("FF000000");
+    const gp = pnl.getColumn(2).values.findIndex((v) => v === "Gross Profit");
+    expect(pnl.getCell(gp, 5).font?.color?.argb).toBe("FF000000");
+    // A 3.95 spacer row sits between the last line and each subtotal (guide 5.11).
+    expect(pnl.getRow(gp - 1).height).toBeCloseTo(3.95, 6);
   });
 
   it("switches gridlines off, freezes the period block and prints landscape with the house header and footer", async () => {
@@ -259,10 +267,25 @@ describe("house style (guide 5.8-5.13)", () => {
     const zip = await JSZip.loadAsync(fs.readFileSync(file));
     for (const name of ["Summary", "P&L Summary", "Adj. EBITDA", "Balance Sheet", "Monthly P&L"]) {
       const xml = await zip.file(await sheetPart(zip, name))!.async("string");
-      const rule = /<conditionalFormatting sqref="B2:[A-Z]+\d+"><cfRule type="expression" dxfId="\d+" priority="\d+"><formula>\$([A-Z]+)\$3=1<\/formula>/.exec(xml);
+      const rule = /<conditionalFormatting sqref="([^"]+)"><cfRule type="expression" dxfId="\d+" priority="\d+"><formula>\$([A-Z]+)\$3=1<\/formula>/.exec(xml);
       expect(rule, name).toBeTruthy();
-      const toggle = new RegExp(`<c r="${rule![1]}3"[^>]*><f>([^<]*)</f>`).exec(xml)![1]!;
+      const toggle = new RegExp(`<c r="${rule![2]}3"[^>]*><f>([^<]*)</f>`).exec(xml)![1]!;
       expect(toggle.replace(/&apos;/g, "'"), name).toBe("'Contents'!$I$18");
+      // The rule turns coloured text black, so it must never reach white text on the maroon
+      // header band: those headers would print black on maroon.
+      const ws = wb.getWorksheet(name)!;
+      let covered = 0;
+      for (const range of rule![1]!.split(" ")) {
+        const [from, to = from] = range.split(":");
+        const a = ws.getCell(from!), b = ws.getCell(to!);
+        for (let r = Number(a.row); r <= Number(b.row); r++) {
+          for (let c = Number(a.col); c <= Number(b.col); c++) {
+            covered++;
+            expect(ws.getCell(r, c).font?.color?.argb, `${name}!${ws.getCell(r, c).address}`).not.toBe("FFFFFFFF");
+          }
+        }
+      }
+      expect(covered, name).toBeGreaterThan(1);
     }
   });
 
@@ -275,14 +298,16 @@ describe("house style (guide 5.8-5.13)", () => {
       else if (v && typeof v === "object" && v.formula) texts.push(String(ev.value("Cover", Number(c.row), Number(c.col))));
     }));
     expect(texts).toContain("As of 12/31/25");
-    expect(texts).toContain("Model status: All checks OK");
+    expect(texts).toContain("Model status: All checks OK (render check pending)");
   }, 120_000);
 
   it("links every tab from Contents and names only guide 5.14 outputs", () => {
     const contents = formulasOf(wb.getWorksheet("Contents")!).map((x) => x.f);
     for (const ws of wb.worksheets.filter((w) => w.name !== "Data -->")) expect(contents.some((f) => f.includes(`#'${ws.name}'!A1`)), ws.name).toBe(true);
     const names = (wb.definedNames as unknown as { model: { name: string }[] }).model.map((n) => n.name).filter((n) => !n.startsWith("_xlnm"));
-    for (const n of names) expect(NAMED_OUTPUTS, n).toContain(n);
+    for (const n of names) if (!n.startsWith("Monthly_")) expect(NAMED_OUTPUTS, n).toContain(n);
+    // Guide 5.14 names added by the follow-ups: the LOI dates, the Offer names for the Reference column and the Monthly_<line> rows.
+    for (const n of ["LOIDate", "SigningDate", "EffectiveDate", "Offer_Count", "Offer_Reference", "Offer_Headline_1", "Offer_CashAtClose_1", "Monthly_Revenue", "Monthly_AdjEBITDA"]) expect(names, n).toContain(n);
   });
 
   it("wires every check C01-C37 to the Checks tab with the engine's status", async () => {
@@ -423,6 +448,19 @@ describe("period and balance-sheet cases beyond the sample", () => {
     expect(ds.warnings.some((w) => /Owner's personal vehicle.*run-rate of FY2024/.test(w))).toBe(true);
   }, 240_000);
 
+  it("an accepted owner payroll-tax row [S4] lifts SDE and Adj. EBITDA by its amount and still verifies (F6)", async () => {
+    const ds = ridgelineDataset();
+    const s4 = ds.adjustments!.find((a) => a.description === "Payroll taxes and benefits on owner compensation")!;
+    s4.status = "accepted";
+    const { model: accepted, file: acceptedFile } = await build(ds, "s4-accepted");
+    const v = await verifyWorkbook(acceptedFile, accepted);
+    expect(v.errors).toEqual([]);
+    expect(v.mismatches).toEqual([]);
+    expect(v.lint).toEqual([]);
+    expect(accepted.namedOutputs.SDE_LTM! - model.namedOutputs.SDE_LTM!).toBeCloseTo(13_860, 6);
+    expect(accepted.namedOutputs.AdjEBITDA_LTM! - model.namedOutputs.AdjEBITDA_LTM!).toBeCloseTo(13_860, 6);
+  }, 240_000);
+
   it("a June fiscal year-end with December balance sheets", async () => {
     const { ds, out, v } = await run(juneYearEnd(), "june-fye");
     clean(v);
@@ -464,4 +502,160 @@ describe("period and balance-sheet cases beyond the sample", () => {
     expect(ds.mode!.measure).toBeCloseTo(modeMeasure(out.periods.FY2025!.ladder), 4);
     expect(ds.warnings.some((w) => /pro forma rows are not applied in annual-only mode/.test(w))).toBe(true);
   }, 240_000);
+});
+
+// QA round 1 fixes, read off the written Ridgeline workbook (and, where a lint must fire, a copy edited to break it).
+describe("QA round 1 fixes on the written workbook", () => {
+  const rowOfLabel = (ws: ExcelJS.Worksheet, label: string, col = 2) => ws.getColumn(col).values.findIndex((v) => v === label);
+  /** Save an edited copy through ExcelJS and verify it: only the lint the edit targets is asserted. */
+  async function editAndVerify(edit: (book: ExcelJS.Workbook) => void, suffix: string): Promise<VerifyResult> {
+    const book = new ExcelJS.Workbook();
+    await book.xlsx.readFile(file);
+    edit(book);
+    const out = file.replace(/\.xlsx$/, `-${suffix}.xlsx`);
+    await book.xlsx.writeFile(out);
+    return verifyWorkbook(out, model);
+  }
+
+  it("prices the reference structure beside the SBA-only illustration and names the binding case (F8)", () => {
+    const val = wb.getWorksheet("Valuation")!;
+    const deal = wb.getWorksheet("Deal Structure")!;
+    const ref = rowOfLabel(val, "DSCR, Reference structure (with seller note)");
+    const dscr = rowOfLabel(val, "DSCR (SBA loan only)");
+    expect(ref).toBeGreaterThan(0);
+    expect(ev.value("Valuation", ref, 4)).toBeCloseTo(ev.value("Deal Structure", rowOfLabel(deal, "DSCR"), 3) as number, 9);
+    expect(ev.value("Valuation", dscr, 7)).toMatch(/^(Low|Mid|High) case binds at \d\.\d\dx, (below|clearing) the 1\.25x hurdle$/);
+    expect(rowOfLabel(wb.getWorksheet("Summary")!, "DSCR, Reference structure (x)")).toBeGreaterThan(0);
+  });
+
+  it("values each Main Street case on its own pro forma SDE from the scenario block (F10)", () => {
+    const val = wb.getWorksheet("Valuation")!;
+    const r = val.getColumn(2).values.findIndex((v, i) => v === "SDE" && i > rowOfLabel(val, "Business valuation"));
+    const sde = [3, 4, 5].map((c) => ev.value("Valuation", r, c) as number);
+    expect(sde[0]).toBeLessThan(sde[1]!);
+    expect(sde[1]).toBeLessThan(sde[2]!);
+    expect(rowOfLabel(wb.getWorksheet("Assumptions")!, "Revenue growth (%)")).toBeGreaterThan(0);
+  });
+
+  it("completes Deal Structure: Form 8594, the boot flag, cards apart from liens, S&U totals ruled not boxed (F22)", () => {
+    const deal = wb.getWorksheet("Deal Structure")!;
+    const goodwill = rowOfLabel(deal, "Goodwill (residual)");
+    const total = rowOfLabel(deal, "Total (equals the Purchase Price)");
+    expect(goodwill).toBeGreaterThan(0);
+    expect(ev.value("Deal Structure", total, 3)).toBeCloseTo(model.deal![0]!.purchasePrice / 1000, 9);
+    expect(ev.value("Deal Structure", rowOfLabel(deal, "(-) Credit Card Balances Paid at Close"), 3)).toBeCloseTo(-14.6, 9);
+    expect(ev.value("Deal Structure", rowOfLabel(deal, "Tax flag: stock consideration"), 3)).toBe("None: no buyer stock intended to be tax-deferred (Assumptions)");
+    const uses = rowOfLabel(deal, "Total Uses");
+    expect(deal.getCell(uses, 3).border?.top?.style).toBe("thin");
+    expect(deal.getCell(uses, 3).border?.bottom?.style).toBe("double");
+    expect(deal.getCell(uses, 2).border?.left).toBeUndefined();
+    const assumptions = wb.getWorksheet("Assumptions")!;
+    const rate = rowOfLabel(assumptions, "Senior / SBA loan interest rate");
+    expect(assumptions.getCell(rate, 3).font?.color?.argb).toBe("FFFF0000");
+    for (const label of ["True-up settlement", "Stock consideration intended tax-deferred? (Y/N)", "Deferred revenue and customer deposits", "Premises arrangement"]) expect(rowOfLabel(assumptions, label), label).toBeGreaterThan(0);
+  });
+
+  it("derives Proof of Cash months from AsOfDate and flags each month outside 5% (F20)", () => {
+    const poc = wb.getWorksheet("Proof of Cash")!;
+    expect((poc.getCell("B8").value as { formula?: string }).formula).toMatch(/EOMONTH\(/);
+    expect((poc.getCell("B9").value as { formula?: string }).formula).toBe("EOMONTH(B8,0)+1");
+    const flags: string[] = [];
+    for (let r = 8; r < 20; r++) {
+      const pct = ev.value("Proof of Cash", r, 6);
+      const flag = ev.value("Proof of Cash", r, 8);
+      if (typeof pct === "number" && Math.abs(pct) > 0.05) flags.push(String(flag));
+      else expect(flag).toBe("");
+    }
+    expect(flags.length).toBeGreaterThan(0);
+    for (const f of flags) expect(f).toBe("Explain: deposits differ from revenue by more than 5%");
+  });
+
+  it("allocates monthly add-backs by formula on the account they come out of, not as typed decimals (F18)", () => {
+    const adj = wb.getWorksheet("Adjustments")!;
+    const monthHeader = adj.getRow(6).values as unknown[];
+    const monthCols = monthHeader.map((v, c) => (v && typeof v === "object" && "formula" in (v as object) && c > 24 ? c : 0)).filter(Boolean);
+    expect(monthCols.length).toBeGreaterThanOrEqual(36);
+    // Rows that follow a P&L account or an Assumptions input; a row whose months the seller dated (a one-off legal settlement) stays a typed input.
+    for (const label of ["Interest expense", "Owner's personal vehicle", "Charitable contributions", "Owner compensation", "Payroll taxes and benefits on owner compensation"]) {
+      const r = rowOfLabel(adj, label, 3);
+      expect(r, label).toBeGreaterThan(0);
+      for (const c of monthCols) expect(typeof adj.getCell(r, c).value, `${label} ${adj.getCell(r, c).address}`).toBe("object");
+    }
+  });
+
+  it("ties the Databook to the raw export month by month, so offsetting errors fail (F17)", async () => {
+    const book = new ExcelJS.Workbook();
+    await book.xlsx.readFile(file);
+    const db = book.getWorksheet("Databook")!;
+    // Two months of the first account, moved in opposite directions: the total still ties, the months do not.
+    const [a, b2] = [db.getCell(8, 17), db.getCell(8, 18)];
+    a.value = (a.value as number) + 100;
+    b2.value = (b2.value as number) - 100;
+    const out = file.replace(/\.xlsx$/, "-offset.xlsx");
+    await book.xlsx.writeFile(out);
+    const e = await evaluateWorkbook(out);
+    const tie = e.workbook.getWorksheet("Databook")!.getRow(6).values as unknown[];
+    const diffCol = tie.findIndex((v) => v === "Diff by period ($)");
+    expect(e.value("Databook", 8, diffCol)).toBeCloseTo(Math.SQRT2 * 100, 6);
+    expect(e.value("Databook", 8, diffCol + 1)).toBe("CHECK");
+  }, 180_000);
+
+  it("lints a typed copy of a Databook balance and a file path in any cell (F7, F11)", async () => {
+    const v = await editAndVerify((book) => {
+      const dl = book.getWorksheet("Debt-Like Items")!;
+      dl.getCell("C8").value = 146.8;
+      book.getWorksheet("Summary")!.getCell("J20").value = "/Users/frank/Clients/Ridgeline Comfort Services LLC/QuickBooks.csv";
+    }, "typed");
+    expect(v.lint.some((l) => l.cell === "'Debt-Like Items'!C8" && /copies a Databook balance/.test(l.issue))).toBe(true);
+    expect(v.lint.some((l) => l.cell === "'Summary'!J20" && /file path/.test(l.issue))).toBe(true);
+  }, 180_000);
+
+  it("boxes the sensitivity frontier through a styled rule, prints the 0.25x axis at two decimals, and lints an empty rule style (F9)", async () => {
+    expect(model.sensitivities![0]!.colAxis.fmt).toBe(FMT.multiple2);
+    const zip = await JSZip.loadAsync(fs.readFileSync(file));
+    const styles = await zip.file("xl/styles.xml")!.async("string");
+    const dxfs = [...(/<dxfs[^>]*>([\s\S]*?)<\/dxfs>/.exec(styles)![1]!).matchAll(/<dxf\/>|<dxf>[\s\S]*?<\/dxf>/g)].map((m) => m[0]);
+    const part = await sheetPart(zip, "Sensitivities");
+    const xml = await zip.file(part)!.async("string");
+    const frontier = /<cfRule type="expression" dxfId="(\d+)"[^>]*><formula>[A-Z]+\d+&gt;=/.exec(xml);
+    expect(frontier, "frontier rule").toBeTruthy();
+    expect(dxfs[Number(frontier![1])]).toMatch(/<border>[\s\S]*style="thin"/);
+    // An empty style draws nothing; the verifier refuses it.
+    zip.file("xl/styles.xml", styles.replace(dxfs[Number(frontier![1])]!, "<dxf/>"));
+    const out = file.replace(/\.xlsx$/, "-emptydxf.xlsx");
+    fs.writeFileSync(out, await zip.generateAsync({ type: "nodebuffer" }));
+    const v = await verifyWorkbook(out, model);
+    expect(v.lint.some((l) => /empty style/.test(l.issue))).toBe(true);
+  }, 180_000);
+
+  it("orders the version log, empties the divider, formats raw tabs per 5.10 and greys n.a. cells (F23)", () => {
+    const contents = wb.getWorksheet("Contents")!;
+    const log = rowOfLabel(contents, "Version");
+    expect([2, 3, 4, 5].map((c) => contents.getCell(log, c).value)).toEqual(["Version", "Date", "Prepared by", "Change"]);
+    const divider = wb.getWorksheet("Data -->")!;
+    let cells = 0;
+    divider.eachRow((r) => r.eachCell(() => cells++));
+    expect(cells).toBe(0);
+    // Raw figures use the body format of every analysis tab (5.10), not a two-decimal accounting format.
+    const body = wb.getWorksheet("P&L Summary")!.getCell(10, 3).numFmt;
+    for (const name of ["Raw - P&L", "Raw - BS"]) {
+      wb.getWorksheet(name)!.eachRow((r, n) => {
+        if (n > 3) r.eachCell((c) => typeof c.value === "number" && expect(c.numFmt, `${name}!${c.address}`).toBe(body));
+      });
+    }
+    const val = wb.getWorksheet("Valuation")!;
+    const na = rowOfLabel(val, "(-) Debt-Like Items");
+    expect(val.getCell(na, 3).value).toBe("n.a.");
+    expect(argb(val.getCell(na, 3))).toBe("FFD9D9D9");
+  });
+
+  it("freezes panes only on tabs wider than a screen and writes subtitles as '<Purpose> (<units>)' (F19)", () => {
+    for (const name of ["Balance Sheet", "Cash Flow", "NWC", "Assumptions", "Projections", "Checks"]) expect(wb.getWorksheet(name)!.views[0]?.state, name).not.toBe("frozen");
+    for (const ws of wb.worksheets.filter((w) => !w.name.startsWith("Raw - ") && !["Cover", "Contents", "Data -->"].includes(w.name))) {
+      const subtitle = String(ws.getCell("B3").value ?? "");
+      if (ws.name !== "Mapping") expect(subtitle, ws.name).toMatch(/\((\$|#|\$000s|#, \$|\$ unless stated|tab units)[^)]*\)$/);
+      // Title case before the units: every word longer than three letters starts with a capital.
+      expect(subtitle.replace(/\s*\([^)]*\)$/, "").split(/[\s:,]+/).filter((w) => /^[a-z]/.test(w) && w.length > 3), ws.name).toEqual([]);
+    }
+  });
 });

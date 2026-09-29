@@ -40,6 +40,7 @@ import {
 } from "../domain/financials.ts";
 import { normaliseAccount } from "../domain/chartOfAccounts.ts";
 import { clientLabel, parseAmount, readRecords } from "../util/tables.ts";
+import { employerPayrollTaxes, socialSecurityWageBase } from "./payroll.ts";
 
 export const DEFAULT_REPLACEMENT_SALARY = 85_000;
 export const DEFAULT_BURDEN_PCT = 0.15;
@@ -269,6 +270,8 @@ export interface ScheduleContext {
   burden: { pct: number; source: string };
   /** Form 4562 equipment placed in service per fiscal year, when a tax return gave it. */
   equipmentPlacedInService?: Record<number, number>;
+  /** The owner's employer taxes and benefits per fiscal year, when the payroll register records them (else statutory rates apply). */
+  ownerEmployerCosts?: { byFiscalYear: Record<number, number>; file: string };
   owner?: { name: string; role: string };
   passThrough: boolean;
   dealFormPreference?: "asset" | "equity" | "either";
@@ -422,6 +425,7 @@ export function buildSchedule(ctx: ScheduleContext): ScheduleResult {
 
   // Normalization: the file's N rows, then non-operating P&L items, then bot-flagged accounts.
   let s1Override: ScheduleRow | undefined;
+  let s1TaxesOverride: ScheduleRow | undefined;
   let s2Override: ScheduleRow | undefined;
   let s3Override: ScheduleRow | undefined;
   const pfRows: ScheduleRow[] = [];
@@ -429,7 +433,8 @@ export function buildSchedule(ctx: ScheduleContext): ScheduleResult {
   const nRows: ScheduleRow[] = [];
   for (const r of ctx.fileRows) {
     if (r.tier === "owner_compensation") {
-      if (r.category === "owner_compensation") s1Override = r;
+      if (r.category === "owner_compensation" && /payroll tax|benefit/i.test(r.description)) s1TaxesOverride = r;
+      else if (r.category === "owner_compensation") s1Override = r;
       else if (r.category === "replacement_cost") s2Override = r;
       else s3Override = r;
     } else if (r.tier === "pro_forma") pfRows.push(r);
@@ -524,13 +529,17 @@ export function buildSchedule(ctx: ScheduleContext): ScheduleResult {
     const amounts: Record<number, number> = Object.fromEntries(years.map((y) => [y, ctx.lines.filter((l) => l.statement === "pnl" && l.account === account && l.year === y).reduce((t, l) => t + l.amount, 0)]));
     if (accountFullyBacked(ctx.fileRows, account, amounts, years)) continue;
     const listed = ctx.fileRows.find((r) => (r.account && normaliseAccount(r.account) === normaliseAccount(account)) || normaliseAccount(r.description) === normaliseAccount(account.split(" : ").pop()!));
+    // What the file already lists, over every year it covers, so a row listed only in FY2024 is not described as $0.
+    const listedYears = listed ? years.filter((y) => listed.byFiscalYear[y]) : [];
+    const listedTotal = listedYears.reduce((t, y) => t + (listed!.byFiscalYear[y] ?? 0), 0);
+    const listedNote = listedYears.length ? ` beyond the ${money(listedTotal)} already listed (${listedYears.map((y) => `FY${y}`).join(", ")})` : "";
     rows.push({
       tier: "normalization",
-      description: `${account.split(" : ").pop()!} (bot-flagged)`,
+      description: `${clientLabel(account.split(" : ").pop()!)} (for review)`,
       category: "personal_discretionary",
-      basis: `Bot-flagged for review: ${s.reason}${listed ? ` beyond the ${money(listed.byFiscalYear[latest] ?? 0)} already listed` : ""}. Account total ${money(amounts[latest] ?? 0)} in FY${latest}. Amount 0 until an advisor enters it.`,
+      basis: `Flagged for review: ${s.reason}${listedNote}. Account total ${money(amounts[latest] ?? 0)} in FY${latest}. Amount 0 until an advisor enters it.`,
       sourceDocument: `P&L account ${account}`,
-      evidence: "management_representation",
+      evidence: "pending",
       status: "proposed",
       byFiscalYear: zeros(years),
       origin: "suggested",
@@ -638,6 +647,36 @@ export function buildSchedule(ctx: ScheduleContext): ScheduleResult {
     origin: "capital_reserve",
     sourceFile: s3Override?.sourceFile,
   });
+
+  // The employer taxes and benefits on the owner's pay sit in the P&L payroll line, but SDE adds back one working owner's total
+  // compensation (guide 5.4), so they are a second owner-compensation row. It follows [S3] so the fixed refs [S1]–[S3] hold,
+  // sums into the [S1] rung, and stays proposed until the advisor accepts it: the statutory estimate is not evidence.
+  const ownerTaxes: Record<number, number> = s1TaxesOverride?.byFiscalYear ?? ctx.ownerEmployerCosts?.byFiscalYear ?? Object.fromEntries(years.map((y) => [y, employerPayrollTaxes(s1Amounts[y] ?? 0, y)]));
+  const ownerTaxesByYear = Object.fromEntries(years.map((y) => [y, ownerTaxes[y] ?? 0]));
+  if (years.some((y) => ownerTaxesByYear[y])) {
+    const fromRegister = !s1TaxesOverride && ctx.ownerEmployerCosts;
+    const ownerAccounts = [...new Set(ctx.lines.filter((l) => l.statement === "pnl" && l.category === "owner_comp").map((l) => l.account))];
+    const wageBase = socialSecurityWageBase(latest);
+    rows.push({
+      tier: "owner_compensation",
+      description: "Payroll taxes and benefits on owner compensation",
+      category: "owner_compensation",
+      basis:
+        s1TaxesOverride?.basis ??
+        (fromRegister
+          ? `Adds back the employer taxes and benefits on ${ownerLabel}'s pay that the payroll register records, ${money(ownerTaxesByYear[latest] ?? 0)} in FY${latest}; the P&L carries them in the payroll line.`
+          : `Adds back employer payroll taxes on ${ownerLabel}'s salary, ${money(ownerTaxesByYear[latest] ?? 0)} in FY${latest}, at statutory rates (Social Security 6.2% to the $${wageBase.toLocaleString("en-US")} wage base, Medicare 1.45%, federal unemployment on $7,000); the P&L carries them in the payroll line. State unemployment and owner benefits are not included.`),
+      sourceDocument: s1TaxesOverride?.sourceDocument ?? (fromRegister ? `Payroll register (${ctx.ownerEmployerCosts!.file})` : `Statutory rates on the P&L ${accountName("owner_comp")} account; payroll register employer detail to be requested`),
+      evidence: s1TaxesOverride?.evidence ?? (fromRegister ? "documented" : "pending"),
+      status: s1TaxesOverride?.status ?? "proposed",
+      byFiscalYear: ownerTaxesByYear,
+      ...(monthly
+        ? { byMonth: monthsForRow(monthly, years, ownerTaxesByYear, categoryMonths(monthly, "owner_comp"), stubRuleFor({ category: "owner_compensation", stubAmount: s1TaxesOverride?.stubAmount })), ...(ownerAccounts.length === 1 ? { accounts: ownerAccounts } : {}) }
+        : {}),
+      origin: "suggested",
+      sourceFile: s1TaxesOverride?.sourceFile ?? pnlFile,
+    });
+  }
 
   // Memo rows: listed, never added.
   for (const r of memoRows) {

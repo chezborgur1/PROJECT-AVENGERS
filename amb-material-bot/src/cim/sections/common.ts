@@ -4,7 +4,7 @@
 
 import type { CimContext } from "../context.ts";
 import { resolveCopy } from "../context.ts";
-import { lintTitle } from "../copy.ts";
+import { lintTitle, titleWidow } from "../copy.ts";
 import type { Block, Notes, PageSpec, Row } from "../design.ts";
 import { notesLineCount, proseHeight } from "../design.ts";
 import { exhibitTitles } from "../exhibits.ts";
@@ -14,15 +14,19 @@ import type { PageDraft } from "./types.ts";
  * The page's action title. Copy titles win when they resolve cleanly and pass
  * the title rules (a figure, at most 130 characters); otherwise the module's
  * figure-built title is used and the fallback is logged for run-summary.md.
+ * A module may offer its figure-built title in several lengths, longest
+ * first: the first that wraps without a widow is used (spec 6.1), since how
+ * a title wraps depends on the figures it prints.
  */
-export function chooseTitle(ctx: CimContext, where: string, copyTitle: string | undefined, fallback: string): string {
+export function chooseTitle(ctx: CimContext, where: string, copyTitle: string | undefined, fallback: string | string[]): string {
   if (copyTitle) {
     const resolved = resolveCopy(ctx, copyTitle, where);
     const issues = lintTitle(resolved.replace(/\{\{page:[^}]+\}\}/g, "page 00"), where).filter((i) => !/characters \(60 to 110/.test(i.issue));
     if (!issues.length && !resolved.includes("[Confirm: figure")) return resolved;
     ctx.log.push(`${where}: copy title rejected (${issues.map((i) => i.issue).join("; ") || "unknown figure"}); using the figure-built title`);
   }
-  return fallback;
+  const candidates = typeof fallback === "string" ? [fallback] : fallback;
+  return candidates.find((t) => !titleWidow(t)) ?? candidates[candidates.length - 1]!;
 }
 
 /** Drop undefined blocks from a column's list. */
@@ -55,17 +59,50 @@ export function fitProse(ctx: CimContext, where: string, text: string, w: number
   return parts.join(" ");
 }
 
+/** Sentences of a note, not split after the abbreviations the notes use ("Adj. EBITDA"). */
+const sentencesOf = (t: string): string[] => t.split(/(?<=\.)(?<!\b(?:Adj|Inc|No|Co|vs)\.)\s+(?=[A-Z[(])/);
+
+/** Sentences the Note line never gives up: the units line that opens it, the fiscal year-end (guide 4.6) and the rounding clause of a table that does not foot as shown. */
+const REQUIRED_NOTE = /^(Figures in USD|Fiscal year ends)|totals may not sum due to rounding/i;
+
+/** Period clauses a source part may lose when the band is full; the tables' own headings still name the periods. */
+const SOURCE_PERIOD = [/ and LTM [A-Z][a-z]{2}-\d{2}/g, /, FY\d{4}(–FY\d{4})?/g, / as of [A-Z][a-z]{2}-\d{2}/g];
+
 /**
- * The notes band holds three lines at most (spec 6.3): the Note line gives up
- * its last sentences first; a band that still needs a fourth line fails the
- * build rather than crowd the footer.
+ * The notes band holds three lines at most (spec 6.3), so the band is fitted
+ * rather than refused, in this order: the Note line gives up its optional
+ * sentences (never the units or fiscal year-end sentence), the source line
+ * its period clauses, then each footnote its later sentences, the last
+ * footnote first. Each step is logged for run-summary.md. A band that still
+ * needs a fourth line throws, and the planner reports that page instead of
+ * failing the deck.
  */
-function fitNotes(ctx: CimContext, id: string, notes: Notes): Notes {
-  const out = { ...notes };
-  while (notesLineCount(out) > 3 && out.note && out.note.split(/(?<=\.)\s+/).length > 1) {
-    out.note = out.note.split(/(?<=\.)\s+/).slice(0, -1).join(" ");
-    ctx.log.push(`${id}: note line shortened to keep the notes band to three lines`);
+export function fitNotes(ctx: CimContext, id: string, notes: Notes): Notes {
+  const out: Notes = { ...notes, footnotes: notes.footnotes && [...notes.footnotes] };
+  const over = () => notesLineCount(out) > 3;
+  const cut = new Set<string>();
+  while (over() && out.note) {
+    const parts = sentencesOf(out.note);
+    const drop = parts.map((p, i) => (REQUIRED_NOTE.test(p) ? -1 : i)).filter((i) => i >= 0).pop();
+    if (drop === undefined) break;
+    out.note = parts.filter((_, i) => i !== drop).join(" ");
+    cut.add("the note line");
   }
-  if (notesLineCount(out) > 3) throw new Error(`Notes band on ${id} needs more than three lines: ${JSON.stringify(out)}`);
+  for (const re of SOURCE_PERIOD) {
+    if (!over() || !out.source) break;
+    const shorter = out.source.replace(re, "");
+    if (shorter === out.source) continue;
+    out.source = shorter;
+    cut.add("the source line's periods");
+  }
+  for (let i = (out.footnotes?.length ?? 0) - 1; i >= 0 && over(); i--) {
+    while (over() && sentencesOf(out.footnotes![i]!).length > 1) {
+      out.footnotes![i] = sentencesOf(out.footnotes![i]!).slice(0, -1).join(" ");
+      cut.add(`footnote (${i + 1})`);
+    }
+  }
+  if (over()) throw new Error(`Notes band on ${id} needs more than three lines: ${JSON.stringify(out)}`);
+  const entry = `${id}: ${[...cut].join(", ")} shortened to keep the notes band to three lines`;
+  if (cut.size && !ctx.log.includes(entry)) ctx.log.push(entry);
   return out;
 }

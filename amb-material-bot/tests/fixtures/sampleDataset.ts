@@ -311,13 +311,13 @@ function buildAdjustments(accountMonthly: Map<string, Record<MonthKey, number>>)
   };
   const zeros = (): Record<MonthKey, number> => Object.fromEntries(YEARS.flatMap((y) => monthsOf(y)).map((m) => [m, 0]));
   const scaled = (account: string, perYear: Triple): Record<MonthKey, number> => {
-    // Spread an add-back over the months of the account it comes out of, in proportion to that account.
+    // Spread an add-back over the months of the account it comes out of, in exact proportion to that account, as ingest does.
     const out: Record<MonthKey, number> = {};
     YEARS.forEach((y, i) => {
       const acct = months(account);
       const weights = monthsOf(y).map((m) => acct[m] ?? 0);
-      const parts = splitAnnual(perYear[i]!, weights);
-      monthsOf(y).forEach((m, k) => (out[m] = parts[k]!));
+      const total = weights.reduce((t, w) => t + w, 0);
+      monthsOf(y).forEach((m, k) => (out[m] = total ? (perYear[i]! * weights[k]!) / total : perYear[i]! / 12));
     });
     return out;
   };
@@ -372,6 +372,8 @@ function buildAdjustments(accountMonthly: Map<string, Record<MonthKey, number>>)
       status: "accepted",
       byFiscalYear: byYear([16_000, 17_000, 18_000]),
       byMonth: scaled("Vehicle Expenses", [16_000, 17_000, 18_000]),
+      // The account the months follow, as ingest records it, so the workbook allocates them by formula (QA round 1 F18).
+      accounts: ["Vehicle Expenses"],
       origin: "addbacks_csv",
       sourceFile: ADDBACKS_FILE,
     },
@@ -411,6 +413,7 @@ function buildAdjustments(accountMonthly: Map<string, Record<MonthKey, number>>)
       status: "accepted",
       byFiscalYear: byYear([5_000, 6_000, 7_500]),
       byMonth: months("Charitable Contributions"),
+      accounts: ["Charitable Contributions"],
       origin: "addbacks_csv",
       sourceFile: ADDBACKS_FILE,
     },
@@ -437,11 +440,11 @@ function buildAdjustments(accountMonthly: Map<string, Record<MonthKey, number>>)
       ] as const
     ).map<Omit<Adjustment, "ref">>(([account, reason]) => ({
       tier: "normalization",
-      description: `${account} (bot-flagged)`,
+      description: `${account.charAt(0)}${account.slice(1).toLowerCase()} (for review)`,
       category: "personal_discretionary",
-      basis: `Bot-flagged for review: ${reason}. Amount 0 until an advisor enters it.`,
+      basis: `Flagged for review: ${reason}. Amount 0 until an advisor enters it.`,
       sourceDocument: `P&L account ${account}`,
-      evidence: "management_representation",
+      evidence: "pending",
       status: "proposed",
       byFiscalYear: byYear([0, 0, 0]),
       origin: "suggested",
@@ -483,6 +486,21 @@ function buildAdjustments(accountMonthly: Map<string, Record<MonthKey, number>>)
       byFiscalYear: byYear([-CAPITAL_RESERVE, -CAPITAL_RESERVE, -CAPITAL_RESERVE]),
       byMonth: flatNegative(CAPITAL_RESERVE),
       origin: "capital_reserve",
+    },
+    {
+      // SDE adds back the owner's total compensation (guide 5.4); the employer taxes on his salary sit in the payroll line.
+      tier: "owner_compensation",
+      description: "Payroll taxes and benefits on owner compensation",
+      category: "owner_compensation",
+      basis: "Adds back employer payroll taxes on Mark Delaney's salary, $13.9K in FY2025, at statutory rates (Social Security 6.2% to the $176,100 wage base, Medicare 1.45%, federal unemployment on $7,000); the P&L carries them in the payroll line. State unemployment and owner benefits are not included.",
+      sourceDocument: "Statutory rates on the P&L Payroll Expenses : Officer Compensation account; payroll register employer detail to be requested",
+      evidence: "pending",
+      status: "proposed",
+      byFiscalYear: byYear(OWNER_EMPLOYER_TAXES),
+      byMonth: scaled("Payroll Expenses : Officer Compensation", OWNER_EMPLOYER_TAXES),
+      accounts: ["Payroll Expenses : Officer Compensation"],
+      origin: "suggested",
+      sourceFile: PNL_FILE,
     },
     {
       tier: "memo",
@@ -700,6 +718,11 @@ function buildCustomers(): NonNullable<FinancialDataset["customers"]> {
 const FIELD_WAGES: Triple = [512_400, 581_300, 648_900];
 const OFFICE_WAGES: Triple = [118_200, 124_600, 131_400];
 const EMPLOYER_COSTS: Triple = [58_700 + 41_300, 65_400 + 46_800, 72_300 + 52_100];
+/**
+ * The owner's employer payroll taxes inside those costs, at federal statutory rates on his salary: Social Security 6.2% to
+ * the wage base ($160,200, $168,600, $176,100), Medicare 1.45% and FUTA on the first $7,000, in whole dollars.
+ */
+export const OWNER_EMPLOYER_TAXES: Triple = [12_584, 13_250, 13_860];
 
 interface EmployeeSeed {
   name: string;
@@ -792,7 +815,8 @@ function buildPayroll(): NonNullable<FinancialDataset["payroll"]> {
     const field = scaleToTotal(raw.map((v, i) => (isField[i] ? v : 0)), FIELD_WAGES[yi]!);
     const office = scaleToTotal(raw.map((v, i) => (isField[i] ? 0 : v)), OFFICE_WAGES[yi]!);
     seeds.forEach((_, i) => (wages[i]![y] = field[i]! + office[i]!));
-    const employer = scaleToTotal(seeds.map((_, i) => wages[i]![y]!), EMPLOYER_COSTS[yi]!);
+    // The owner's employer taxes belong to the owner; the staff share the rest in proportion to wages.
+    const employer = scaleToTotal(seeds.map((_, i) => wages[i]![y]!), EMPLOYER_COSTS[yi]! - OWNER_EMPLOYER_TAXES[yi]!);
     seeds.forEach((_, i) => (costs[i]![y] = employer[i]!));
   });
 
@@ -822,7 +846,7 @@ function buildPayroll(): NonNullable<FinancialDataset["payroll"]> {
     payBasis: "salary",
     fte: 1,
     wagesByFiscalYear: byYear([180_000, 190_000, 200_000]),
-    employerCostsByFiscalYear: byYear([0, 0, 0]),
+    employerCostsByFiscalYear: byYear(OWNER_EMPLOYER_TAXES),
   });
   return {
     employees,
@@ -880,7 +904,7 @@ function buildIntake(): IntakeFacts {
     locations: [
       {
         name: "Maple Ave shop and office",
-        function: "Shop, warehouse and office",
+        function: "Shop and office",
         sizeSqFt: 8_000,
         arrangement: "leased_from_third_party",
         leaseExpiry: "2029",
@@ -894,8 +918,8 @@ function buildIntake(): IntakeFacts {
       { function: "Accounting", system: "QuickBooks Online", source: mgmt("## Operations") },
     ],
     suppliers: [
-      { name: "Ferguson", supplies: "HVAC parts and supplies", source: mgmt("## Operations") },
-      { name: "Johnstone Supply", supplies: "HVAC parts and supplies", source: mgmt("## Operations") },
+      { name: "Ferguson", supplies: "Main supplier", source: mgmt("## Operations") },
+      { name: "Johnstone Supply", supplies: "Main supplier", source: mgmt("## Operations") },
       { name: "Carrier (local distributor)", supplies: "HVAC equipment", source: mgmt("## Operations") },
     ],
     fleetAndEquipment: [
@@ -957,7 +981,7 @@ function buildIntake(): IntakeFacts {
       {
         lever: "Add after-hours emergency plumbing",
         baseline: "Calls after 7 pm are turned away today",
-        mechanism: "Staff an on-call rotation so after-hours calls are served rather than referred away",
+        mechanism: "Staff an on-call rotation so after-hours calls are served rather than turned away",
         source: mgmt("## Growth opportunities (owner's view)"),
       },
       {

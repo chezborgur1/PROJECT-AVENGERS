@@ -45,19 +45,43 @@ export function periodColumns(keys: string[], fyEndMonth: number, exclude: RegEx
 }
 
 /**
+ * Everyday words of chart-of-accounts names, the only ones `clientLabel`
+ * lowercases: anything else in Title Case may be a lender, a place or a
+ * brand ("Huntington Bank", "Columbus"), which keeps its exported case.
+ */
+const COMMON_ACCOUNT_WORDS = new Set(
+  (
+    "account accounts accrued accumulated advertising agreement agreements allowance amortization and asset assets bad bank benefits bonus bonuses building buildings business " +
+    "capital card cards cash charitable checking commercial commission commissions common compensation contract contracts contributions contractors cost costs credit current customer customers " +
+    "debt deferred dental deposit deposits depreciation discount discounts distribution distributions draw due dues earnings employee employees entertainment equipment equity expense expenses federal " +
+    "fees fee finance fixed for forgiveness freight from fuel gain general given goods gross health income installation insurance interest inventory job labor land lease leases " +
+    "legal liabilities liability line loan loans local long maintenance management marketing materials meals medical member members memberships merchant miscellaneous mortgage net note notes " +
+    "of office officer operating other owner owners paid parts payable payables payroll penalties permits personal phone plan plans portion postage prepaid professional program property " +
+    "rebates receivable receivables refunds reimbursements rent rental repair repairs replacement residential retained retainer retainers returns revenue revenues " +
+    "retirement salaries salary sales savings security service services shareholder shop short software sold state stock subcontractor subcontractors subscriptions supplies tax taxes telephone term " +
+    "tools training travel undeposited unearned uniforms utilities vehicle vehicles wages warranty write"
+  ).split(" "),
+);
+
+/**
  * A client-grade label from an exported account name: sentence case
  * ("Vehicle Loans" → "Vehicle loans"; acronyms and bracketed codes keep their
  * case), and a name built with spaced dashes ("Service Revenue - Residential")
  * takes its qualifier in parentheses ("Service revenue (residential)"),
- * because a spaced dash reads as punctuation in the CIM (guide 4.4).
+ * because a spaced dash reads as punctuation in the CIM (guide 4.4). A part
+ * that carries a proper name ("Huntington Bank Line of Credit", "Columbus")
+ * keeps the case it was exported in.
  */
 export function clientLabel(s: string): string {
-  const cased = s
-    .split(" ")
-    .map((w, i) => (i > 0 && /^[A-Z][a-z]+$/.test(w) ? w.toLowerCase() : w))
-    .join(" ");
-  const [head, ...qualifiers] = cased.split(/\s+[-–—]\s+/);
-  return qualifiers.length ? `${head} (${qualifiers.join(", ")})` : cased;
+  const titleWord = (w: string) => /^[A-Z][a-z]+$/.test(w);
+  const common = (w: string) => COMMON_ACCOUNT_WORDS.has(w.toLowerCase());
+  const [head, ...qualifiers] = s.split(/\s+[-–—]\s+/).map((part, pi) => {
+    const words = part.split(" ");
+    if (words.some((w) => titleWord(w) && !common(w))) return part;
+    // The head keeps its capital; a qualifier in parentheses is lower case throughout.
+    return words.map((w, i) => ((pi > 0 || i > 0) && titleWord(w) ? w.toLowerCase() : w)).join(" ");
+  });
+  return qualifiers.length ? `${head} (${qualifiers.join(", ")})` : head!;
 }
 
 /** First non-blank value among the column aliases, trimmed. */

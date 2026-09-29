@@ -373,6 +373,10 @@ export function mergeSources(input: MergeInput): FinancialDataset {
       if (ratio < 0.75 || ratio > 1.25) off.push(`${monthLabel(m.key)} (${(ratio * 100).toFixed(0)}%)`);
     }
     if (off.length) warnings.push(`Monthly bank deposits outside 75–125% of that month's revenue: ${off.join(", ")}. Timing differences are normal; investigate any that persist (check C14).`);
+    const bankMonths = Object.keys(depositsByMonth).sort();
+    if (bankMonths.length && !bankMonths.some((m) => grid.monthly.values[m])) {
+      warnings.push(`Bank statements cover ${monthLabel(bankMonths[0]!)} to ${monthLabel(bankMonths[bankMonths.length - 1]!)}, outside the P&L months, so there is no proof of cash (check C14). Request bank statements for the months the P&L covers.`);
+    }
   }
 
   // --- Revenue lines and the legacy mix ------------------------------------------
@@ -466,6 +470,7 @@ export function mergeSources(input: MergeInput): FinancialDataset {
     const equipment: Record<number, number> = {};
     for (const e of ordered) for (const [y, v] of Object.entries(e.equipmentPlacedInService ?? {})) equipment[Number(y)] ??= v;
     const owner = input.intake?.facts.owner;
+    const ownerRow = input.payroll?.rows.find((r) => r.isOwner && years.some((y) => r.employerCostsByFiscalYear?.[y] !== undefined));
     const result = buildSchedule({
       years,
       pnl,
@@ -477,6 +482,7 @@ export function mergeSources(input: MergeInput): FinancialDataset {
       burden: { pct: DEFAULT_BURDEN_PCT, source: `AMB default ${Math.round(DEFAULT_BURDEN_PCT * 100)}% (guide 5.3, Q8); confirm` },
       ...(Object.keys(equipment).length ? { equipmentPlacedInService: equipment } : {}),
       ...(owner ? { owner: { name: owner.name, role: owner.role } } : {}),
+      ...(ownerRow ? { ownerEmployerCosts: { byFiscalYear: ownerRow.employerCostsByFiscalYear!, file: input.payroll!.file } } : {}),
       passThrough: input.request?.passThrough ?? false,
       dealFormPreference: input.intake?.facts.transaction.dealFormPreference,
       pnlFile: chosenPnl.get(lastYear)!.file,

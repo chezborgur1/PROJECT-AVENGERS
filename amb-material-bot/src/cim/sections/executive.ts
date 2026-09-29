@@ -2,6 +2,7 @@
 // considerations, financial snapshot, considerations for buyers. All four are
 // always built and never cut (guide 3.5 rule 5).
 
+import { slugs } from "../brief.ts";
 import type { CimContext } from "../context.ts";
 import { confirm, nonGaap, pageCopy, pageNo, pageRef, PER_MANAGEMENT, resolveCopy, standardNote } from "../context.ts";
 import type { CimCopy } from "../copy.ts";
@@ -21,7 +22,7 @@ import {
   transactionSummary,
   usable,
 } from "../exhibits.ts";
-import { chooseTitle, draft, fitProse, present, source } from "./common.ts";
+import { chooseTitle, draft, fitProse, present, source, verb } from "./common.ts";
 import type { PageModule, SectionModule } from "./types.ts";
 
 const SECTION = "Executive summary";
@@ -41,12 +42,12 @@ function overviewFromFacts(ctx: CimContext): string {
   if (founded) parts.push(founded);
   if (b.has("hc.total")) parts.push(`The Company employs ${b.t("hc.total")} people besides the owner, ${b.t("hc.field")} of them in the field.`);
   else if (b.has("staff.total")) parts.push(`The Company employs ${b.t("staff.total")} people besides the owner (1).`);
-  const lines = ctx.out.periods[ctx.latest.key]!.revenueLines.filter((l) => l.amount > 0);
-  if (lines.length) {
-    const revenue = ctx.out.periods[ctx.latest.key]!.pnl.revenue;
-    const shares = lines.map((l) => `${l.label.toLowerCase()} ${Math.round((100 * l.amount) / revenue)}%`);
-    parts.push(`Revenue was ${b.t("rev.latest")} in ${ctx.latest.label}: ${shares.join(", ")}.`);
-  }
+  // The mix shares are the brief's (revenue before discounts, adding to 100%), the ones the services page charts.
+  const all = ctx.out.periods[ctx.latest.key]!.revenueLines;
+  const slugOfLine = new Map(slugs(all.map((l) => l.label)).map((sl, i) => [all[i]!.account, sl]));
+  const lines = all.filter((l) => l.amount > 0);
+  const shares = lines.flatMap((l) => (b.has(`line.${slugOfLine.get(l.account)}.share0.${ctx.latest.key}`) ? [`${l.label.toLowerCase()} ${b.t(`line.${slugOfLine.get(l.account)}.share0.${ctx.latest.key}`)}`] : []));
+  if (shares.length) parts.push(`Revenue was ${b.t("rev.latest")} in ${ctx.latest.label}: ${shares.join(", ")}.`);
   // Optional facts give way, last first, so the paragraph fits the box under the Quick Stats (about 95 words); the
   // transition and the reason for sale go last, since the transaction summary beside the paragraph states both.
   const optional: string[] = [];
@@ -80,7 +81,9 @@ const s1_1: PageModule = {
     const txn = transactionSummary(ctx, spanW(8, 12));
     const obs = observationsBlock("Quick Stats", keyObservations(ctx, "S1.1", copy.observations, present(fin, op)));
     const b = ctx.brief;
-    const title = chooseTitle(ctx, "S1.1 title", copy.title, `${ctx.short} earned ${b.t("adjEbitda.latest")} of Adj. EBITDA (${b.t("adjMargin.latest")} margin) on ${b.t("rev.latest")} of ${ctx.latest.label} revenue`);
+    const headline = `${ctx.latest.label} Adj. EBITDA was ${b.t("adjEbitda.latest")}, a ${b.t("adjMargin.latest")} margin on ${b.t("rev.latest")} of revenue`;
+    const reserve = ctx.mainStreet && (b.value("s3.latest") ?? 0) > 0 ? `, after a ${b.t("s3.latest")} capital reserve` : "";
+    const title = chooseTitle(ctx, "S1.1 title", copy.title, [`${headline}${reserve}`, headline]);
     return [
       draft(ctx, {
         id: "S1.1",
@@ -100,8 +103,13 @@ function fallback11(ctx: CimContext): NonNullable<CimCopy["s1_1"]> {
   return {
     overview: overviewFromFacts(ctx),
     observations: [
-      { row: "qs.revenue", lead: `Revenue went from {{rev.${f0}}} to {{rev.${fl}}},`, body: `a {{rev.cagr}} compound rate; ${confirm(ctx, "growth drivers", "What drove revenue growth by year")}.` },
-      { row: "qs.gm", lead: "Gross margin moved {{gm.delta}} to {{gm.latest}},", body: `driven by ${confirm(ctx, "gross-margin driver", "What moved gross margin")}.` },
+      // With two fiscal years there is no compound rate, only the year-on-year change; with one, only the level.
+      f0 === fl
+        ? { row: "qs.revenue", lead: `Revenue was {{rev.latest}} in ${ctx.latest.label},`, body: `${ctx.brief.has("rev.yoy") ? "{{rev.yoy}} on the prior year; " : ""}${confirm(ctx, "growth drivers", "What drove revenue by year")}.` }
+        : { row: "qs.revenue", lead: `Revenue went from {{rev.${f0}}} to {{rev.${fl}}},`, body: `${ctx.brief.has("rev.cagr") ? "a {{rev.cagr}} compound rate" : "a {{rev.total}} increase"}; ${confirm(ctx, "growth drivers", "What drove revenue growth by year")}.` },
+      ctx.brief.has("gm.delta")
+        ? { row: "qs.gm", lead: "Gross margin moved {{gm.delta}} to {{gm.latest}},", body: `driven by ${confirm(ctx, "gross-margin driver", "What moved gross margin")}.` }
+        : { row: "qs.gm", lead: "Gross margin was {{gm.latest}},", body: `with cost of revenue at {{cogsPct.latest}} of revenue; ${confirm(ctx, "gross-margin driver", "What drives gross margin")}.` },
       { row: "qs.adj", lead: "Adj. EBITDA margin was {{adjMargin.latest}}", body: `after {{adjTotal.latest}} of adjustments (${pageRef("S7.2")}).` },
     ],
   };
@@ -125,14 +133,16 @@ const s1_2: PageModule = {
     const list = [10.5, 10].map(listAt).find((b) => blockHeight(b, lw) <= CONTENT_H) ?? listAt(9.5);
     const rw = spanW(9, 12);
     const b = ctx.brief;
-    const title = chooseTitle(ctx, "S1.2 title", copy.title, `Revenue grew at a ${b.maybe("rev.cagr") ?? b.t("rev.yoy")} ${b.has("rev.cagr") ? "CAGR" : "rate"} to ${b.t("rev.latest")} and Adj. EBITDA reached ${b.t("adjEbitda.latest")} in ${ctx.latest.label}`);
+    const growth = b.has("rev.cagr") ? `grew at a ${b.t("rev.cagr")} CAGR to` : b.has("rev.yoy") ? `${verb(b.value("rev.yoy"))} ${b.t("rev.yoy")} to` : "reached";
+    const title = chooseTitle(ctx, "S1.2 title", copy.title, `Revenue ${growth} ${b.t("rev.latest")} and Adj. EBITDA reached ${b.t("adjEbitda.latest")} in ${ctx.latest.label}`);
     return [
       draft(ctx, {
         id: "S1.2",
         section: SECTION,
         title,
-        rows: [{ columns: [{ span: [1, 8], blocks: [list] }, { span: [9, 12], blocks: [revenueAdjPanels(ctx, true), keyFigures(ctx, rw)] }] }],
-        notes: { source: source(ctx.sources.financials, ctx.sources.customers, ctx.sources.payroll, "Management"), note: standardNote(ctx), footnotes: [PER_MANAGEMENT] },
+        rows: [{ columns: [{ span: [1, 8], blocks: [list] }, { span: [9, 12], blocks: [revenueAdjPanels(ctx, true), keyFigures(ctx, rw, "(2)")] }] }],
+        // The headline Adj. EBITDA is after the capital reserve; the page says so and gives the pre-reserve figure (QA round 1 F35).
+        notes: { source: source(ctx.sources.financials, ctx.sources.customers, ctx.sources.payroll, "Management"), note: standardNote(ctx), footnotes: [PER_MANAGEMENT, nonGaap(ctx)] },
       }),
     ];
   },
@@ -142,7 +152,7 @@ const s1_2: PageModule = {
 function fallbackConsiderations(ctx: CimContext): NonNullable<CimCopy["s1_2"]> {
   const b = ctx.brief;
   const items: NonNullable<CimCopy["s1_2"]>["considerations"] = [
-    { lead: `Revenue reached {{rev.latest}} in ${ctx.latest.label}, up {{rev.yoy}} on the prior year.`, evidence: `The growth came from ${confirm(ctx, "growth drivers", "Principal drivers of revenue growth")}.`, page: "S6.1" },
+    { lead: `Revenue reached {{rev.latest}} in ${ctx.latest.label}${b.has("rev.yoy") ? `, ${b.value("rev.yoy")! < 0 ? "down" : "up"} {{rev.yoy}} on the prior year` : ""}.`, evidence: `The growth came from ${confirm(ctx, "growth drivers", "Principal drivers of revenue growth")}.`, page: "S6.1" },
     { lead: `Gross margin was {{gm.latest}} in ${ctx.latest.label}.`, evidence: `Cost of revenue was {{cogsPct.latest}} of revenue; the pricing basis is ${confirm(ctx, "pricing basis", "How the Company prices its work")}.`, page: "S6.3" },
     { lead: `Adj. EBITDA was {{adjEbitda.latest}}, a {{adjMargin.latest}} margin.`, evidence: `Every adjustment from Reported EBITDA of {{repEbitda.latest}} is itemized with its evidence.`, page: "S7.1" },
   ];
@@ -182,7 +192,10 @@ const s1_3: PageModule = {
       "S1.3 title",
       copy.title,
       ctx.mainStreet
-        ? `Reported EBITDA of ${b.t("repEbitda.latest")} becomes SDE of ${b.t("sde.latest")} and Adj. EBITDA of ${b.t("adjEbitda.latest")} in ${ctx.latest.label}`
+        ? [
+            `Reported EBITDA of ${b.t("repEbitda.latest")} becomes SDE of ${b.t("sde.latest")} and Adj. EBITDA of ${b.t("adjEbitda.latest")} in ${ctx.latest.label}`,
+            `Reported EBITDA of ${b.t("repEbitda.latest")} becomes SDE of ${b.t("sde.latest")} in ${ctx.latest.label}, and Adj. EBITDA of ${b.t("adjEbitda.latest")} after owner pay at market`,
+          ]
         : `Reported EBITDA of ${b.t("repEbitda.latest")} becomes Adj. EBITDA of ${b.t("adjEbitda.latest")} in ${ctx.latest.label}`,
     );
     return [
@@ -199,10 +212,14 @@ const s1_3: PageModule = {
 };
 
 function fallbackSnapshot(ctx: CimContext): NonNullable<CimCopy["s1_3"]> {
+  const b = ctx.brief;
+  // Without a prior-year window the observations state the level only.
   return {
     pnl: [
-      { row: "snap.revenue", lead: "Revenue {{rev.yoy}} higher in " + ctx.latest.label + ",", body: `at {{rev.latest}}; ${confirm(ctx, "revenue drivers", "Principal drivers of revenue growth")}.` },
-      { row: "snap.gm", lead: "Gross margin {{gm.latest}},", body: `{{gm.deltaYoy}} on the prior year; ${confirm(ctx, "gross-margin driver", "What moved gross margin")}.` },
+      b.has("rev.yoy")
+        ? { row: "snap.revenue", lead: `Revenue {{rev.yoy}} ${b.value("rev.yoy")! < 0 ? "lower" : "higher"} in ${ctx.latest.label},`, body: `at {{rev.latest}}; ${confirm(ctx, "revenue drivers", "Principal drivers of revenue growth")}.` }
+        : { row: "snap.revenue", lead: `Revenue of {{rev.latest}} in ${ctx.latest.label};`, body: `${confirm(ctx, "revenue drivers", "Principal drivers of revenue")}.` },
+      { row: "snap.gm", lead: "Gross margin {{gm.latest}},", body: `${b.has("gm.deltaYoy") ? "{{gm.deltaYoy}} on the prior year; " : ""}${confirm(ctx, "gross-margin driver", "What moved gross margin")}.` },
     ],
     ladder: [
       { row: "cl.norm", lead: "Normalization adjustments of {{normTotal.latest}}", body: `are listed with their evidence on ${pageRef("S7.2")}.` },
@@ -222,7 +239,7 @@ function financialReportingRow(ctx: CimContext): TextCell[] {
   const deposits = b.has(`bank.depositsPct.${lastFy.key}`) ? ` Operating bank deposits of ${b.t(`bank.deposits.${lastFy.key}`)} were ${b.t(`bank.depositsPct.${lastFy.key}`)} of ${lastFy.label} revenue.` : "";
   const shows = `${ctx.sources.financials}, ${basis}, unaudited${bookkeeper ? ", kept by an in-house bookkeeper" : ""}.${deposits}`;
   const records = [
-    ctx.ds.monthly ? "monthly QuickBooks statements" : "annual financial statements",
+    ctx.ds.monthly ? "monthly financial statements" : "annual financial statements",
     "general-ledger account detail",
     ctx.ds.depositsByMonth ? "bank statements" : "",
     ctx.ds.payroll ? "the payroll register" : "",
@@ -245,7 +262,7 @@ const s1_4: PageModule = {
     const rows: TextCell[][] = copy.rows.map((r) => [r.consideration, resolveCopy(ctx, r.shows, "S1.4"), resolveCopy(ctx, r.addressed, "S1.4")]);
     rows.push(financialReportingRow(ctx));
     const table: Block = { kind: "textTable", header: { title: "Considerations for buyers", units: `(${ctx.latest.label} unless noted)` }, spec: { colW: [1.7, 5.4, r3(w - 7.1)], head: ["Consideration", "What the data shows", "How it is addressed"], rows, fontSize: 8.5 } };
-    const owner = ctx.present.has("S5.4") && ctx.carried.get("S1.4")?.includes("S5.4") ? ownerResponsibilities(ctx, usable(1, 7)) : undefined;
+    const owner = ctx.present.has("S5.4") && ctx.carried.get("S1.4")?.includes("S5.4") ? ownerResponsibilities(ctx, usable(1, 8)) : undefined;
     const obs = owner ? observationsBlock("owner responsibilities", keyObservations(ctx, "S1.4", copy.observations, [owner])) : undefined;
     const b = ctx.brief;
     const n = rows.length;
@@ -255,13 +272,13 @@ const s1_4: PageModule = {
       b.has("cust.top10Share") ? `a ${b.t("cust.top10Share")} top-10 share` : `${b.t("adjTotal.latest")} of adjustments`,
     ].filter(Boolean);
     const lead = `, led by ${tests.join(" and ")}`;
-    const title = chooseTitle(ctx, "S1.4 title", copy.title, `${["Three", "Four", "Five", "Six", "Seven"][n - 3] ?? n} buyer tests${lead}, each with a quantified answer`);
+    const title = chooseTitle(ctx, "S1.4 title", copy.title, `${["Three", "Four", "Five", "Six", "Seven"][n - 3] ?? n} buyer tests${lead}, and how each is addressed`);
     return [
       draft(ctx, {
         id: "S1.4",
         section: SECTION,
         title,
-        rows: [{ columns: [{ span: [1, 12], blocks: [table] }] }, { columns: [{ span: [1, 7], blocks: present(owner) }, { span: [8, 12], blocks: present(obs) }] }],
+        rows: [{ columns: [{ span: [1, 12], blocks: [table] }] }, { columns: [{ span: [1, 8], blocks: present(owner) }, { span: [9, 12], blocks: present(obs) }] }],
         notes: {
           source: source(ctx.sources.financials, ctx.sources.customers, ctx.sources.bank, "Management"),
           note: `Figures in USD unless noted. Adjustment references are defined on ${pageRef("S7.2")}.`,
@@ -283,7 +300,7 @@ function fallbackBuyer(ctx: CimContext): NonNullable<CimCopy["s1_4"]> {
       addressed: ctx.intake?.owner.transition.description ? `${ctx.intake.owner.transition.description} (1).` : `${confirm(ctx, "transition plan", "Owner transition plan")}.`,
     },
   ];
-  if (b.has("cust.largestShare")) rows.push({ consideration: "Customer concentration", shows: "The largest customer is {{cust.largestShare}} of revenue and the top 10 are {{cust.top10Share}}.", addressed: `Losing the largest customer in full would remove {{cust.largestRevenue}} of revenue against ${ctx.latest.label} growth of {{rev.change}}.` });
+  if (b.has("cust.largestShare")) rows.push({ consideration: "Customer concentration", shows: "The largest customer is {{cust.largestShare}} of revenue and the top 10 are {{cust.top10Share}}.", addressed: `Losing the largest customer in full would remove {{cust.largestRevenue}} of revenue${b.has("rev.change") && (b.value("rev.change") ?? 0) > 0 ? ` against ${ctx.latest.label} growth of {{rev.change}}` : `, {{cust.largestShare}} of the total`}.` });
   const staff = b.has("hc.total") ? "{{hc.total}} employees besides the owner, {{hc.field}} in the field" : b.has("staff.total") ? "{{staff.total}} employees besides the owner (1)" : undefined;
   if (staff) {
     const keep = ctx.intake?.management.find((m) => m.postCloseIntent === "stays");
@@ -293,7 +310,7 @@ function fallbackBuyer(ctx: CimContext): NonNullable<CimCopy["s1_4"]> {
       addressed: `${keep ? `${keep.name}, ${keep.role.toLowerCase()}, is expected to stay after closing (1); ` : ""}retention arrangements for key employees are ${confirm(ctx, "retention arrangements", "Retention or employment arrangements for key employees after closing")}.`,
     });
   }
-  rows.push({ consideration: "Add-back quality", shows: `Adjustments total {{adjTotal.latest}} in ${ctx.latest.label}, from Reported EBITDA of {{repEbitda.latest}} to Adj. EBITDA of {{adjEbitda.latest}}.`, addressed: `Each adjustment is listed with its basis and evidence on ${pageRef("S7.2")}.` });
+  rows.push({ consideration: "Add-back quality", shows: `Adjustments total {{adjTotal.latest}} in ${ctx.latest.label}, from Reported EBITDA of {{repEbitda.latest}} to Adj. EBITDA of {{adjEbitda.latest}}.`, addressed: `Each adjustment is listed with its basis and evidence on ${pageRef("S7.2")}.${ctx.brief.has("adj.repOnly.bps") ? ` Excluding the {{adj.repOnly.latest}} resting on management representation ({{adj.repOnly.refs}}) lowers the ${ctx.latest.label} Adj. EBITDA margin by {{adj.repOnly.bps}}.` : ""}` });
   return {
     rows,
     observations: [{ row: "owner.total", lead: ctx.intake?.owner.hoursPerWeek ? "About {{owner.hours}} hours a week of owner duties (1)" : "The owner's responsibilities", body: `pass to ${confirm(ctx, "successors", "Who takes each owner responsibility after closing")} after closing.` }, { row: "", lead: `Market replacement compensation of {{s2.latest}}`, body: "is already deducted in Adj. EBITDA for a general manager." }],

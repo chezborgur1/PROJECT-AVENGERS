@@ -80,7 +80,7 @@ describe("adjustments schedule", () => {
   const byRef = (ref: string) => adj.find((a) => a.ref === ref)!;
 
   it("numbers refs by tier in schedule order", () => {
-    expect(adj.map((a) => a.ref)).toEqual(["D1", "D2", "D3", "N1", "N2", "N3", "N4", "N5", "N6", "N7", "N8", "N9", "S1", "S2", "S3", "M1"]);
+    expect(adj.map((a) => a.ref)).toEqual(["D1", "D2", "D3", "N1", "N2", "N3", "N4", "N5", "N6", "N7", "N8", "N9", "S1", "S2", "S3", "S4", "M1"]);
     expect(byRef("N5")).toMatchObject({ category: "non_operating", origin: "pnl", byFiscalYear: { 2025: -3_100 } });
   });
 
@@ -165,7 +165,9 @@ describe("payroll register", () => {
 
   it("ties wages plus employer costs to the P&L payroll line, and the owner to officer compensation", () => {
     for (const y of YEARS) {
-      const total = sum(staff.map((e) => (e.wagesByFiscalYear[y] ?? 0) + (e.employerCostsByFiscalYear[y] ?? 0)));
+      // Staff pay plus the owner's employer taxes (his salary is officer compensation; the taxes on it sit in payroll).
+      const owner = reg.employees.find((e) => e.isOwner)!;
+      const total = sum(staff.map((e) => (e.wagesByFiscalYear[y] ?? 0) + (e.employerCostsByFiscalYear[y] ?? 0))) + (owner.employerCostsByFiscalYear[y] ?? 0);
       expect(total, `FY${y}`).toBe(ds.pnl[y]!.payroll);
       expect(reg.totalsByFiscalYear[y]).toBe(ds.pnl[y]!.payroll);
       expect(reg.employees.find((e) => e.isOwner)!.wagesByFiscalYear[y]).toBe(ds.pnl[y]!.owner_comp);

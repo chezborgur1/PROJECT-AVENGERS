@@ -59,8 +59,10 @@ describe("checks (guide 5.7)", () => {
   it("lists C01-C37 once each, every one OK or n.a., and the master check passes", () => {
     expect(model.checks.map((c) => c.id)).toEqual(Array.from({ length: 37 }, (_, i) => `C${String(i + 1).padStart(2, "0")}`));
     expect(model.checks.filter((c) => c.status === "CHECK")).toEqual([]);
-    expect(model.masterCheck).toBe("All checks OK");
-    expect(model.namedOutputs.MasterCheck).toBe("All checks OK");
+    // C37 runs on the written file, so the engine's master check says the render check is pending (guide 5.7).
+    expect(model.masterCheck).toBe("All checks OK (render check pending)");
+    expect(model.namedOutputs.MasterCheck).toBe("All checks OK (render check pending)");
+    expect(model.checks.find((c) => c.id === "C37")!.status).toBe("Pending");
   });
 
   it("the customer and headcount roll-forwards close: start + new - lost = end", () => {
@@ -126,6 +128,66 @@ describe("three statements behind the projections", () => {
   });
 });
 
+describe("Main Street valuation by scenario (guide 5.5)", () => {
+  it("builds the scenario block in monthly Main Street mode and values each case on its own SDE", () => {
+    expect(model.mode.mode).toBe("mainStreet");
+    expect(model.scenarios?.map((s) => s.name)).toEqual(["Low", "Mid", "High"]);
+    const { low, mid, high } = model.valuationDetail!.cases;
+    // Mid is the LTM window as reported; Low and High move earnings, not only the multiple.
+    expect(mid.sde).toBeCloseTo(model.periods["LTM2025-12"]!.ladder.sde, 6);
+    expect(low.sde).toBeLessThan(mid.sde);
+    expect(mid.sde).toBeLessThan(high.sde);
+    expect(new Set([low, mid, high].map((c) => Math.round(c.financing.cashFlowAvailable))).size).toBe(3);
+    expect(model.checks.find((c) => c.id === "C29")!.status).toBe("OK");
+  });
+
+  it("services the structure's debt from the Mid case, the price it is built on", () => {
+    const d = model.deal![0]!;
+    expect(d.purchasePrice).toBe(model.valuationDetail!.cases.mid.totalInvestment);
+    expect(d.debtService.cashFlowAvailable).toBeCloseTo(model.valuationDetail!.cases.mid.financing.cashFlowAvailable, 6);
+    // The seller note adds year-one service, so the reference structure's DSCR sits below the SBA-only illustration.
+    expect(d.debtService.dscr).toBeLessThan(model.valuationDetail!.cases.mid.financing.dscr);
+  });
+
+  it("keeps Low, Mid and High on one earnings figure in lower-middle-market mode, which has no scenario block", () => {
+    const a = defaultAssumptions(ds, row);
+    const lmm = runModel(ds, { ...a, recast: { ...a.recast, mainStreetMode: false } });
+    expect(lmm.mode.mode).toBe("lowerMiddleMarket");
+    expect(lmm.scenarios).toBeUndefined();
+    const { low, mid, high } = lmm.valuationDetail!.cases;
+    expect(low.sde).toBe(mid.sde);
+    expect(high.sde).toBe(mid.sde);
+    expect(lmm.checks.find((c) => c.id === "C29")!.status).toBe("n.a.");
+  });
+});
+
+describe("deal structure completeness (guide 5.5, 5.6)", () => {
+  it("allocates an asset purchase price under Form 8594 with goodwill as the residual", () => {
+    const d = model.deal![0]!;
+    expect(model.dealForm).toBe("asset_purchase");
+    const al = d.allocation!;
+    expect(model.assumptions!.deal.premisesArrangement).toBe("Leased from third party");
+    expect(al.land).toBe(0);
+    expect(al.building).toBe(0);
+    const bs = model.periods["LTM2025-12"]!.bs!;
+    expect(al.equipment).toBe(bs.fixedAssets);
+    expect(al.inventory).toBe(bs.inventory);
+    expect(al.land! + al.building! + al.equipment + al.inventory + al.nonCompete + al.goodwill).toBeCloseTo(d.purchasePrice, 6);
+  });
+
+  it("moves deferred revenue and deposits out of NWC and into debt-like items together under the override", () => {
+    const a = defaultAssumptions(ds, row);
+    const base = runModel(ds, a);
+    const over = runModel(ds, { ...a, deal: { ...a.deal, deferredRevenueTreatment: "Debt-like" } });
+    const customerMoney = base.debtLike!.items.filter((i) => /deferred revenue|customer deposit/i.test(i.item) && i.treatment === "nwc").reduce((s, i) => s + i.balance, 0);
+    expect(customerMoney).toBeGreaterThan(0);
+    const latest = (m: ModelOutput) => m.nwc!.periods.at(-1)!.lines;
+    expect(latest(over).adjustedNwc - latest(base).adjustedNwc).toBeCloseTo(latest(base).deferredRevenue + latest(base).customerDeposits, 6);
+    expect(over.debtLike!.debtLike - base.debtLike!.debtLike).toBeCloseTo(customerMoney, 6);
+    expect(over.checks.find((c) => c.id === "C19")!.status).toBe("OK");
+  });
+});
+
 describe("annual-only mode (guide 5.2A)", () => {
   const annual = build(annualOnly(ds));
 
@@ -134,7 +196,18 @@ describe("annual-only mode (guide 5.2A)", () => {
     expect(annual.columns.filter((c) => !c.projected).every((c) => c.ref.kind === "fiscal_year")).toBe(true);
     expect(annual.namedOutputs.SDE_FY[2025]).toBe(547_915);
     expect(annual.namedOutputs.AdjEBITDA_FY[2025]).toBe(371_865);
-    expect(annual.masterCheck).toBe("All checks OK");
+    expect(annual.masterCheck).toBe("All checks OK (render check pending)");
+  });
+
+  it("compares bank deposits with revenue only over a full year when there is no monthly grid (C14)", () => {
+    const base = annualOnly(ds);
+    const partial = build({ ...base, deposits: { 2025: { amount: 1_580_000, months: 6 } } });
+    const c14 = partial.checks.find((c) => c.id === "C14")!;
+    expect(c14.status).toBe("n.a.");
+    expect(c14.note).toContain("6 months of FY2025");
+    expect(partial.masterCheck).toBe("All checks OK (render check pending)");
+    const full = build({ ...base, deposits: { 2024: { amount: 2_720_000, months: 12 }, 2025: { amount: 1_580_000, months: 6 } } });
+    expect(full.checks.find((c) => c.id === "C14")).toMatchObject({ status: "OK", note: "FY2024 deposits over 12 months against annual revenue" });
   });
 
   it("orders the Low / Mid / High scenarios on EBITDA and differs on growth and an operating driver (C29)", () => {

@@ -27,7 +27,7 @@ export function planChecks(ctx: TabContext, built: Set<SheetKey>, formulas: Reco
   b.width(1, WIDTH.gutter);
   widths.forEach((w, i) => b.width(2 + i, w));
   const lastCol = 8;
-  b.anatomy({ subtitle: "Model checks (differences in the tab's units; tolerance $0.001 at $000s unless stated)", lastCol, toggleCol: 6, masterToggle: ctx.masterToggle });
+  b.anatomy({ subtitle: "Model Checks (tab units; tolerance $0.001 at $000s unless stated)", lastCol, toggleCol: 6, masterToggle: ctx.masterToggle });
   b.text(3, 5, "Print", { align: { horizontal: "right" } });
   b.tier1(5, [{ from: 2, to: lastCol, label: "Checks" }]);
   ["ID", "Check", "Tab", "Difference", "Tolerance", "Status", "Note"].forEach((h, i) => b.cell(6, 2 + i, { style: "header", v: h, role: "text", align: { horizontal: i === 1 || i === 6 ? "left" : "center" } }));
@@ -44,28 +44,35 @@ export function planChecks(ctx: TabContext, built: Set<SheetKey>, formulas: Reco
       b.formula(r, 5, formula.f, { fmt: FMT.check, expect: c.tolerance >= 1 ? c.difference / 1000 : c.difference, tol: Math.max(1e-6, toleranceInUnits(c)), label: `${c.id} difference` });
     } else if (c.status === "n.a.") {
       b.na(r, 5, "n.a.");
+    } else if (c.status === "Pending") {
+      b.text(r, 5, "pending", { align: { horizontal: "right" } });
     } else {
       // Writer-side lints (C17, C18, C22) run in verifyWorkbook before delivery; the result is recorded as a constant.
       b.num(r, 5, c.difference, { fmt: FMT.check });
     }
     b.num(r, 6, toleranceInUnits(c), { fmt: FMT.check });
-    b.formula(r, 7, `IF(ISNUMBER(${addr(r, 5)}),IF(ABS(${addr(r, 5)})<=${addr(r, 6)},"OK","CHECK"),"n.a.")`, { expect: c.status, label: `${c.id} status`, align: { horizontal: "center" }, font: { bold: true } });
+    b.formula(r, 7, `IF(ISNUMBER(${addr(r, 5)}),IF(ABS(${addr(r, 5)})<=${addr(r, 6)},"OK","CHECK"),IF(${addr(r, 5)}="pending","Pending","n.a."))`, { expect: c.status, label: `${c.id} status`, align: { horizontal: "center" }, font: { bold: true } });
     b.note(r, 8, c.note ?? "");
     r++;
   }
   b.row("last", r - 1);
   b.cf({ ref: `G${b.r("first")}:G${b.r("last")}`, formula: `G${b.r("first")}="CHECK"`, font: { color: "FF0000", bold: true } });
   r++;
-  b.text(r, 2, "Master check", { font: { bold: true } });
-  b.formula(r, 5, `IF(COUNTIF(${addr(b.r("first"), 7, { col: true, row: true })}:${addr(b.r("last"), 7, { col: true, row: true })},"CHECK")=0,"All checks OK",COUNTIF(${addr(b.r("first"), 7, { col: true, row: true })}:${addr(b.r("last"), 7, { col: true, row: true })},"CHECK")&" checks failing")`, { expect: model.masterCheck, label: "master check", font: { bold: true } });
+  // In the Check column, where a label has room; the ID column is six wide.
+  b.text(r, 3, "Master check", { font: { bold: true } });
+  b.formula(r, 5, masterFormula(`${addr(b.r("first"), 7, { col: true, row: true })}:${addr(b.r("last"), 7, { col: true, row: true })}`), { expect: model.masterCheck, label: "master check", font: { bold: true } });
   b.row("master", r);
   r += 2;
-  b.note(r, 2, "Note: C17, C18 and C22 are writer-side lints that verifyWorkbook enforces on every formula and chart part before the file is delivered; C37 is the PDF render QA. Percentage checks (C12-C14) show the variance as a share of the P&L line.");
+  b.note(r, 2, "Note: C17, C18 and C22 are writer-side lints that verifyWorkbook enforces on every formula and chart part before the file is delivered; C37 is the render check the pipeline runs on the written file (pending until it has run). Percentage checks (C12-C14) show the variance as a share of the P&L line.");
   b.print({ area: `B2:${addr(r, lastCol)}`, landscape: true, fitToWidth: 1, fitToHeight: 0, titlesRow: "5:6" });
   b.furniture(ctx.codeName, ctx.asOfLabel);
   b.freeze(7, 2);
   return b;
 }
+
+/** The master check over a range of statuses, worded as masterCheckOf words it. */
+export const masterFormula = (statuses: string): string =>
+  `IF(COUNTIF(${statuses},"CHECK")=0,IF(COUNTIF(${statuses},"Pending")=0,"All checks OK","All checks OK (render check pending)"),COUNTIF(${statuses},"CHECK")&IF(COUNTIF(${statuses},"CHECK")=1," check failing"," checks failing"))`;
 
 /** Tolerances are stated in dollars by the engine; dollar checks print at $000s on this tab. */
 function toleranceInUnits(c: CheckResult): number {
@@ -121,9 +128,9 @@ export function checkFormulas(model: ModelOutput, plans: Partial<Record<SheetKey
   if (has("monthly") && has("pnl")) {
     out.C16 = { f: `IF(AND(${l.cols.map(({ col }) => `${S("pnl")}${colLetter(col)}6=${S("monthly")}${colLetter(col)}6`).join(",")}),0,1)` };
   }
-  if (has("debtLike")) out.C19 = { f: `COUNTIFS(${S("debtLike")}$B:$B,"*eposit*",${S("debtLike")}$D:$D,"Debt-like")+COUNTIFS(${S("debtLike")}$B:$B,"*eferred*",${S("debtLike")}$D:$D,"Debt-like")` };
+  if (has("debtLike")) out.C19 = { f: `IF(${A("deferredRevenueTreatment")}="Debt-like",0,COUNTIFS(${S("debtLike")}$B:$B,"*eposit*",${S("debtLike")}$D:$D,"Debt-like")+COUNTIFS(${S("debtLike")}$B:$B,"*eferred*",${S("debtLike")}$D:$D,"Debt-like"))` };
   if (has("valuation") && has("deal")) out.C28 = { f: `MIN(0,${S("valuation")}$C$${rowOf("valuation", "loanPrincipal")}:$E$${rowOf("valuation", "loanPrincipal")},${S("deal")}$C$${rowOf("deal", "seniorLoan")})` };
-  if (model.granularity === "annual" && has("assumptions")) {
+  if (model.scenarios && has("assumptions")) {
     const g = (c: string) => `${S("assumptions")}$${c}$${rowOf("assumptions", "scenarioGrowth")}`;
     const m = (key: string, c: string) => `${S("assumptions")}$${c}$${rowOf("assumptions", key)}`;
     const drivers = ["scenario_cogs", "scenario_payroll", "scenario_rent", "scenario_marketing", "scenario_otherOpex"];

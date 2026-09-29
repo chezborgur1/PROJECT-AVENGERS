@@ -4,7 +4,7 @@
 // coded customer, so every figure traces to a row a reviewer can open.
 
 import { addMonths, monthPeriod, monthRange } from "../../domain/financials.ts";
-import { excelSerial, fiscalYearMonths } from "../periods.ts";
+import { excelSerial, fiscalYearMonths, ltmEqualsFiscalYear } from "../periods.ts";
 import { addr, colLetter, rowOf, SheetBuilder } from "../sheet.ts";
 import { COLOR, FMT, WIDTH } from "../styles.ts";
 import type { PeriodColumn, RetentionCounts } from "../types.ts";
@@ -28,12 +28,12 @@ const fyColOf = (years: number[], y: number) => {
 };
 
 /**
- * Active at the date in `d`: started on or before it and not ended before it;
- * an undated customer counts when it billed in fiscal year `fy`, the year
- * `d` falls in (customerActiveAt in analytics.ts).
+ * Active at the date in `d`: started on or before it and not ended on or
+ * before it; an undated customer counts when it billed in fiscal year `fy`,
+ * the year `d` falls in (customerActiveAt in analytics.ts).
  */
 export const activeCount = (d: string, fy: number, years: number[]) =>
-  `COUNTIFS(${START()},"<="&${d},${END()},"")+COUNTIFS(${START()},"<="&${d},${END()},">="&${d})${years.includes(fy) ? `+COUNTIFS(${START()},"",${fyColOf(years, fy)},">0",${CODE()},"<>Residual")` : ""}`;
+  `COUNTIFS(${START()},"<="&${d},${END()},"")+COUNTIFS(${START()},"<="&${d},${END()},">"&${d})${years.includes(fy) ? `+COUNTIFS(${START()},"",${fyColOf(years, fy)},">0",${CODE()},"<>Residual")` : ""}`;
 
 interface WindowCells {
   start: string;
@@ -49,12 +49,12 @@ export function planCustomerOverview(ctx: TabContext): SheetBuilder | undefined 
   const b = new SheetBuilder("customers", SHEET.customers);
   const years = model.columns.filter((c) => c.ref.kind === "fiscal_year" && !c.projected).map((c) => c.fiscalYear!);
   const headers = ["Type", `${ca.term}s (#)`, "% of Count", "Revenue ($)", "% of Revenue", "Avg. Revenue ($)"];
-  const widths = [WIDTH.label, 12, 10, 14, 11, 14];
+  const widths = [WIDTH.label, 12, 10, 14, 11, 16];
   b.width(1, WIDTH.gutter);
   widths.forEach((w, i) => b.width(2 + i, w));
   b.spacerCol(8);
   b.width(9, WIDTH.notes);
-  b.anatomy({ subtitle: `${ca.term} Overview: mix by type over ${ca.period.label} (#, $)`, lastCol: 9, toggleCol: 7, masterToggle: ctx.masterToggle });
+  b.anatomy({ subtitle: `${ca.term} Overview: Mix by Type, ${ca.period.label} (#, $)`, lastCol: 9, toggleCol: 7, masterToggle: ctx.masterToggle });
   b.text(3, 6, "Print", { align: { horizontal: "right" } });
   b.tier1(5, [{ from: 2, to: 7, label: `Mix by type (${ca.period.label})` }, { from: 9, to: 9, label: "Notes" }]);
   headers.forEach((h, i) => b.cell(6, 2 + i, { style: "header", v: h, role: "text", align: { horizontal: i === 0 ? "left" : "center" } }));
@@ -83,7 +83,7 @@ export function planCustomerOverview(ctx: TabContext): SheetBuilder | undefined 
       // Counted when it had revenue in a fiscal year the window touches, or is active at the as-of date (mixByType in analytics.ts).
       const none = (k: number) => touched.slice(0, k).map((y) => `,${fyCol(y)},"<=0"`).join("");
       const withRevenue = touched.map((y, k) => `COUNTIFS(${TYPE()},${t}${none(k)},${fyCol(y)},">0")`);
-      const activeOnly = [`COUNTIFS(${TYPE()},${t}${none(touched.length)},${START()},"<="&${asOf},${END()},"")`, `COUNTIFS(${TYPE()},${t}${none(touched.length)},${START()},"<="&${asOf},${END()},">="&${asOf})`];
+      const activeOnly = [`COUNTIFS(${TYPE()},${t}${none(touched.length)},${START()},"<="&${asOf},${END()},"")`, `COUNTIFS(${TYPE()},${t}${none(touched.length)},${START()},"<="&${asOf},${END()},">"&${asOf})`];
       b.formula(r, 3, [...withRevenue, ...activeOnly].join("+"), { style: "line", fmt: FMT.body, expect: row.count, label: `count ${row.type}` });
       b.formula(r, 4, `IFERROR(${addr(r, 3)}/C$${rowOf("customers", "codedCount")},"n.a.")`, { style: "ratio", fmt: FMT.pct, expect: row.countPct, label: `count pct ${row.type}` });
       b.formula(r, 5, windowRevenue(`${TYPE()},${t}`), { style: "line", fmt: FMT.currency, expect: row.revenue, label: `revenue ${row.type}` });
@@ -177,7 +177,7 @@ export function planRetention(ctx: TabContext): SheetBuilder | undefined {
     b.spacerCol(stripLast + 1);
   }
   b.width(notesCol, WIDTH.notes);
-  b.anatomy({ subtitle: `${ca.term} Retention: count and dollar roll-forwards (#, $)`, lastCol: notesCol, toggleCol: lastSummary, masterToggle: ctx.masterToggle });
+  b.anatomy({ subtitle: `${ca.term} Retention: Count and Dollar Roll-Forwards (#, $)`, lastCol: notesCol, toggleCol: lastSummary, masterToggle: ctx.masterToggle });
   b.text(3, lastSummary - 1, "Print", { align: { horizontal: "right" } });
   const groups = [{ from: 3, to: 3 + years.length - 1, label: "Full Year" }];
   if (ltm) groups.push({ from: lastSummary, to: lastSummary, label: "LTM" });
@@ -211,19 +211,25 @@ export function planRetention(ctx: TabContext): SheetBuilder | undefined {
   b.section(r++, `${ca.term} count roll-forward`, spans);
   for (const k of countKeys) b.row(k, r++);
   r++;
-  const dollarKeys = ["startingRevenue", "churnRevenue", "downsell", "upsell", "newRevenue", "endingRevenue", "gdr", "ndr"] as const;
+  // The bridge ends at the customers still active at year-end; the revenue the year's lost customers billed before leaving
+  // reconciles it to the listed customers' revenue the Cohorts and Concentration tabs show (QA round 2 F9).
+  const dollarKeys = ["startingRevenue", "churnRevenue", "downsell", "upsell", "newRevenue", "endingRevenue", "lostInYear", "listedRevenue", "gdr", "ndr"] as const;
+  const term = ca.term.toLowerCase();
   const dollarLabels: Record<(typeof dollarKeys)[number], string> = {
-    startingRevenue: "Starting Revenue",
+    startingRevenue: `Starting Revenue (${term}s active at year start)`,
     churnRevenue: "(-) Churn",
     downsell: "(-) Downsell",
     upsell: "(+) Upsell",
     newRevenue: "(+) New",
-    endingRevenue: "Ending Revenue",
+    endingRevenue: `Ending Revenue (${term}s active at year end)`,
+    lostInYear: `(+) In-year revenue of ${term}s lost in the year`,
+    listedRevenue: `Listed ${term} revenue`,
     gdr: "Gross Dollar Retention",
     ndr: "Net Dollar Retention",
   };
-  b.section(r++, "Dollar roll-forward ($, fiscal years)", spans.slice(0, 1));
+  b.section(r++, `Dollar roll-forward, listed ${term}s ($, fiscal years)`, spans.slice(0, 1));
   for (const k of dollarKeys) b.row(k, r++);
+  b.row("listedCheck", r++);
   r++;
   b.row("median", r++);
   const lastPrinted = r + 1;
@@ -326,9 +332,14 @@ export function planRetention(ctx: TabContext): SheetBuilder | undefined {
     const code = addr(rr, hCode);
     b.text(rr, hCode, c.id, { style: "helper" });
     b.formula(rr, hStart, `INDEX(${START()},MATCH(${code},${CODE()},0))`, { style: "helper", role: "helper", fmt: FMT.date, expect: c.startDate ? excelSerial(c.startDate) : 0, label: `start ${c.id}` });
-    b.formula(rr, hEnd, `IF(INDEX(${END()},MATCH(${code},${CODE()},0))="","",INDEX(${END()},MATCH(${code},${CODE()},0)))`, { style: "helper", role: "helper", fmt: FMT.date, label: `end ${c.id}` });
-    // An undated customer (start reads 0) has no tenure and is classified from revenue below.
-    b.formula(rr, hTenure, `IF(OR(${addr(rr, hStart)}=0,${addr(rr, hEnd)}<>"",${addr(rr, hStart)}>${ASOF}),"",MAX(0,(${ASOF}-${addr(rr, hStart)})/365.25))`, { style: "helper", role: "helper", fmt: FMT.oneDp, label: `tenure ${c.id}` });
+    // The helper block carries the engine's value in every cell, so the verifier checks the roll-forward's inputs and not only its totals.
+    const startSerial = c.startDate ? excelSerial(c.startDate) : 0;
+    const endSerial = c.endDate ? excelSerial(c.endDate) : undefined;
+    const asOfSerial = excelSerial(model.asOfDate);
+    b.formula(rr, hEnd, `IF(INDEX(${END()},MATCH(${code},${CODE()},0))="","",INDEX(${END()},MATCH(${code},${CODE()},0)))`, { style: "helper", role: "helper", fmt: FMT.date, expect: endSerial ?? "", label: `end ${c.id}` });
+    // Tenure of the customers active at the as-of date (customerActiveAt): an undated customer (start reads 0) has none, and one whose end date is on or before the as-of date has left.
+    const tenure = startSerial === 0 || (endSerial !== undefined && endSerial <= asOfSerial) || startSerial > asOfSerial ? "" : Math.max(0, (asOfSerial - startSerial) / 365.25);
+    b.formula(rr, hTenure, `IF(OR(${addr(rr, hStart)}=0,AND(${addr(rr, hEnd)}<>"",N(${addr(rr, hEnd)})<=${ASOF}),${addr(rr, hStart)}>${ASOF}),"",MAX(0,(${ASOF}-${addr(rr, hStart)})/365.25))`, { style: "helper", role: "helper", fmt: FMT.oneDp, expect: tenure, label: `tenure ${c.id}` });
     years.forEach((y, yi) => {
       const base = yearBase(yi);
       const w = windows.get(3 + yi)!;
@@ -344,24 +355,30 @@ export function planRetention(ctx: TabContext): SheetBuilder | undefined {
       b.formula(rr, base + 1, `INDEX(${fyCol(fy)},MATCH(${code},${CODE()},0))`, { style: "helper", role: "helper", fmt: FMT.body, expect: curRev, label: `cur ${c.id} ${fy}` });
       const s = addr(rr, hStart);
       const e = addr(rr, hEnd);
+      const prevRev = ctx.customerYears.includes(fy - 1) ? (c.revenueByFiscalYear[fy - 1] ?? 0) : 0;
+      const [wStart, wEnd] = [serialOfMonthStart(y.start), serialOfMonthEnd(y.end)];
+      const isActive = startSerial === 0 ? (prevRev > 0 ? 1 : 0) : startSerial < wStart && (endSerial === undefined || endSerial >= wStart) ? 1 : 0;
+      const isLost = startSerial === 0 ? (prevRev > 0 && curRev <= 0 ? 1 : 0) : endSerial !== undefined && endSerial >= wStart && endSerial <= wEnd ? 1 : 0;
+      const isStarted = startSerial === 0 ? (prevRev <= 0 && curRev > 0 ? 1 : 0) : startSerial >= wStart && startSerial <= wEnd ? 1 : 0;
       // Undated (start reads 0): active when it billed last year, lost when it stopped, new when it began (dollarRollForward).
-      b.formula(rr, base + 2, `IF(${s}=0,IF(${prev}>0,1,0),IF(AND(${s}<${w.start},OR(${e}="",${e}>=${w.start})),1,0))`, { style: "helper", role: "helper", fmt: FMT.term, label: `active ${c.id} ${fy}` });
-      b.formula(rr, base + 3, `IF(${s}=0,IF(AND(${prev}>0,${cur}<=0),1,0),IF(AND(${e}<>"",${e}>=${w.start},${e}<=${w.end}),1,0))`, { style: "helper", role: "helper", fmt: FMT.term, label: `lost ${c.id} ${fy}` });
-      b.formula(rr, base + 4, `IF(${s}=0,IF(AND(${prev}<=0,${cur}>0),1,0),IF(AND(${s}>=${w.start},${s}<=${w.end}),1,0))`, { style: "helper", role: "helper", fmt: FMT.term, label: `started ${c.id} ${fy}` });
-      b.formula(rr, base + 5, `${active}*${prev}`, { style: "helper", role: "helper", fmt: FMT.body, label: `starting ${c.id} ${fy}` });
-      b.formula(rr, base + 6, `${active}*${lost}*${prev}`, { style: "helper", role: "helper", fmt: FMT.body, label: `churn ${c.id} ${fy}` });
-      b.formula(rr, base + 7, `${active}*(1-${lost})*MAX(0,${prev}-${cur})`, { style: "helper", role: "helper", fmt: FMT.body, label: `downsell ${c.id} ${fy}` });
-      b.formula(rr, base + 8, `${active}*(1-${lost})*MAX(0,${cur}-${prev})`, { style: "helper", role: "helper", fmt: FMT.body, label: `upsell ${c.id} ${fy}` });
+      b.formula(rr, base + 2, `IF(${s}=0,IF(${prev}>0,1,0),IF(AND(${s}<${w.start},OR(${e}="",${e}>=${w.start})),1,0))`, { style: "helper", role: "helper", fmt: FMT.term, expect: isActive, label: `active ${c.id} ${fy}` });
+      b.formula(rr, base + 3, `IF(${s}=0,IF(AND(${prev}>0,${cur}<=0),1,0),IF(AND(${e}<>"",${e}>=${w.start},${e}<=${w.end}),1,0))`, { style: "helper", role: "helper", fmt: FMT.term, expect: isLost, label: `lost ${c.id} ${fy}` });
+      b.formula(rr, base + 4, `IF(${s}=0,IF(AND(${prev}<=0,${cur}>0),1,0),IF(AND(${s}>=${w.start},${s}<=${w.end}),1,0))`, { style: "helper", role: "helper", fmt: FMT.term, expect: isStarted, label: `started ${c.id} ${fy}` });
+      b.formula(rr, base + 5, `${active}*${prev}`, { style: "helper", role: "helper", fmt: FMT.body, expect: isActive * prevRev, label: `starting ${c.id} ${fy}` });
+      b.formula(rr, base + 6, `${active}*${lost}*${prev}`, { style: "helper", role: "helper", fmt: FMT.body, expect: isActive * isLost * prevRev, label: `churn ${c.id} ${fy}` });
+      b.formula(rr, base + 7, `${active}*(1-${lost})*MAX(0,${prev}-${cur})`, { style: "helper", role: "helper", fmt: FMT.body, expect: isActive * (1 - isLost) * Math.max(0, prevRev - curRev), label: `downsell ${c.id} ${fy}` });
+      b.formula(rr, base + 8, `${active}*(1-${lost})*MAX(0,${cur}-${prev})`, { style: "helper", role: "helper", fmt: FMT.body, expect: isActive * (1 - isLost) * Math.max(0, curRev - prevRev), label: `upsell ${c.id} ${fy}` });
     });
   });
   const hLast = hFirst + customers.length;
   const hRange = (c: number) => `${addr(hFirst + 1, c, { row: true, col: true })}:${addr(hLast, c, { row: true, col: true })}`;
 
   // Dollar block, fiscal years only.
+  const listedOf = (fy: number) => customers.reduce((sum, x) => sum + (x.revenueByFiscalYear[fy] ?? 0), 0);
   for (const k of dollarKeys) {
     const rr = b.r(k);
     const isRatio = k === "gdr" || k === "ndr";
-    const isTotal = k === "endingRevenue";
+    const isTotal = k === "endingRevenue" || k === "listedRevenue";
     b.text(rr, 2, dollarLabels[k], { style: isTotal ? "keyTotal" : isRatio ? "ratio" : k === "startingRevenue" ? "lineFirst" : "line", align: isRatio ? { horizontal: "left", indent: 1 } : undefined });
     if (isTotal) b.keyTotalBox([rr, rr], [[3, 3 + years.length - 1]]);
     years.forEach((y, yi) => {
@@ -401,6 +418,14 @@ export function planRetention(ctx: TabContext): SheetBuilder | undefined {
           f = `${at("startingRevenue")}-${at("churnRevenue")}-${at("downsell")}+${at("upsell")}+${at("newRevenue")}`;
           expect = d.endingRevenue;
           break;
+        case "lostInYear":
+          f = `SUMPRODUCT(${hRange(base + 2)},${hRange(base + 3)},${hRange(base + 1)})`;
+          expect = d.lostInYearRevenue ?? 0;
+          break;
+        case "listedRevenue":
+          f = `${at("endingRevenue")}+${at("lostInYear")}`;
+          expect = d.endingRevenue + (d.lostInYearRevenue ?? 0);
+          break;
         case "gdr":
           f = `IFERROR((${at("startingRevenue")}-${at("churnRevenue")}-${at("downsell")})/${at("startingRevenue")},"n.a.")`;
           expect = d.startingRevenue ? d.gdr : "n.a.";
@@ -409,20 +434,42 @@ export function planRetention(ctx: TabContext): SheetBuilder | undefined {
           f = `IFERROR((${at("startingRevenue")}-${at("churnRevenue")}-${at("downsell")}+${at("upsell")})/${at("startingRevenue")},"n.a.")`;
           expect = d.startingRevenue ? d.ndr : "n.a.";
       }
-      b.formula(rr, c, f, { style: isTotal ? "keyTotal" : isRatio ? "ratio" : "line", fmt: isRatio ? FMT.pct1 : k === "startingRevenue" ? FMT.currency : FMT.body, expect, label: `${k} FY${y.fiscalYear}` });
+      b.formula(rr, c, f, { style: isTotal ? "keyTotal" : isRatio ? "ratio" : "line", fmt: isRatio ? FMT.pct1 : k === "startingRevenue" || isTotal ? FMT.currency : FMT.body, expect, label: `${k} FY${y.fiscalYear}` });
     });
   }
+  // The listed revenue ties to the raw list for the same fiscal year.
+  const lc = b.r("listedCheck");
+  b.text(lc, 2, `Check: listed revenue less Raw - ${ca.term}s`, { style: "check" });
+  years.forEach((y, yi) => {
+    const c = 3 + yi;
+    if (!customers.some((x) => x.revenueByFiscalYear[y.fiscalYear! - 1] !== undefined)) return;
+    const d = ret.byFiscalYear[y.fiscalYear!]!.dollars;
+    b.formula(lc, c, `${addr(b.r("listedRevenue"), c)}-SUMIFS(${fyColOf(ctx.customerYears, y.fiscalYear!)},${CODE()},"<>Residual")`, { style: "check", fmt: FMT.check, expect: d.endingRevenue + (d.lostInYearRevenue ?? 0) - listedOf(y.fiscalYear!), tol: 1e-6, label: `listed revenue tie FY${y.fiscalYear}` });
+  });
+  b.checkCf(lc, 3, 3 + years.length - 1);
   const mr = b.r("median");
   b.text(mr, 2, `Median tenure of active ${ca.term.toLowerCase()}s (years)`, { style: "keyTotal", align: { horizontal: "left" } });
   b.keyTotalBox([mr, mr], [[3, 3]]);
   b.formula(mr, 3, `IFERROR(MEDIAN(${hRange(hTenure)}),"n.a.")`, { style: "keyTotal", fmt: FMT.oneDp, expect: ret.medianTenureYears, label: "median tenure" });
-  b.note(lastPrinted, 2, `Note: counts are COUNTIFS over the raw ${ca.term.toLowerCase()} list by start and end date; a ${ca.term.toLowerCase()} is active from its start date until its end date inclusive. Churn = losses ÷ average ${ca.term.toLowerCase()}s. The dollar roll-forward compares each ${ca.term.toLowerCase()}'s revenue with the prior fiscal year (helper block below the print area); GDR excludes upsell, NDR includes it.${withStrip ? " Strip months end at the as-of date." : ""}`);
-  b.print({ area: `B2:${addr(lastPrinted, notesCol)}`, landscape: true, fitToWidth: 1, fitToHeight: 0, titlesRow: "2:6" });
+  b.note(lastPrinted, 2, `Note: counts are COUNTIFS over the raw ${ca.term.toLowerCase()} list by start and end date; a ${ca.term.toLowerCase()} is active from its start date until the day before its end date, the day its loss is booked. Churn = losses ÷ average ${ca.term.toLowerCase()}s. The dollar roll-forward compares each ${ca.term.toLowerCase()}'s revenue with the prior fiscal year (helper block below the print area); GDR excludes upsell, NDR includes it.${withStrip ? " Strip months end at the as-of date." : ""}`);
+  // With a strip, the summary block and the strip print as separate ranges with the labels repeated, so neither shrinks under the 7 pt floor (C37).
+  b.print({
+    // The strip range carries the count block only: the dollar block and the median box have no monthly figures to print beside it.
+    areas: withStrip ? [`B2:${addr(lastPrinted, lastSummary)}`, `${addr(2, stripFirst)}:${addr(b.r("churn"), stripLast)}`] : [`B2:${addr(lastPrinted, notesCol)}`],
+    landscape: true,
+    fitToWidth: 1,
+    fitToHeight: 0,
+    titlesRow: "2:6",
+    titlesCol: withStrip ? "B:B" : undefined,
+  });
   b.furniture(ctx.codeName, ctx.asOfLabel);
   b.freeze(7, 3);
+  // The dollar roll-forward runs on fiscal-year revenue, so its latest column is the LTM only when the LTM closes a fiscal year; otherwise the names are left out rather than pointing at the wrong window.
   const latestFyIdx = years.length - 1;
-  b.defineName("GDR_LTM", `$${colLetter(3 + latestFyIdx)}$${b.r("gdr")}`);
-  b.defineName("NDR_LTM", `$${colLetter(3 + latestFyIdx)}$${b.r("ndr")}`);
+  if (model.granularity === "annual" || ltmEqualsFiscalYear(model.assumptions!.asOfMonth, model.fiscalYearEndMonth)) {
+    b.defineName("GDR_LTM", `$${colLetter(3 + latestFyIdx)}$${b.r("gdr")}`);
+    b.defineName("NDR_LTM", `$${colLetter(3 + latestFyIdx)}$${b.r("ndr")}`);
+  }
   return b;
 }
 
@@ -448,17 +495,17 @@ export function planConcentration(ctx: TabContext): SheetBuilder | undefined {
   const ca = model.customers;
   if (!ca) return undefined;
   const b = new SheetBuilder("concentration", SHEET.concentration);
-  const years = model.columns.filter((c) => c.ref.kind === "fiscal_year" && !c.projected).map((c) => c.fiscalYear!);
   const headers = ["Code", "Revenue ($)", "% of Total", "Cumulative %", "Tenure (Yrs.)", "Type"];
   const widths = [WIDTH.label, 14, 11, 12, 12, 22];
   b.width(1, WIDTH.gutter);
   widths.forEach((w, i) => b.width(2 + i, w));
   b.spacerCol(8);
   b.width(9, WIDTH.notes);
-  b.anatomy({ subtitle: `${ca.term} Concentration: Top 20 over ${ca.period.label} ($)`, lastCol: 9, toggleCol: 7, masterToggle: ctx.masterToggle });
+  b.anatomy({ subtitle: `${ca.term} Concentration: Top 20, ${ca.period.label} ($)`, lastCol: 9, toggleCol: 7, masterToggle: ctx.masterToggle });
   b.text(3, 6, "Print", { align: { horizontal: "right" } });
   b.tier1(5, [{ from: 2, to: 7, label: `Top 20 ${ca.term}s (${ca.period.label})` }, { from: 9, to: 9, label: "Notes" }]);
-  headers.forEach((h, i) => b.cell(6, 2 + i, { style: "header", v: h, role: "text", align: { horizontal: i === 0 || i === 5 ? "left" : "center" } }));
+  // Type is indented off the Tenure figures beside it, so the two never butt together.
+  headers.forEach((h, i) => b.cell(6, 2 + i, { style: "header", v: h, role: "text", align: { horizontal: i === 0 || i === 5 ? "left" : "center", indent: i === 5 ? 1 : undefined } }));
   b.cell(6, 9, { style: "header", v: null, role: "text" });
   const fyCol = (y: number) => fyColOf(ctx.customerYears, y);
   const shareRef = (y: number) => `${S("customers")}$${colLetter(3 + ctx.customerYears.indexOf(y))}$${rowOf("customers", "shareRow")}`;
@@ -475,7 +522,7 @@ export function planConcentration(ctx: TabContext): SheetBuilder | undefined {
     b.formula(rr, 5, i === 0 ? addr(rr, 4) : `${addr(rr - 1, 5)}+${addr(rr, 4)}`, { style: "ratio", fmt: FMT.pct1, expect: row.cumulativePct, label: `cum ${row.id}` });
     const start = `INDEX(${START()},MATCH(${addr(rr, 2)},${CODE()},0))`;
     b.formula(rr, 6, `IF(N(${start})=0,"n.a.",MAX(0,(${ASOF}-${start})/365.25))`, { style: "line", fmt: FMT.oneDp, expect: row.since === undefined ? "n.a." : row.tenureYears, label: `tenure ${row.id}` });
-    b.formula(rr, 7, `INDEX(${TYPE()},MATCH(${addr(rr, 2)},${CODE()},0))`, { role: "link", expect: row.type ?? "", label: `type ${row.id}` });
+    b.formula(rr, 7, `INDEX(${TYPE()},MATCH(${addr(rr, 2)},${CODE()},0))`, { role: "link", expect: row.type ?? "", label: `type ${row.id}`, align: { horizontal: "left", indent: 1 } });
   });
   for (let i = top.length; i < 20; i++) b.na(first + i, 3, "", { style: "line" });
   r = first + 20;
@@ -535,7 +582,7 @@ export function planCohorts(ctx: TabContext): SheetBuilder | undefined {
   b.width(2, WIDTH.label);
   b.width(3, 11);
   b.widths(4, 3 + n, WIDTH.value);
-  b.anatomy({ subtitle: `${ca.term} cohorts by start fiscal year (#, $)`, lastCol, toggleCol: lastCol, masterToggle: ctx.masterToggle });
+  b.anatomy({ subtitle: `${ca.term} Cohorts by Start Fiscal Year (#, $)`, lastCol, toggleCol: lastCol, masterToggle: ctx.masterToggle });
   b.text(3, lastCol - 1, "Print", { align: { horizontal: "right" } });
   b.tier1(5, [{ from: 2, to: 3, label: "Cohort" }, { from: 4, to: 3 + n, label: "Active at fiscal year-end (#)" }]);
   b.cell(6, 2, { style: "header", v: "Start (fiscal year)", role: "text", align: { horizontal: "left" } });
@@ -563,7 +610,7 @@ export function planCohorts(ctx: TabContext): SheetBuilder | undefined {
       if (y.fiscalYear! < c.cohort) return void b.na(r, 4 + i, "", { style: "line" });
       const end = fyEnd(y);
       const within = `${bounds(r, !!c.pre)},${START()},"<="&${end}`;
-      b.formula(r, 4 + i, `COUNTIFS(${within},${END()},"")+COUNTIFS(${within},${END()},">="&${end})`, { style: "line", fmt: FMT.body, expect: retainedCell(c, i) ?? 0, label: `cohort ${c.label} ${y.label}` });
+      b.formula(r, 4 + i, `COUNTIFS(${within},${END()},"")+COUNTIFS(${within},${END()},">"&${end})`, { style: "line", fmt: FMT.body, expect: retainedCell(c, i) ?? 0, label: `cohort ${c.label} ${y.label}` });
     });
     r++;
   }
@@ -575,7 +622,7 @@ export function planCohorts(ctx: TabContext): SheetBuilder | undefined {
   b.text(r, 2, `Check: active ${ca.term.toLowerCase()}s less cohorts`, { style: "check" });
   years.forEach((y, i) => {
     const end = fyEnd(y);
-    b.formula(r, 4 + i, `COUNTIFS(${START()},"<="&${end},${END()},"")+COUNTIFS(${START()},"<="&${end},${END()},">="&${end})-${addr(countTotal, 4 + i)}`, { style: "check", fmt: FMT.check, expect: 0, tol: 1e-6, label: `cohort count tie ${y.label}` });
+    b.formula(r, 4 + i, `COUNTIFS(${START()},"<="&${end},${END()},"")+COUNTIFS(${START()},"<="&${end},${END()},">"&${end})-${addr(countTotal, 4 + i)}`, { style: "check", fmt: FMT.check, expect: 0, tol: 1e-6, label: `cohort count tie ${y.label}` });
   });
   b.checkCf(r, 4, 3 + n);
   r += 2;

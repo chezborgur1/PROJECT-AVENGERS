@@ -29,13 +29,14 @@ function orgRoles(ctx: CimContext): number {
 function suppliers(ctx: CimContext, w: number): Block | undefined {
   const i = ctx.intake;
   if (!i) return undefined;
+  // Terms and dates fold into the role, so no column prints mostly blank (spec 14).
   const rows: TextCell[][] = [
-    ...i.suppliers.map((s) => [s.name, s.supplies, s.terms ?? ""]),
-    ...i.company.certifications.map((c) => [c.name, "Certification", c.since ? `Since ${c.since}` : ""]),
-    ...i.company.licenses.map((l) => [l.name, "License", ""]),
+    ...i.suppliers.map((s) => [s.name, s.terms ? `${s.supplies}; ${s.terms}` : s.supplies]),
+    ...i.company.certifications.map((c) => [c.name, c.since ? `Certification, since ${c.since}` : "Certification"]),
+    ...i.company.licenses.map((l) => [l.name, "License"]),
   ];
   if (!rows.length) return undefined;
-  return { kind: "textTable", header: { title: "Suppliers, certifications and licenses", units: "(per management)" }, spec: { colW: [1.9, r3((w - 1.9) * 0.55), r3(w - 1.9 - r3((w - 1.9) * 0.55))], head: ["Name", "Role", "Terms or since"], rows, fontSize: 8.5 } };
+  return { kind: "textTable", header: { title: "Suppliers, certifications and licenses", units: "(per management)" }, spec: { colW: [1.9, r3(w - 1.9)], head: ["Name", "Role"], rows, fontSize: 8.5 } };
 }
 
 const s5_1: PageModule = {

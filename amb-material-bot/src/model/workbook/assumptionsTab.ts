@@ -1,13 +1,13 @@
 // The Assumptions tab (guide 5.1 row 4): every input, blue, each with a
 // Source column; the derived dates and the latest fiscal year every period
 // tab reads; the projection drivers by year; valuation multiples; deal
-// terms; sensitivity settings; and, in annual-only mode, the Pro Forma
+// terms; sensitivity settings; and, in Main Street mode, the Pro Forma
 // Low / Mid / High scenario block.
 
 import { monthEndDate, type KpiSeries } from "../../domain/financials.ts";
 import type { Assumptions } from "../assumptions.ts";
 import { excelSerial, firstDayOf, latestFullFiscalYear } from "../periods.ts";
-import { addr, colLetter, rowOf, SheetBuilder, type CellSpec } from "../sheet.ts";
+import { addr, colLetter, rowOf, SheetBuilder, wrappedLines, type CellSpec } from "../sheet.ts";
 import { FMT, WIDTH } from "../styles.ts";
 import type { ModelOutput } from "../types.ts";
 import { ASSUMPTION_COL, S, SHEET } from "./layout.ts";
@@ -15,6 +15,8 @@ import { ASSUMPTION_COL, S, SHEET } from "./layout.ts";
 const C = ASSUMPTION_COL;
 const SOURCE_COL = 9;
 const LAST_VALUE_COL = 7;
+/** Width of the scenario block's Low / Mid / High columns. */
+const SCENARIO_WIDTH = 16;
 
 export interface TabContext {
   model: ModelOutput;
@@ -25,7 +27,7 @@ export interface TabContext {
   masterToggle: string;
   /** Coded customers and employees for the helper blocks (from the dataset; empty when planning for verification only). */
   customers: { id: string; startDate?: string; endDate?: string; revenueByFiscalYear: Record<number, number> }[];
-  employees: { id: string; department: string; hireDate: string; terminationDate?: string; isOwner: boolean }[];
+  employees: { id: string; department: string; hireDate: string; terminationDate?: string; isOwner: boolean; fte: number }[];
   /** Fiscal-year revenue columns of Raw - Customers, in order (`customerYears`). */
   customerYears: number[];
   /** Operating metrics the sources state (members, rating, fleet), for the Summary's management-facts table. */
@@ -36,10 +38,11 @@ export function planAssumptions(ctx: TabContext): SheetBuilder {
   const { model, a } = ctx;
   const b = new SheetBuilder("assumptions", SHEET.assumptions);
   b.width(2, WIDTH.labelWide);
-  for (let c = C; c <= LAST_VALUE_COL; c++) b.width(c, 11);
+  // The scenario block's Low / Mid / High columns hold method names ("Latest year"), which need the width.
+  for (let c = C; c <= LAST_VALUE_COL; c++) b.width(c, model.scenarios && c < C + 3 ? SCENARIO_WIDTH : 11);
   b.spacerCol(8);
   b.width(SOURCE_COL, WIDTH.notes);
-  b.anatomy({ subtitle: "Assumptions and inputs ($ unless stated)", lastCol: SOURCE_COL, toggleCol: LAST_VALUE_COL, masterToggle: ctx.masterToggle });
+  b.anatomy({ subtitle: "Assumptions and Inputs ($ unless stated)", lastCol: SOURCE_COL, toggleCol: LAST_VALUE_COL, masterToggle: ctx.masterToggle });
   b.text(3, LAST_VALUE_COL - 1, "Print", { align: { horizontal: "right" } });
 
   b.tier1(5, [{ from: C, to: LAST_VALUE_COL, label: "Inputs" }, { from: SOURCE_COL, to: SOURCE_COL, label: "Source" }]);
@@ -58,7 +61,8 @@ export function planAssumptions(ctx: TabContext): SheetBuilder {
   const input = (key: string, label: string, v: number | string, fmt: string | undefined, source: string, extra: CellSpec = {}) => {
     b.row(key, r);
     b.text(r, 2, label, { align: { indent: 1 } });
-    b.cell(r, C, { v: v === "" ? null : v, role: "input", fmt, align: typeof v === "string" ? { horizontal: "right" } : undefined, ...extra });
+    // A short text input sits right like the figures; a longer one starts at the left edge and runs into the empty cells beside it rather than being cut by the label.
+    b.cell(r, C, { v: v === "" ? null : v, role: "input", fmt, align: typeof v === "string" ? { horizontal: v.length > 11 ? "left" : "right" } : undefined, ...extra });
     b.note(r, SOURCE_COL, source);
     r++;
   };
@@ -164,10 +168,15 @@ export function planAssumptions(ctx: TabContext): SheetBuilder {
   input("escrowMonths", "Indemnity escrow held (months)", d.escrowMonths, FMT.term, "LOI12 §7(h): 15 months");
   input("equityInjectionPct", "Buyer equity injection, % of uses", d.equityInjectionPct, FMT.pct, "SBA 7(a) minimum 10%; SUN used 15%");
   input("loanTermYears", "Senior / SBA loan term (years)", d.loanTermYears, FMT.term, "SBA 7(a) business acquisition: 10 years");
-  input("loanRate", "Senior / SBA loan interest rate", d.loanRate, FMT.rate, "Lender quote pending; placeholder");
+  // No file in AMB's library gives SBA terms (guide 5.5, Q16): the rate is a placeholder in Pending red until a lender quotes.
+  input("loanRate", "Senior / SBA loan interest rate", d.loanRate, FMT.rate, "Placeholder until a lender quotes (Q16); replace before relying on DSCR", { role: "pending" });
   input("transactionFees", "Buyer transaction fees ($)", d.transactionFees, FMT.currency, "No AMB default; buyer one-time costs on a $3.0M deal run $110-300K (BL)");
   input("reconciliationHoldbackMonths", "Reconciliation holdback (months of payroll)", d.reconciliationHoldbackMonths, FMT.oneDp, "ICP5: one month of payroll on an asset purchase; zero on an equity purchase");
   input("deferredCapex", "Deferred capex / renovation ($)", d.deferredCapex, FMT.currency, "Enter known deferred maintenance; adds to Total Investment");
+  input("trueUpSettlement", "True-up settlement", d.trueUpSettlement, undefined, "Cash / Stock / Share-adjusting escrow (guide 5.6); Stock when buyer stock is meant to be tax-deferred");
+  input("stockTaxDeferred", "Stock consideration intended tax-deferred? (Y/N)", d.stockTaxDeferred ? "Y" : "N", undefined, "Y turns on the boot flag on Deal Structure (guide 5.5)");
+  input("deferredRevenueTreatment", "Deferred revenue and customer deposits", d.deferredRevenueTreatment, undefined, "AMB default: NWC (operating liability); Debt-like is an override that needs a note (guide 5.6)");
+  input("premisesArrangement", "Premises arrangement", d.premisesArrangement || "[Confirm]", undefined, d.premisesArrangement ? "Intake: locations" : "[Confirm: leased from a third party or owned by the seller] (guide 5.5 Real estate block)", d.premisesArrangement ? {} : { role: "pending" });
   input("loiDate", "LOI date", "", FMT.date, "Enter when the LOI is signed (check C36)");
   input("exclusivityDays", "Exclusivity (days)", 90, FMT.term, "LOI12 Agreement §1: 90 days plus one automatic 30-day extension");
   input("signingDate", "Target signing date", "", FMT.date, "LOI + 9-11 weeks (OUTL)");
@@ -185,9 +194,11 @@ export function planAssumptions(ctx: TabContext): SheetBuilder {
   input("gradientBands", "Gradient bands (#)", s.gradientBands, FMT.term, "Heat-map bands above the hurdle (guide 5.5)");
   input("dscrHurdle", "DSCR hurdle (x)", s.dscrHurdle, FMT.multiple2, "SBA lenders underwrite to 1.25x");
 
-  if (a.sourceGranularity === "annual") {
+  if (ctx.model.scenarios) {
+    const annualOnly = a.sourceGranularity === "annual";
+    const base = annualOnly ? `FY${ctx.model.columns.filter((c) => c.ref.kind === "fiscal_year" && !c.projected).at(-1)!.fiscalYear}` : ctx.model.valuationDetail!.period.label;
     spacer();
-    section("Pro forma scenarios (annual-only mode)");
+    section(`Pro forma scenarios (Main Street mode; base ${base})`);
     b.row("scenarioHeader", r);
     b.text(r, 2, "Driver", { font: { bold: true } });
     ["Low", "Mid", "High"].forEach((h, i) => b.text(r, C + i, h, { font: { bold: true }, align: { horizontal: "right" } }));
@@ -209,14 +220,16 @@ export function planAssumptions(ctx: TabContext): SheetBuilder {
     for (const m of methods) {
       b.row(`scenario_${m.key}`, r);
       b.text(r, 2, m.label, { align: { indent: 1 } });
-      [sc.low, sc.mid, sc.high].forEach((x, i) => b.cell(r, C + i, { v: x.methods[m.key], role: "input", align: { horizontal: "right" } }));
-      b.note(r, SOURCE_COL, "3-year average / Latest year / % of sales, 3-year blended (guide 5.5)");
+      // The longest method name takes two lines rather than being cut at the column edge.
+      [sc.low, sc.mid, sc.high].forEach((x, i) => b.cell(r, C + i, { v: x.methods[m.key], role: "input", align: { horizontal: "right", wrap: wrappedLines(x.methods[m.key], SCENARIO_WIDTH) > 1 || undefined } }));
+      b.note(r, SOURCE_COL, `3-year average / Latest year / % of sales, 3-year blended (guide 5.5)${annualOnly ? "" : `; Latest year reads ${base}`}`);
       r++;
     }
     b.row("scenarioMultiple", r);
     b.text(r, 2, "Valuation multiple (x SDE)", { align: { indent: 1 } });
-    [sc.low, sc.mid, sc.high].forEach((x, i) => b.num(r, C + i, x.multiple, { fmt: FMT.multiple }));
-    b.note(r, SOURCE_COL, a.multiplesSource);
+    // One input per multiple: the block reads the valuation multiples above rather than holding a second copy that could disagree.
+    a.sdeMultiples.forEach((v, i) => b.formula(r, C + i, addr(b.r("sdeMultiples"), C + i), { fmt: FMT.multiple, role: "inSheet", expect: v, label: `scenario multiple ${i}` }));
+    b.note(r, SOURCE_COL, "Valuation multiples above");
     r++;
   }
 
@@ -230,6 +243,9 @@ export function planAssumptions(ctx: TabContext): SheetBuilder {
   b.defineName("FYEMonth", `$C$${rowOf("assumptions", "fyeMonth")}`);
   b.defineName("MainStreetMode", `$C$${rowOf("assumptions", "mainStreetMode")}`);
   b.defineName("DealForm", `$C$${rowOf("assumptions", "dealForm")}`);
+  b.defineName("LOIDate", `$C$${rowOf("assumptions", "loiDate")}`);
+  b.defineName("SigningDate", `$C$${rowOf("assumptions", "signingDate")}`);
+  b.defineName("EffectiveDate", `$C$${rowOf("assumptions", "effectiveDate")}`);
   return b;
 }
 

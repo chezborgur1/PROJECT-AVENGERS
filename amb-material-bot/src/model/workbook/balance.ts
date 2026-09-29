@@ -5,13 +5,15 @@
 // operating deposits on the raw bank tab.
 
 import { BS_DETAIL_LINES, addMonths, monthRange, type BsCategory, type BsDetailLine, type FinancialDataset, type MonthKey } from "../../domain/financials.ts";
+import { bsDetailLine } from "../../domain/chartOfAccounts.ts";
 import { fiscalYearEndKey } from "../periods.ts";
 import { addr, colLetter, rowOf, SheetBuilder } from "../sheet.ts";
-import { FMT, WIDTH } from "../styles.ts";
+import { COLOR, FMT, WIDTH } from "../styles.ts";
 import type { ModelOutput, NwcLines } from "../types.ts";
-import { type TabContext } from "./assumptionsTab.ts";
-import { DATABOOK_COL, MONTH_START } from "./data.ts";
-import { gridMonths, S, SHEET, serialOfMonthEnd, serialOfMonthStart } from "./layout.ts";
+import { isCreditCard, isCustomerMoney } from "../nwc.ts";
+import { A, type TabContext } from "./assumptionsTab.ts";
+import { DATABOOK_COL, MONTH_START, monthOffset } from "./data.ts";
+import { ASOF, gridMonths, S, SHEET, serialOfMonthEnd, serialOfMonthStart } from "./layout.ts";
 
 const K = 1000;
 
@@ -25,6 +27,11 @@ export function bsColumn(dates: MonthKey[], m: MonthKey): number {
   const i = dates.indexOf(m);
   if (i < 0) throw new Error(`The Balance Sheet tab has no column for ${m}`);
   return 3 + i;
+}
+
+/** Databook balance-sheet accounts the data layer classes into a detail line (the rule merge.ts applies line by line). */
+export function detailAccounts(model: ModelOutput, d: BsDetailLine): string[] {
+  return (model.databook?.bs ?? []).filter((r) => bsDetailLine(r.account, r.section ?? "", r.category) === d).map((r) => r.account);
 }
 
 /** Category totals per statement date from the Databook rows (dollars). */
@@ -130,17 +137,20 @@ export function planBalanceSheet(ctx: TabContext): SheetBuilder | undefined {
     if (spec.kind === "check") b.checkCf(rr, 3, lastValue);
   }
   b.section(b.r("sec_detail"), "Detail within the categories above ($000s)", spans);
+  const dbAccount = dbRange(DATABOOK_COL.account);
   for (const d of BS_DETAIL_LINES) {
     const rr = b.r(`detail_${d}`);
     b.text(rr, 2, DETAIL_LABELS[d], { style: "line" });
+    // Each carve-out is the Databook accounts the data layer classes into the line (bsDetailLine), summed at the date.
+    const accounts = detailAccounts(model, d);
     dates.forEach((m, i) => {
       const p = model.nwc?.periods.find((x) => x.month === m);
       const v = p?.detail?.[d];
-      if (v === undefined) b.na(rr, 3 + i, "n.a.", { style: "line" });
-      else b.num(rr, 3 + i, v / K, { style: "line", fmt: FMT.body });
+      if (v === undefined || !accounts.length) b.na(rr, 3 + i, "n.a.", { style: "na" });
+      else b.formula(rr, 3 + i, `(${accounts.map((a) => `SUMIFS(${dbRange(DATABOOK_COL.periodStart + i)},${dbAccount},"${a.replace(/"/g, '""')}")`).join("+")})/${K}`, { style: "line", fmt: FMT.body, expect: v / K, label: `detail ${d} ${m}` });
     });
   }
-  b.note(lastPrinted, 2, "Note: categories are SUMIFS of the Databook balance-sheet accounts at each statement date. Detail lines are the data layer's carve-outs and feed the NWC tab; a missing line prints n.a., never zero. The check row must equal zero.");
+  b.note(lastPrinted, 2, "Note: categories are SUMIFS of the Databook balance-sheet accounts at each statement date. Detail lines sum the Databook accounts the data layer classes into each line and feed the NWC tab; a line the source does not carry prints n.a., never zero. The check row must equal zero.");
   b.print({ area: `B2:${addr(lastPrinted, notesCol)}`, landscape: n > 8, fitToWidth: 1, fitToHeight: 0, titlesRow: "5:6" });
   b.furniture(ctx.codeName, ctx.asOfLabel);
   b.freeze(7, 3);
@@ -190,14 +200,15 @@ export function planNwc(ctx: TabContext): SheetBuilder | undefined {
   b.width(2, WIDTH.label);
   b.widths(3, 3 + n - 1, WIDTH.value);
   b.spacerCol(3 + n);
-  b.widths(pegCol, vsCol, 11);
+  b.widths(pegCol, vsCol - 1, 11);
+  b.width(vsCol, 13);
   b.spacerCol(vsCol + 1);
   if (transfersCol) {
     b.width(transfersCol, 20);
     b.spacerCol(transfersCol + 1);
   }
   b.width(notesCol, WIDTH.notes);
-  b.anatomy({ subtitle: `Net Working Capital ($000s; ${asset ? "asset purchase" : "equity purchase"})`, lastCol: notesCol, toggleCol: vsCol, masterToggle: ctx.masterToggle });
+  b.anatomy({ subtitle: `Net Working Capital, ${asset ? "Asset Purchase" : "Equity Purchase"} ($000s)`, lastCol: notesCol, toggleCol: vsCol, masterToggle: ctx.masterToggle });
   b.text(3, vsCol - 1, "Print", { align: { horizontal: "right" } });
   const groups = [
     { from: 3, to: 3 + n - 1, label: "At statement date" },
@@ -331,7 +342,7 @@ export function planNwc(ctx: TabContext): SheetBuilder | undefined {
           expect = l.reportedNwc / K;
           break;
         case "adjustments":
-          f = `${num(detail(m, "related_party_balances"))}+${num(detail(m, "accrued_interest"))}+${num(detail(m, "income_tax_payable"))}-${num(detail(m, "related_party_receivable"))}`;
+          f = `${num(detail(m, "related_party_balances"))}+${num(detail(m, "accrued_interest"))}+${num(detail(m, "income_tax_payable"))}-${num(detail(m, "related_party_receivable"))}+IF(${A("deferredRevenueTreatment")}="Debt-like",${num(at("deferredRevenue"))}+${num(at("customerDeposits"))},0)`;
           expect = l.adjustments / K;
           break;
         case "adjustedNwc":
@@ -482,11 +493,21 @@ export function planDebtLike(ctx: TabContext): SheetBuilder | undefined {
   let r = 8;
   const first = r;
   const treatment = { debt: "Debt", debt_like: "Debt-like", nwc: "NWC" } as const;
+  // Each balance is the Databook account at the latest statement date, never a typed copy of it (check C18).
+  const dates = bsDates(model);
+  const at = dates.indexOf(dl.asOf.slice(0, 7));
+  const dbRange = (c: number) => `${S("databook")}$${colLetter(c)}$${rowOf("databook", "bsFirst")}:$${colLetter(c)}$${rowOf("databook", "bsLast")}`;
   for (const item of dl.items) {
     b.text(r, 2, item.item, { style: "lineFirst" });
-    b.num(r, 3, item.balance / K, { fmt: FMT.body });
-    b.cell(r, 4, { v: treatment[item.treatment], role: "input", align: { horizontal: "center" } });
-    b.text(r, 5, "Balance sheet");
+    if (at >= 0 && item.accounts.length) {
+      const f = `(${item.accounts.map((a) => `SUMIFS(${dbRange(DATABOOK_COL.periodStart + at)},${dbRange(DATABOOK_COL.account)},"${a.replace(/"/g, '""')}")`).join("+")})/${K}`;
+      b.formula(r, 3, f, { fmt: FMT.body, expect: item.balance / K, label: `balance ${item.item}` });
+    } else b.num(r, 3, item.balance / K, { fmt: FMT.body });
+    // Customer money follows the Assumptions switch, so NWC and this tab never both carry it (C19).
+    if (isCustomerMoney(item.item) && (item.treatment === "nwc" || model.nwc?.deferredRevenueTreatment === "debt_like")) {
+      b.formula(r, 4, `IF(${A("deferredRevenueTreatment")}="Debt-like","Debt-like","NWC")`, { role: "link", expect: treatment[item.treatment], label: `treatment ${item.item}`, align: { horizontal: "center" } });
+    } else b.cell(r, 4, { v: treatment[item.treatment], role: "input", align: { horizontal: "center" } });
+    b.text(r, 5, `Balance sheet, ${item.accounts.join("; ") || "per the data layer"}`, { align: { wrap: true, vertical: "top" } });
     b.cell(r, 6, { v: item.status.replace(/^\w/, (c) => c.toUpperCase()), role: "input", align: { horizontal: "center" } });
     const letter = item.payoffLetter && item.payoffLetter !== "n/a" ? item.payoffLetter.replace(/^\w/, (c) => c.toUpperCase()) : "n.a.";
     b.text(r, 7, asset ? letter : "n.a.", { align: { horizontal: "center" } });
@@ -505,6 +526,12 @@ export function planDebtLike(ctx: TabContext): SheetBuilder | undefined {
   total("fundedDebt", "Funded debt (repaid at or before closing)", "Debt", dl.fundedDebt, "keyTotal");
   total("debtLike", "Debt-like items (deducted from enterprise value)", "Debt-like", dl.debtLike, "keyTotal");
   total("inNwc", "Memo: balances kept in NWC (AMB default)", "NWC", dl.inNwc, "line");
+  // Credit cards are funded debt but unsecured, so Deal Structure pays them at close on their own line, apart from the liens.
+  const cards = dl.items.filter((i) => i.treatment === "debt" && isCreditCard(i.item)).reduce((s, i) => s + i.balance, 0);
+  b.row("creditCards", r);
+  b.text(r, 2, "Memo: credit card balances within funded debt (unsecured)", { style: "line" });
+  b.formula(r, 3, `SUMIFS(${addr(first, 3, { row: true, col: true })}:${addr(last, 3, { row: true, col: true })},${addr(first, 4, { row: true, col: true })}:${addr(last, 4, { row: true, col: true })},"Debt",${addr(first, 2, { row: true, col: true })}:${addr(last, 2, { row: true, col: true })},"*redit card*")`, { style: "line", fmt: FMT.currency, expect: cards / K, label: "credit cards" });
+  r++;
   r++;
   b.note(r, 2, `Note: deferred revenue and customer deposits stay in NWC under the AMB default and appear here only as a memo (check C19). ${asset ? "On an asset purchase every debt item is retained by the Seller and settled from proceeds at close with a written payoff letter." : "Cash-free, debt-free: every item is repaid at or before closing; payoff letters and lien releases at close."}`);
   b.print({ area: `B2:${addr(r, lastCol)}`, landscape: true, fitToWidth: 1, fitToHeight: 0, titlesRow: "5:6" });
@@ -528,7 +555,7 @@ export function planCashFlow(ctx: TabContext): SheetBuilder | undefined {
   b.widths(3, lastValue, WIDTH.value);
   b.spacerCol(lastValue + 1);
   b.width(notesCol, WIDTH.notes);
-  b.anatomy({ subtitle: "Historical Cash Flow, indirect method ($000s)", lastCol: notesCol, toggleCol: lastValue, masterToggle: ctx.masterToggle });
+  b.anatomy({ subtitle: "Historical Cash Flow, Indirect Method ($000s)", lastCol: notesCol, toggleCol: lastValue, masterToggle: ctx.masterToggle });
   b.text(3, lastValue - 1, "Print", { align: { horizontal: "right" } });
   b.tier1(5, [{ from: 3, to: lastValue, label: "Full Year" }, { from: notesCol, to: notesCol, label: "Notes" }]);
   b.tier2(6, { from: 3, to: lastValue }, [], "Cash Flow");
@@ -618,46 +645,54 @@ export function planProofOfCash(ctx: TabContext, ds: FinancialDataset | undefine
   const months = gridMonths(model);
   if (!months.length || !model.modules.built.includes("Proof of Cash")) return undefined;
   const deposits = ds?.depositsByMonth ?? {};
-  const bankMonths = Object.keys(deposits).filter((m) => months.includes(m)).sort();
+  const statementMonths = Object.keys(deposits).filter((m) => months.includes(m)).sort();
+  // Every month from the first statement to the last, so a missing statement shows as its own row rather than vanishing.
+  const bankMonths = statementMonths.length ? monthRange(statementMonths[0]!, statementMonths.at(-1)!) : [];
   const b = new SheetBuilder("proofOfCash", SHEET.proofOfCash);
   b.width(1, WIDTH.gutter);
   b.width(2, 16);
   [14, 14, 12, 11].forEach((w, i) => b.width(3 + i, w));
   b.spacerCol(7);
   b.width(8, WIDTH.notes);
-  b.anatomy({ subtitle: "Proof of Cash: P&L revenue vs. bank deposits ($000s)", lastCol: 8, toggleCol: 6, masterToggle: ctx.masterToggle });
+  b.anatomy({ subtitle: "Proof of Cash: P&L Revenue vs. Bank Deposits ($000s)", lastCol: 8, toggleCol: 6, masterToggle: ctx.masterToggle });
   b.text(3, 5, "Print", { align: { horizontal: "right" } });
   b.tier1(5, [{ from: 2, to: 6, label: "Proof of cash" }, { from: 8, to: 8, label: "Notes" }]);
   ["Month", "P&L Revenue", "Bank Deposits", "Variance ($)", "Variance (%)"].forEach((h, i) => b.cell(6, 2 + i, { style: "header", v: h, role: "text", align: { horizontal: i === 0 ? "left" : "center" } }));
-  b.cell(6, 8, { style: "header", v: null, role: "text" });
+  b.cell(6, 8, { style: "header", v: "Flag (above 5%)", role: "text", align: { horizontal: "left" } });
   const monthlyRow = `${S("monthly")}$${colLetter(MONTH_START)}$${rowOf("monthly", "revenue")}:$${colLetter(MONTH_START + months.length - 1)}$${rowOf("monthly", "revenue")}`;
   const monthlyHeader = `${S("monthly")}$${colLetter(MONTH_START)}$6:$${colLetter(MONTH_START + months.length - 1)}$6`;
   let r = 8;
   const first = r;
-  // The month list is typed from the bank data (blue), so a missing statement month shows as a gap.
-  for (const m of bankMonths) {
+  // Months derive from AsOfDate like every period label (guide 5.2): the first from its offset, each next one from the row above.
+  const flagText = (pct: number | string) => (typeof pct !== "number" ? "No bank statement for the month" : Math.abs(pct) > 0.05 ? "Explain: deposits differ from revenue by more than 5%" : "");
+  bankMonths.forEach((m, i) => {
     const rev = model.monthly!.series.revenue![months.indexOf(m)]!;
-    const dep = deposits[m]!.amount;
-    b.cell(r, 2, { v: serialOfMonthStart(m), role: "input", fmt: FMT.monthHeader, align: { horizontal: "left" } });
+    const dep = deposits[m]?.amount;
+    const monthF = i === 0 ? `EOMONTH(${ASOF},${monthOffset(model.assumptions!.asOfMonth, m) - 1})+1` : `EOMONTH(${addr(r - 1, 2)},0)+1`;
+    b.formula(r, 2, monthF, { fmt: FMT.monthHeader, expect: serialOfMonthStart(m), label: `month ${m}`, align: { horizontal: "left" } });
     b.formula(r, 3, `INDEX(${monthlyRow},MATCH(${addr(r, 2)},${monthlyHeader},0))`, { style: "line", fmt: FMT.body, expect: rev / K, label: `revenue ${m}` });
-    b.formula(r, 4, `INDEX(${S("rawBank")}$B:$B,MATCH(${addr(r, 2)},${S("rawBank")}$A:$A,0))/${K}`, { style: "line", fmt: FMT.body, expect: dep / K, label: `deposits ${m}` });
-    b.formula(r, 5, `${addr(r, 4)}-${addr(r, 3)}`, { style: "line", fmt: FMT.body, expect: (dep - rev) / K, label: `variance ${m}` });
-    b.formula(r, 6, `IFERROR(${addr(r, 5)}/${addr(r, 3)},"n.a.")`, { style: "ratio", fmt: FMT.pct1, expect: rev ? (dep - rev) / rev : "n.a.", label: `variance pct ${m}` });
+    b.formula(r, 4, `IFERROR(INDEX(${S("rawBank")}$B:$B,MATCH(${addr(r, 2)},${S("rawBank")}$A:$A,0))/${K},"n.a.")`, { style: "line", fmt: FMT.body, expect: dep === undefined ? "n.a." : dep / K, label: `deposits ${m}` });
+    b.formula(r, 5, `IFERROR(${addr(r, 4)}-${addr(r, 3)},"n.a.")`, { style: "line", fmt: FMT.body, expect: dep === undefined ? "n.a." : (dep - rev) / K, label: `variance ${m}` });
+    const pct = dep === undefined || !rev ? "n.a." : (dep - rev) / rev;
+    b.formula(r, 6, `IFERROR(${addr(r, 5)}/${addr(r, 3)},"n.a.")`, { style: "ratio", fmt: FMT.pct1, expect: pct, label: `variance pct ${m}` });
+    b.formula(r, 8, `IF(ISNUMBER(${addr(r, 6)}),IF(ABS(${addr(r, 6)})>0.05,"Explain: deposits differ from revenue by more than 5%",""),"No bank statement for the month")`, { role: "text", font: { color: COLOR.pending }, expect: flagText(pct), label: `flag ${m}`, align: { horizontal: "left" } });
     r++;
-  }
+  });
   const last = r - 1;
-  const totalRev = bankMonths.reduce((s, m) => s + model.monthly!.series.revenue![months.indexOf(m)]!, 0);
-  const totalDep = bankMonths.reduce((s, m) => s + deposits[m]!.amount, 0);
+  // Totals over the months that have a statement, like C14.
+  const totalRev = statementMonths.reduce((s, m) => s + model.monthly!.series.revenue![months.indexOf(m)]!, 0);
+  const totalDep = statementMonths.reduce((s, m) => s + deposits[m]!.amount, 0);
   b.text(r, 2, "Total", { style: "keyTotal" });
   b.keyTotalBox([r, r], [[3, 6]]);
-  b.formula(r, 3, `SUM(${addr(first, 3)}:${addr(last, 3)})`, { style: "keyTotal", fmt: FMT.currency, expect: totalRev / K, label: "total revenue" });
+  b.formula(r, 3, `SUMIFS(${addr(first, 3)}:${addr(last, 3)},${addr(first, 4)}:${addr(last, 4)},"<>n.a.")`, { style: "keyTotal", fmt: FMT.currency, expect: totalRev / K, label: "total revenue" });
   b.formula(r, 4, `SUM(${addr(first, 4)}:${addr(last, 4)})`, { style: "keyTotal", fmt: FMT.currency, expect: totalDep / K, label: "total deposits" });
   b.formula(r, 5, `${addr(r, 4)}-${addr(r, 3)}`, { style: "keyTotal", fmt: FMT.currency, expect: (totalDep - totalRev) / K, label: "total variance" });
   b.formula(r, 6, `IFERROR(${addr(r, 5)}/${addr(r, 3)},"n.a.")`, { style: "margin", fmt: FMT.pct1, expect: totalRev ? (totalDep - totalRev) / totalRev : "n.a.", label: "total variance pct" });
   const totalRow = r;
   r += 2;
   b.row("variancePct", r);
-  b.text(r, 2, "Check: deposits less revenue, % (flag above 5%)", { style: "check" });
+  // The label runs on across the empty figure cells rather than wrapping in the 16-wide Month column.
+  b.text(r, 2, "Check: deposits less revenue, % (flag above 5%)", { style: "check", align: { wrap: false } });
   // The check sits under Variance (%) so its label has the width of the table.
   b.formula(r, 6, `IFERROR(${addr(totalRow, 5)}/${addr(totalRow, 3)},0)`, { style: "check", fmt: FMT.pct1, expect: totalRev ? (totalDep - totalRev) / totalRev : 0, tol: 1e-6, label: "C14" });
   b.cf({ ref: addr(r, 6), formula: `ABS(${addr(r, 6)})>0.05`, font: { color: "FF0000" } });

@@ -10,10 +10,10 @@
 import type { Adjustment, KpiSeries } from "../domain/financials.ts";
 import { monthLabel } from "../domain/financials.ts";
 import type { Ladder, PeriodColumn, PeriodValues } from "../model/types.ts";
-import { cagr, EN_DASH, fmtBps, fmtCount, fmtGrowth, fmtPct, fyRange, k, toK } from "../util/format.ts";
-import { accountLabel, fmtKpi, latestKpi } from "./brief.ts";
+import { cagr, describeDelta, EN_DASH, fmtBps, fmtCount, fmtGrowth, fmtMoney, fmtPct, fyRange, k, toK, wholeShares } from "../util/format.ts";
+import { accountLabel, fmtKpi, latestKpi, MIN_PAY_GROUP, revenueMix } from "./brief.ts";
 import type { CimContext } from "./context.ts";
-import { at, confirm, pageNo, pageRef, resolveCopy, tableColumns } from "./context.ts";
+import { at, confirm, fieldDepartments, pageNo, pageRef, population, resolveCopy, tableColumns } from "./context.ts";
 import type { Observation } from "./copy.ts";
 import type { Block, ExhibitHeader, NumCol, NumRow, NumTableSpec, ObsItem, TextCell, TextTableSpec } from "./design.ts";
 import { GAP, r3, spanW } from "./design.ts";
@@ -71,9 +71,9 @@ function fitCols(cols: NumCol[], max: number, droppable: string[] = []): NumCol[
     const i = out.findIndex((c) => c.head === head);
     if (i < 0) continue;
     out.splice(i, 1);
-    // A gap left with nothing after it, or two gaps in a row, goes too.
-    out = out.filter((c, j) => !(c.kind === "gap" && (j === out.length - 1 || out[j + 1]?.kind === "gap" || out[j + 1]?.kind === "obs")));
   }
+  // A gap separates two blocks of figures; one left with no figures after it would print a detached stub (spec 4.1 [F]).
+  out = out.filter((c, j) => c.kind !== "gap" || (out[j - 1]?.kind === "num" && out[j + 1]?.kind === "num"));
   if (widthOf(out) > max + 0.005) throw new Error(`Table does not fit ${max.toFixed(2)} in: ${widthOf(out).toFixed(2)} in`);
   return out;
 }
@@ -141,37 +141,58 @@ function headlineCols(ctx: CimContext): PeriodColumn[] {
   return ctx.ltm ? [...ctx.fy.slice(-2), ctx.ltm] : ctx.fy;
 }
 
+/**
+ * The Quick Stats growth column, headed by the growth it computes: LTM y/y
+ * when the LTM has its prior-year window, else the CAGR over three fiscal
+ * years, else the latest fiscal year on the one before. None when the table
+ * has no like-for-like pair (one fiscal year and an LTM without its prior
+ * year), since an LTM against an overlapping fiscal year is no growth rate.
+ */
+function headlineGrowth(ctx: CimContext): { head: string; of: (get: (p: PeriodValues) => number) => string } | undefined {
+  const fy = ctx.fy;
+  const span = fy.length - 1;
+  if (ctx.ltm) {
+    const [prior, ltm] = [ctx.prior, ctx.ltm];
+    return prior ? { head: "LTM y/y", of: (get) => fmtGrowth(get(at(ctx, prior)), get(at(ctx, ltm))) } : undefined;
+  }
+  if (span >= 2) return { head: "CAGR", of: (get) => pc(cagr(get(at(ctx, fy[0]!)), get(at(ctx, fy[span]!)), span)) };
+  if (span === 1) return { head: yoyHead(fy[1]!), of: (get) => fmtGrowth(get(at(ctx, fy[0]!)), get(at(ctx, fy[1]!))) };
+  return undefined;
+}
+
+const capFirst = (t: string): string => t.charAt(0).toUpperCase() + t.slice(1);
+
 /** Quick Stats, financial block (spec 8): three periods, CAGR or LTM y/y, Context, Obs. */
 export function quickStatsFinancial(ctx: CimContext, w: number): Block {
   const cols = headlineCols(ctx);
   const ps = cols.map((c) => at(ctx, c));
-  const first = ps[0]!;
   const last = ps[ps.length - 1]!;
-  const span = ctx.fy.length - 1;
-  const growthHead = ctx.ltm ? "LTM y/y" : span >= 2 ? "CAGR" : yoyHead(cols[cols.length - 1]!);
-  const g = (get: (p: PeriodValues) => number): string =>
-    ctx.ltm && ctx.prior ? fmtGrowth(get(at(ctx, ctx.prior)), get(last)) : span >= 2 ? pc(cagr(get(first), get(last), span)) : fmtGrowth(get(first), get(last));
+  const growth = headlineGrowth(ctx);
+  const g = (get: (p: PeriodValues) => number): string[] => (growth ? [growth.of(get)] : []);
+  const blank = growth ? [""] : [];
   const b = ctx.brief;
   const lastLabel = cols[cols.length - 1]!.label;
+  // The margin's move is taken over the same pair as the growth column, or from the first fiscal year shown.
+  const marginMove = ctx.ltm && b.has("adjMargin.deltaYoy") ? `${capFirst(b.t("adjMargin.deltaYoy"))} on ${ctx.prior!.label}` : b.has("adjMargin.delta") ? `${capFirst(b.t("adjMargin.delta"))} since ${ctx.fy[0]!.label}` : "";
   const rows: NumRow[] = [
-    { type: "line", key: "qs.revenue", label: "Revenue", vals: [...kv(ps, (p) => p.pnl.revenue, true), g((p) => p.pnl.revenue)], text: b.has("rev.yoy") ? `${b.value("rev.yoy")! < 0 ? "Down" : "Up"} ${b.t("rev.yoy")} in ${lastLabel}` : "" },
-    { type: "ratio", key: "qs.gm", label: "% gross margin", vals: [...pv(ps, (p) => p.pnl.grossProfit / p.pnl.revenue), ""], text: `Cost of revenue ${b.t("cogsPct.latest")} of revenue` },
-    { type: "line", key: "qs.reported", label: "Reported EBITDA", vals: [...kv(ps, (p) => p.ladder.reportedEbitda), g((p) => p.ladder.reportedEbitda)], text: "Before interest, taxes and D&A" },
-    { type: "ratio", key: "qs.repMargin", label: "% margin", vals: [...pv(ps, (p) => p.ladder.reportedMargin), ""], text: "" },
-    { type: "key", key: "qs.adj", label: "Adj. EBITDA", note: "2", vals: [...kv(ps, (p) => p.ladder.adjEbitda, true), g((p) => p.ladder.adjEbitda)], text: `${b.t("adjTotal.latest")} of adjustments (${pageRef("S7.1")})` },
-    { type: "ratio", key: "qs.adjMargin", label: "% margin", vals: [...pv(ps, (p) => p.ladder.adjMargin), ""], text: `${b.t("adjMargin.delta").replace(/^up/, "Up").replace(/^down/, "Down")} since ${ctx.fy[0]!.label}` },
+    { type: "line", key: "qs.revenue", label: "Revenue", vals: [...kv(ps, (p) => p.pnl.revenue, true), ...g((p) => p.pnl.revenue)], text: b.has("rev.yoy") ? `${b.value("rev.yoy")! < 0 ? "Down" : "Up"} ${b.t("rev.yoy")} in ${lastLabel}` : "" },
+    { type: "ratio", key: "qs.gm", label: "% gross margin", vals: [...pv(ps, (p) => p.pnl.grossProfit / p.pnl.revenue), ...blank], text: `Cost of revenue ${b.t("cogsPct.latest")} of revenue` },
+    { type: "line", key: "qs.reported", label: "Reported EBITDA", vals: [...kv(ps, (p) => p.ladder.reportedEbitda), ...g((p) => p.ladder.reportedEbitda)], text: "Before interest, taxes and D&A" },
+    { type: "ratio", key: "qs.repMargin", label: "% margin", vals: [...pv(ps, (p) => p.ladder.reportedMargin), ...blank], text: "" },
+    // Adj. EBITDA here is after the capital reserve [S3] (guide 5.4), below the pre-capex figure a buyer may compare on: the context says so.
+    { type: "key", key: "qs.adj", label: "Adj. EBITDA", note: "2", vals: [...kv(ps, (p) => p.ladder.adjEbitda, true), ...g((p) => p.ladder.adjEbitda)], text: last.ladder.capitalReserve ? `After ${b.t("s3.latest")} reserve [S3]` : `${b.t("adjTotal.latest")} of adjustments (${pageRef("S7.1")})` },
+    { type: "ratio", key: "qs.adjMargin", label: "% margin", vals: [...pv(ps, (p) => p.ladder.adjMargin), ...blank], text: marginMove },
   ];
   if (ctx.mainStreet) {
     rows.push(
-      { type: "line", key: "qs.sde", label: "Seller's discretionary earnings", note: "2", vals: [...kv(ps, (p) => p.ladder.sde), g((p) => p.ladder.sde)], text: "Before replacement pay and reserve" },
-      { type: "ratio", key: "qs.sdeMargin", label: "% margin", vals: [...pv(ps, (p) => p.ladder.sdeMargin), ""], text: "" },
+      { type: "line", key: "qs.sde", label: "Seller's discretionary earnings", note: "2", vals: [...kv(ps, (p) => p.ladder.sde), ...g((p) => p.ladder.sde)], text: "Before replacement pay and reserve" },
+      { type: "ratio", key: "qs.sdeMargin", label: "% margin", vals: [...pv(ps, (p) => p.ladder.sdeMargin), ...blank], text: "" },
     );
   }
   const base: NumCol[] = [
     { w: 2.0, kind: "label" },
     ...cols.map((c): NumCol => ({ w: 0.62, kind: "num", head: c.label, group: "Fiscal year" })),
-    { w: GAP, kind: "gap" },
-    { w: 0.62, kind: "num", head: growthHead, group: "Growth" },
+    ...(growth ? [{ w: GAP, kind: "gap" } as NumCol, { w: 0.62, kind: "num", head: growth.head, group: "Growth" } as NumCol] : []),
     { w: 2.25, kind: "text", head: "Context" },
     { w: 0.36, kind: "obs", head: "Obs." },
   ];
@@ -215,13 +236,14 @@ export function quickStatsOperating(ctx: CimContext, w: number): Block | undefin
   }
   const cu = ctx.out.customers;
   if (cu) {
-    rows.push({ type: "line", key: "op.largest", label: "Largest customer (% of revenue)", vals: [pc(cu.concentration.largestShare)], text: `Top 10 are ${b.t("cust.top10Share")}; ${b.t("cust.count")} active commercial accounts at ${monthLabel(ctx.latest.end)}` });
+    rows.push({ type: "line", key: "op.largest", label: `Largest ${cu.term.toLowerCase()} (% of revenue)`, vals: [pc(cu.concentration.largestShare)], text: `Top 10 are ${b.t("cust.top10Share")}; ${b.t("cust.count")} ${population(ctx)} active at ${monthLabel(ctx.latest.end)}` });
   }
   const hc = ctx.out.headcount;
   if (hc) {
     const parts = hc.byDepartment.map((d) => `${d.count} ${d.department.toLowerCase()}`);
     rows.push({ type: "line", key: "op.employees", label: "Employees excl. owner (#)", vals: [fmtCount(hc.latestHeadcount)], text: parts.join(", ") });
-    rows.push({ type: "line", key: "op.revField", label: "Revenue per field employee", vals: [k(hc.loadRatios.revenuePerFieldEmployee, { dollar: true })], text: `${ctx.latest.label} revenue over ${fmtCount(hc.latestFieldHeadcount)} field employees` });
+    // Money in a fact table carries its unit in the cell (spec 4.3), so a per-person figure is never read in the table's thousands.
+    rows.push({ type: "line", key: "op.revField", label: "Revenue per field employee", vals: [fmtMoney(hc.loadRatios.revenuePerFieldEmployee)], text: `${ctx.latest.label} revenue over ${fmtCount(hc.latestFieldHeadcount)} field employees` });
   } else if (b.has("staff.total")) {
     const staff = ctx.intake!.workforce.composition.filter((c) => !/\bowner\b/i.test(c.role));
     rows.push({ type: "line", key: "op.employees", label: "Employees excl. owner (#)", vals: [b.t("staff.total")], text: `${staff.map((c) => `${c.role} ${c.count}`).join("; ")} (per management)` });
@@ -305,7 +327,11 @@ export function termRows(ctx: CimContext, full: boolean): TextCell[][] {
   rows.push(["Tax", "Each party will rely on its own tax advisors."]);
   if (!full) {
     const levers = i?.growthLevers ?? [];
-    if (levers.length) rows.push(["Growth levers (1)", `${fmtCount(levers.length)} identified by management (${pageRef("S9.1")}); none is included in the figures shown.`]);
+    if (levers.length) {
+      // Named here when no lever can be sized yet, since the growth page is then not built (guide 3.3 S9.1).
+      const where = ctx.present.has("S9.1") ? ` (${pageRef("S9.1")})` : `: ${levers.map((l) => l.lever.charAt(0).toLowerCase() + l.lever.slice(1)).join("; ")}`;
+      rows.push(["Growth levers (1)", `${fmtCount(levers.length)} identified by management${where}; none is included in the figures shown.`]);
+    }
     rows.push(["Basis of preparation", `${ctx.sources.statements.replace(/^Company financial statements \((.+)\)$/, "$1 statements")}, ${fyRange(ctx.fy.map((c) => c.fiscalYear!))}, unaudited; tiers [D], [N], [S] (${pageRef("S7.1")}); ${ctx.pf ? "pro forma shown separately" : "no pro forma items"}.`]);
   }
   return rows;
@@ -317,23 +343,25 @@ export function transactionSummary(ctx: CimContext, w: number): Block {
   return { kind: "textTable", header: { title: "Transaction summary" }, spec };
 }
 
-/** Key figures with the page that proves each one: the S1.2 rail's reference table. */
-export function keyFigures(ctx: CimContext, w: number): Block {
+/** Key figures with the page that proves each one: the S1.2 rail's reference table. `nonGaapMark` is the page's footnote marker for the non-GAAP measures ("(2)"). */
+export function keyFigures(ctx: CimContext, w: number, nonGaapMark = ""): Block {
   const b = ctx.brief;
   const L = ctx.latest.label;
+  const mark = nonGaapMark ? ` ${nonGaapMark}` : "";
   const rows: TextCell[][] = [
-    [`Revenue, ${L}`, b.t("rev.latest"), pageNo("S6.1")],
+    [`Revenue, ${L}`, k(b.value("rev.latest") ?? 0, { dollar: true }), pageNo("S6.1")],
     [`Gross margin, ${L}`, b.t("gm.latest"), pageNo("S6.1")],
-    [`Adj. EBITDA, ${L}`, b.t("adjEbitda.latest"), pageNo("S7.1")],
+    [`Adj. EBITDA, ${L}${mark}`, k(b.value("adjEbitda.latest") ?? 0, { dollar: true }), pageNo("S7.1")],
   ];
-  if (ctx.mainStreet) rows.push([`SDE, ${L}`, b.t("sde.latest"), pageNo("S7.1")]);
+  if (ctx.mainStreet) rows.push([`SDE, ${L}${mark}`, k(b.value("sde.latest") ?? 0, { dollar: true }), pageNo("S7.1")]);
   if (b.has("cust.top10Share")) rows.push(["Top-10 customer share", b.t("cust.top10Share"), pageNo("S4.1")]);
   if (b.has("cust.gdr.latest")) rows.push(["Gross dollar retention", b.t("cust.gdr.latest"), pageNo("S4.2")]);
   if (b.has("hc.total")) rows.push(["Employees, excluding the owner", b.t("hc.total"), pageNo("S5.1")]);
   if (b.has("fcfConversion." + ctx.fy[ctx.fy.length - 1]!.key)) rows.push([`Free cash flow ÷ Reported EBITDA`, b.t("fcfConversion." + ctx.fy[ctx.fy.length - 1]!.key), pageNo("S8.1")]);
   return {
     kind: "textTable",
-    header: { title: "Key figures", units: `(${L})` },
+    // Money in a table is in thousands like every other exhibit (spec 4.1), not the prose "$3.04M".
+    header: { title: "Key figures", units: `(${L}; $000s unless noted)` },
     spec: { colW: [r3(w - 1.25), 0.75, 0.5], head: ["Measure", "Value", "Page"], rows, aligns: ["left", "right", "right"], fontSize: 8 },
   };
 }
@@ -389,7 +417,8 @@ function opexLines(ctx: CimContext, budget: number): OpexLine[] {
     const rest = c.accounts.slice(c.split.length);
     if (rest.length === 1) out.push({ label: accountLabel(rest[0]!), key: `is.acct.${rest[0]}`, get: (p) => p.accountLines[rest[0]!] ?? 0 });
     else if (rest.length > 1) {
-      const label = c.key === "is.payroll" ? "Other payroll costs" : /^Other /.test(c.label) ? c.label : `Other ${c.label.charAt(0).toLowerCase()}${c.label.slice(1)}`;
+      // A remainder never borrows its category's label, which elsewhere in the deck means the whole category.
+      const label = c.key === "is.payroll" ? "Other payroll costs" : c.key === "is.otherOpex" ? "All other operating accounts" : `Other ${c.label.charAt(0).toLowerCase()}${c.label.slice(1)}`;
       out.push({ label, key: `${c.key}.other`, get: (p) => c.get(p) - c.split.reduce((s, a) => s + (p.accountLines[a] ?? 0), 0) });
     }
   }
@@ -486,7 +515,8 @@ export function summaryIncomeStatement(ctx: CimContext, w: number): Block {
     row("key", "Gross profit", "snap.gp", (p) => p.pnl.grossProfit, true),
     ratio("% margin", "snap.gm", (p) => p.pnl.grossProfit / p.pnl.revenue),
     row("line", "Owner compensation", "snap.owner", (p) => p.pnl.ownerComp),
-    row("line", "Other operating expenses", "snap.opex", (p) => p.pnl.totalOpex - p.pnl.ownerComp),
+    // Everything below gross profit but the owner's pay: its own label, since "Other operating expenses" is the P&L category (guide 4.8).
+    row("line", "Operating expenses excl. owner", "snap.opex", (p) => p.pnl.totalOpex - p.pnl.ownerComp),
   ];
   if (ps.some((p) => p.pnl.otherItemsNet !== 0)) rows.push(row("line", "Other income, net", "snap.other", (p) => p.pnl.otherItemsNet));
   rows.push(row("key", "Reported EBITDA", "snap.reported", (p) => p.ladder.reportedEbitda, true), ratio("% margin", "snap.repMargin", (p) => p.ladder.reportedMargin));
@@ -495,22 +525,23 @@ export function summaryIncomeStatement(ctx: CimContext, w: number): Block {
 }
 
 /** Revenue and Adj. EBITDA as twin single-series panels (spec 5), with both CAGRs as the one annotation. */
-export function revenueAdjPanels(ctx: CimContext, narrow = false): Block {
+export function revenueAdjPanels(ctx: CimContext, narrow = false, measure: "adj" | "reported" = "adj"): Block {
   const periods = headlineCols(ctx);
   const labels = periods.map((c) => c.label);
   const b = ctx.brief;
-  const cagrs = b.has("rev.cagr") && b.has("adjEbitda.cagr");
-  // A narrow rail has no room for the header annotation, so each panel's caption carries its own CAGR.
-  const annotation = cagrs && !narrow ? `CAGR: revenue ${b.t("rev.cagr")}, Adj. EBITDA ${b.t("adjEbitda.cagr")}` : undefined;
-  const caption = (name: string, key: string) => (cagrs && narrow ? `${name}, ${b.t(key)} CAGR` : name);
+  // The income-statement page charts Reported EBITDA, the figure its table carries (spec 5); the executive summary charts Adj. EBITDA.
+  const [name, key, get] = measure === "adj" ? ["Adj. EBITDA", "adjEbitda.cagr", (p: PeriodValues) => p.ladder.adjEbitda] as const : ["Reported EBITDA", "repEbitda.cagr", (p: PeriodValues) => p.ladder.reportedEbitda] as const;
+  const cagrs = b.has("rev.cagr") && b.has(key);
+  // Captions are the measures alone; the one header annotation carries both CAGRs, shortened in a narrow rail (spec 5).
+  const annotation = !cagrs ? undefined : narrow ? `CAGR ${b.t("rev.cagr")} and ${b.t(key)}` : `CAGR: revenue ${b.t("rev.cagr")}, ${name} ${b.t(key)}`;
   return {
     kind: "chart",
-    header: { title: "Revenue and Adj. EBITDA", units: "($000s)", annotation },
+    header: { title: `Revenue and ${name}`, units: "($000s)", annotation },
     spec: {
       type: "twinPanels",
       panels: [
-        { caption: caption("Revenue", "rev.cagr"), labels, values: periods.map((c) => toK(at(ctx, c).pnl.revenue)) },
-        { caption: caption("Adj. EBITDA", "adjEbitda.cagr"), labels, values: periods.map((c) => toK(at(ctx, c).ladder.adjEbitda)) },
+        { caption: "Revenue", labels, values: periods.map((c) => toK(at(ctx, c).pnl.revenue)) },
+        { caption: name, labels, values: periods.map((c) => toK(get(at(ctx, c)))) },
       ],
     },
   };
@@ -533,25 +564,23 @@ export function revenueByLine(ctx: CimContext, w: number): Block {
   return { kind: "numTable", header: { title: "Revenue by service line", units: "($000s)" }, spec: { name: "Revenue line", cols, rows } };
 }
 
-/** Revenue mix as a 100% stacked bar by fiscal year (spec 5), shares 0 dp, contra lines excluded, a fifth line folded into Other. */
+/** The service lines the mix is taken over: every revenue line but discounts and refunds. */
+const mixAccounts = (ctx: CimContext): string[] => (ctx.ds.revenueLines ?? []).filter((l) => !l.contra).map((l) => l.account);
+
+/** Revenue mix as a 100% stacked bar by fiscal year (spec 5): whole-percent shares that add to 100 (revenueMix), a fifth line folded into Other. */
 export function revenueMixChart(ctx: CimContext): Block | undefined {
   const periods = ctx.fy;
-  const lines = at(ctx, ctx.latest).revenueLines.filter((l) => l.amount > 0);
-  if (lines.length < 2) return undefined;
-  const shown = lines.length > 4 ? lines.slice(0, 3) : lines;
-  const series = shown.map((l) => ({
-    name: l.label,
-    labels: periods.map((c) => c.label),
-    values: periods.map((c) => Math.round((100 * (at(ctx, c).revenueLines.find((x) => x.account === l.account)?.amount ?? 0)) / at(ctx, c).pnl.revenue)),
-  }));
-  if (lines.length > 4) {
-    const rest = lines.slice(3);
-    series.push({ name: "Other", labels: periods.map((c) => c.label), values: periods.map((c) => Math.round((100 * rest.reduce((s, l) => s + (at(ctx, c).revenueLines.find((x) => x.account === l.account)?.amount ?? 0), 0)) / at(ctx, c).pnl.revenue)) });
-  }
-  const others = (c: PeriodColumn) => lines.slice(1).reduce((s, l) => s + (at(ctx, c).revenueLines.find((x) => x.account === l.account)?.amount ?? 0), 0) / at(ctx, c).pnl.revenue;
-  const lead = lines[0]!.label.split(/\s+/)[0]!.toLowerCase();
-  const annotation = periods.length >= 2 ? `Lines other than ${lead}: ${fmtPct(others(periods[0]!), 0)} to ${fmtPct(others(periods[periods.length - 1]!), 0)}` : undefined;
-  return { kind: "chart", header: { title: "Revenue mix by service line", units: "(% of revenue)", annotation }, spec: { type: "bars", grouping: "percentStacked", series, format: '0"%"' } };
+  const accounts = mixAccounts(ctx);
+  const labelOf = (a: string) => at(ctx, ctx.latest).revenueLines.find((l) => l.account === a)?.label ?? a;
+  if (accounts.length < 2) return undefined;
+  // Five or more lines: the top three and Other, rounded together so the four still add to 100.
+  const groups = accounts.length > 4 ? [...accounts.slice(0, 3).map((a) => [a]), accounts.slice(3)] : accounts.map((a) => [a]);
+  const shares = periods.map((c) => wholeShares(groups.map((g) => g.reduce((s, a) => s + Math.max(0, at(ctx, c).revenueLines.find((x) => x.account === a)?.amount ?? 0), 0))));
+  const series = groups.map((g, i) => ({ name: g.length > 1 ? "Other" : labelOf(g[0]!), labels: periods.map((c) => c.label), values: periods.map((_, k) => shares[k]![i]!) }));
+  const lead = labelOf(accounts[0]!).split(/\s+/)[0]!.toLowerCase();
+  const others = (k: number) => 100 - shares[k]![0]!;
+  const annotation = periods.length >= 2 ? `Lines other than ${lead}: ${others(0)}% to ${others(periods.length - 1)}%` : undefined;
+  return { kind: "chart", header: { title: "Revenue mix by service line", units: "(% of revenue before discounts)", annotation }, spec: { type: "bars", grouping: "percentStacked", series, format: '0"%"' } };
 }
 
 /** Service lines: what the customer buys, pricing basis, latest revenue, share and growth (spec 8). */
@@ -562,7 +591,8 @@ export function serviceLines(ctx: CimContext, w: number): Block | undefined {
   const prior = ctx.prior ? at(ctx, ctx.prior) : undefined;
   const rows: TextCell[][] = [];
   const keys: string[] = [];
-  for (const l of rl) {
+  const mix = revenueMix(latest, rl.map((l) => l.account));
+  for (const [i, l] of rl.entries()) {
     const cur = latest.revenueLines.find((x) => x.account === l.account)?.amount ?? 0;
     const prev = prior?.revenueLines.find((x) => x.account === l.account)?.amount;
     rows.push([
@@ -570,7 +600,7 @@ export function serviceLines(ctx: CimContext, w: number): Block | undefined {
       l.whatTheCustomerBuys ?? confirm(ctx, "what the customer buys", `What the customer buys: ${l.label}`),
       l.pricingBasis ?? confirm(ctx, "pricing basis", `Pricing basis for ${l.label} (flat rate, contract, time and materials)`),
       k(cur, { dollar: true }),
-      fmtPct(cur / latest.pnl.revenue, 0),
+      `${mix.whole[i]}%`,
       prev !== undefined ? fmtGrowth(prev, cur) : "n.a.",
       "",
     ]);
@@ -609,7 +639,7 @@ export function costStructure(ctx: CimContext, w: number, maxRows = 22): Block {
   const last = ps[ps.length - 1]!;
   const short = (c: PeriodColumn) => c.label.replace("FY20", "FY");
   const cols = fitCols(
-    [{ w: 2.35, kind: "label" }, ...periods.map((c): NumCol => ({ w: 0.62, kind: "num", head: c.label })), { w: GAP, kind: "gap" }, { w: 0.75, kind: "num", head: `Δ bps ${short(periods[0]!)}–${short(periods[periods.length - 1]!)}` }, { w: 1.9, kind: "text", head: "Basis" }],
+    [{ w: 2.35, kind: "label" }, ...periods.map((c): NumCol => ({ w: 0.62, kind: "num", head: c.label })), { w: GAP, kind: "gap" }, { w: 0.75, kind: "num", head: `Δ bps ${short(periods[0]!)}–${short(periods[periods.length - 1]!)}` }, { w: 1.9, kind: "text", head: "Basis" }, { w: 0.36, kind: "obs", head: "Obs." }],
     w,
   );
   const latest = at(ctx, ctx.latest);
@@ -626,7 +656,7 @@ export function costStructure(ctx: CimContext, w: number, maxRows = 22): Block {
   const other = acctOf("other_opex");
   const head: NumRow[] = [];
   for (const a of cogs.length <= 3 ? cogs : []) head.push(r("line", accountLabel(a), `cost.${a}`, (p) => p.accountLines[a] ?? 0));
-  head.push(r("subtotal", "Cost of revenue", "cost.cogs", (p) => p.pnl.cogs, "Materials and subcontractors"));
+  head.push(r("subtotal", "Cost of revenue", "cost.cogs", (p) => p.pnl.cogs));
   for (const a of payroll.length <= 5 ? payroll : []) head.push(r("line", accountLabel(a), `cost.${a}`, (p) => p.accountLines[a] ?? 0));
   head.push(r("subtotal", "Payroll, excluding the owner", "cost.payroll", (p) => p.pnl.payroll, ctx.out.headcount ? `${fmtCount(ctx.out.headcount.latestHeadcount)} employees at ${monthLabel(ctx.latest.end)}` : ""));
   head.push(r("line", "Owner compensation", "cost.owner", (p) => p.pnl.ownerComp, `Restated in [S1] and [S2] (${pageRef("S7.1")})`));
@@ -636,26 +666,33 @@ export function costStructure(ctx: CimContext, w: number, maxRows = 22): Block {
   const budget = Math.max(0, maxRows - head.length - tail.length - 2);
   const shown = other.length - 1 <= budget ? other : other.slice(0, budget);
   const middle = shown.map((a) => r("line", accountLabel(a), `cost.${a}`, (p) => p.accountLines[a] ?? 0));
-  if (shown.length < other.length) middle.push(r("line", "Other operating expenses", "cost.other", (p) => p.pnl.otherOpex - shown.reduce((s, a) => s + (p.accountLines[a] ?? 0), 0), `${other.length - shown.length} smaller accounts`));
-  const rows = [...head, ...middle, ...tail, r("key", "Reported EBITDA margin", "cost.margin", (p) => p.pnl.ebitda)];
+  if (shown.length < other.length) middle.push(r("line", "All other operating accounts", "cost.other", (p) => p.pnl.otherOpex - shown.reduce((s, a) => s + (p.accountLines[a] ?? 0), 0), `${other.length - shown.length} smaller accounts`));
+  // Total operating expenses carries the page title's claim (opex as % of revenue), so the table shows the figure the title quotes.
+  const rows = [...head, ...middle, ...tail, r("subtotal", "Total operating expenses", "cost.opex", (p) => p.pnl.totalOpex), r("key", "Reported EBITDA margin", "cost.margin", (p) => p.pnl.ebitda)];
   return { kind: "numTable", header: { title: "Cost structure", units: "(% of revenue)" }, spec: { name: "Cost line", cols, rows } };
 }
 
-/** Two margins as twin panels in percent (S6.3): gross margin and payroll share, no dual axis. */
-export function marginPanels(ctx: CimContext): Block {
-  const periods = ctx.fy;
-  const labels = periods.map((c) => c.label);
+/**
+ * The cost lines whose share of revenue moved most (S6.3), in basis points,
+ * read off the cost-structure table beside it so the chart's figures are the
+ * table's (spec 5). Level bars of three near-equal margins said nothing (QA
+ * round 1 F42); the change per line is what explains the margin.
+ */
+export function costShiftChart(table: Block, max = 6): Block | undefined {
+  if (table.kind !== "numTable") return undefined;
+  const nums = table.spec.cols.filter((c) => c.kind === "num");
+  const head = nums[nums.length - 1]?.head ?? "";
+  const moves = table.spec.rows
+    .filter((r) => r.type === "line" && r.vals)
+    .map((r) => ({ label: r.label, bps: Number(r.vals![r.vals!.length - 1]!.replace(EN_DASH, "-").replace(/[^0-9.+-]/g, "")) }))
+    .filter((m) => Number.isFinite(m.bps) && m.bps !== 0)
+    .sort((a, b) => Math.abs(b.bps) - Math.abs(a.bps))
+    .slice(0, max);
+  if (moves.length < 2) return undefined;
   return {
     kind: "chart",
-    header: { title: "Gross margin and payroll", units: "(% of revenue)", annotation: `Gross margin ${ctx.brief.t("gm.delta")}` },
-    spec: {
-      type: "twinPanels",
-      format: '0.0"%"',
-      panels: [
-        { caption: "Gross margin", labels, values: periods.map((c) => Math.round((1000 * at(ctx, c).pnl.grossProfit) / at(ctx, c).pnl.revenue) / 10) },
-        { caption: "Payroll, excluding the owner", labels, values: periods.map((c) => Math.round((1000 * at(ctx, c).pnl.payroll) / at(ctx, c).pnl.revenue) / 10) },
-      ],
-    },
+    header: { title: "Largest changes in cost ratios", units: `(${head.replace(/^Δ bps /, "bps, ")})` },
+    spec: { type: "hbar", labels: moves.map((m) => m.label), values: moves.map((m) => m.bps), format: `#,##0;"${EN_DASH}"#,##0` },
   };
 }
 
@@ -756,7 +793,7 @@ export function ebitdaLadder(ctx: CimContext, w: number, maxRows = 23): Block {
 export function condensedLadder(ctx: CimContext, w: number): Block {
   const periods = tableColumns(ctx);
   const ps = periods.map((c) => at(ctx, c));
-  const cols = fitCols([{ w: 2.3, kind: "label" }, { w: 0.45, kind: "ref", head: "Ref" }, ...periodCols(periods, 0.64), { w: GAP, kind: "gap" }, { w: 0.4, kind: "obs", head: "Obs." }], w);
+  const cols = fitCols([{ w: 2.3, kind: "label" }, { w: 0.45, kind: "ref", head: "Ref" }, ...periodCols(periods, 0.64), { w: 0.4, kind: "obs", head: "Obs." }], w);
   const row = (type: NumRow["type"], label: string, key: string, get: (l: Ladder) => number, extra: Partial<NumRow> = {}, dollar = false): NumRow => ({ type, label, key, vals: ps.map((p) => k(get(p.ladder), { dollar })), ...extra });
   const ratio = (label: string, key: string, get: (l: Ladder) => number): NumRow => ({ type: "ratio", label, key, vals: ps.map((p) => pc(get(p.ladder))) });
   const nRefs = tierRows(ctx, "normalization").filter((a) => Object.values(a.byColumn).some((v) => v !== 0));
@@ -779,17 +816,18 @@ export function condensedLadder(ctx: CimContext, w: number): Block {
 /** The bridge from Reported EBITDA to Adj. EBITDA for the latest window as a waterfall (S7.1). */
 export function ladderWaterfall(ctx: CimContext): Block {
   const l = at(ctx, ctx.latest).ladder;
-  const labels: string[] = ["Reported EBITDA", "Normalization [N]"];
+  // Category names follow the ladder's row labels, shortened only by their leading sign (spec 5: one vocabulary per page).
+  const labels: string[] = ["Reported EBITDA", "Normalization adjustments [N]"];
   const steps: { value: number; total?: boolean }[] = [{ value: toK(l.reportedEbitda), total: true }, { value: toK(l.totalNormalization) }];
   if (ctx.mainStreet) {
-    labels.push("Owner pay [S1]", "SDE", "Replacement [S2]");
+    labels.push("Owner compensation, as paid [S1]", "SDE", "Market replacement compensation [S2]");
     steps.push({ value: toK(l.ownerCompAsPaid) }, { value: toK(l.sde), total: true }, { value: toK(l.marketReplacement) });
     if (l.capitalReserve !== 0) {
-      labels.push("Reserve [S3]");
+      labels.push("Capital reserve [S3]");
       steps.push({ value: toK(l.capitalReserve) });
     }
   } else {
-    labels.push("Owner pay [S1, S2]");
+    labels.push("Owner compensation normalization [S1] [S2]");
     steps.push({ value: toK(l.ownerCompNormalization) });
   }
   labels.push("Adj. EBITDA");
@@ -811,7 +849,8 @@ function evidenceText(a: Adjustment): string {
   const parts = a.sourceDocument.split(";").map((p) => p.replace(/\([^)]*\)/g, "").trim());
   const account = parts.find((p) => /account /i.test(p));
   if (account) {
-    const leaf = account.replace(/^.*account\s+/i, "").split(":").pop()!.replace(/\s+FY\d{4}.*$/, "").trim();
+    // "P&L, account Depreciation Expense, FY2023–FY2025" names the account, then the years it covers.
+    const leaf = account.replace(/^.*account\s+/i, "").split(":").pop()!.replace(/,?\s+FY\d{4}.*$/, "").trim();
     return `Documented (GL: ${leaf})`;
   }
   return `Documented (${parts[0] || "general ledger"})`;
@@ -923,8 +962,9 @@ export function customerMix(ctx: CimContext, w: number): Block | undefined {
   const coded = cu.mixByType.filter((m) => m.count > 0);
   const codedRev = coded.reduce((s, m) => s + m.revenue, 0);
   const codedCount = coded.reduce((s, m) => s + m.count, 0);
-  rows.push({ type: "subtotal", label: `Listed ${cu.term.toLowerCase()}s`, key: "mix.coded", vals: [fmtCount(codedCount), k(codedRev, { dollar: true }), pc(codedRev / cu.concentration.total), k(codedRev / codedCount)] });
-  for (const r of residual) rows.push({ type: "line", label: "Households and members (1)", key: "mix.residual", vals: ["n.a.", k(r.revenue), pc(r.revenuePct), "n.a."] });
+  // Billed in the period is a larger count than active at its end: the label says which, and the note gives the other (guide 4.8).
+  rows.push({ type: "subtotal", label: `Listed, billed in ${cu.period.label} (2)`, key: "mix.coded", vals: [fmtCount(codedCount), k(codedRev, { dollar: true }), pc(codedRev / cu.concentration.total), k(codedRev / codedCount)] });
+  for (const r of residual) rows.push({ type: "line", label: "Not listed individually (1)", key: "mix.residual", vals: ["n.a.", k(r.revenue), pc(r.revenuePct), "n.a."] });
   rows.push({ type: "key", label: "Total revenue", key: "mix.total", vals: ["", k(cu.concentration.total, { dollar: true }), "100.0%", ""] });
   const cols = fitCols(
     [{ w: 2.3, kind: "label" }, { w: 0.7, kind: "num", head: "Accounts" }, { w: 0.7, kind: "num", head: "Revenue" }, { w: 0.62, kind: "num", head: "% total" }, { w: 0.8, kind: "num", head: "Avg. revenue" }, { w: 0.36, kind: "obs", head: "Obs." }],
@@ -1093,11 +1133,11 @@ export function organization(ctx: CimContext, w: number): Block | undefined {
               ? "Leaving at closing (1)"
               : confirm(ctx, "intent", `Post-close intent of ${mgmt.name}`)
           : "";
-      rows.push([named && e0.name ? `${role} (${e0.name})` : role, fmtCount(es.length), `${avg.toFixed(1)} years; ${(PAY_BASIS[e0.payBasis] ?? e0.payBasis).toLowerCase()}`, post]);
+      rows.push([named && e0.name ? `${role} (${e0.name})` : role, fmtCount(es.length), `${avg.toFixed(1)} years; ${(PAY_BASIS[e0.payBasis] ?? e0.payBasis).toLowerCase()}`, post, ""]);
       keys.push(`org.${role}`);
     }
     const total = active.length;
-    rows.push(["Total", fmtCount(total), "", ""]);
+    rows.push(["Total", fmtCount(total), "", "", ""]);
     keys.push("org.total");
   } else if (i?.workforce.composition.length) {
     // The owner leads, as in the payroll branch; the notes list roles in their own order.
@@ -1107,25 +1147,51 @@ export function organization(ctx: CimContext, w: number): Block | undefined {
       const mgmt = i.management.find((m) => m.role.toLowerCase() === c.role.toLowerCase());
       const label = isOwner(c.role) && i.owner.name ? `${c.role} (${i.owner.name})` : mgmt ? `${c.role} (${mgmt.name})` : c.role;
       const post = isOwner(c.role) ? ownerPostClose(ctx) : mgmt?.postCloseIntent === "stays" ? "Expected to stay (1)" : "";
-      rows.push([label, fmtCount(c.count), mgmt?.since ? `Since ${mgmt.since.slice(0, 4)}` : "", post]);
+      rows.push([label, fmtCount(c.count), mgmt?.since ? `Since ${mgmt.since.slice(0, 4)}` : "", post, ""]);
       keys.push(`org.${c.role}`);
     }
-    rows.push(["Total", fmtCount(comp.reduce((sum, c) => sum + c.count, 0)), "", ""]);
+    rows.push(["Total", fmtCount(comp.reduce((sum, c) => sum + c.count, 0)), "", "", ""]);
     keys.push("org.total");
   } else return undefined;
-  const colW = [r3(w * 0.36), 0.5, r3(w * 0.3), r3(w - r3(w * 0.36) - 0.5 - r3(w * 0.3))];
+  // An Obs. column, so an observation about a role keys to its row (spec 4.4).
+  const obsW = 0.36;
+  const colW = [r3((w - obsW) * 0.36), 0.5, r3((w - obsW) * 0.3), r3(w - obsW - r3((w - obsW) * 0.36) - 0.5 - r3((w - obsW) * 0.3)), obsW];
   return {
     kind: "textTable",
     header: { title: "Organization and tenure", units: pr ? `(#, at ${monthLabel(asOf.slice(0, 7))})` : "(#, per management)" },
-    spec: { colW, head: ["Role", "Count", "Average tenure and pay basis", "Post-close"], rows, rowKeys: keys, totalRow: rows.length - 1, aligns: ["left", "right", "left", "left"], fontSize: 8.5 },
+    spec: { colW, head: ["Role", "Count", "Average tenure and pay basis", "Post-close", "Obs."], rows, rowKeys: keys, obsCol: 4, totalRow: rows.length - 1, aligns: ["left", "right", "left", "left", "center"], fontSize: 8.5 },
   };
 }
 
 /** Headcount and compensation by department (S5.2): count, total and average compensation, % of revenue, tenure. */
+/**
+ * Departments as the CIM may show their pay: a department of fewer than
+ * three people is merged with the smallest one that has three or more, so no
+ * average is one person's salary (guide 1.4: department aggregates only).
+ */
+function payGroups(depts: NonNullable<CimContext["out"]["headcount"]>["byDepartment"]) {
+  const small = depts.filter((d) => d.count < MIN_PAY_GROUP);
+  const large = depts.filter((d) => d.count >= MIN_PAY_GROUP);
+  if (!small.length || !large.length) return depts;
+  const host = large.reduce((a, b) => (b.count < a.count ? b : a));
+  const members = [host, ...small];
+  const merged = {
+    ...host,
+    department: members.map((d, i) => (i ? d.department.toLowerCase() : d.department)).join(" and "),
+    count: members.reduce((sum, d) => sum + d.count, 0),
+    avgFte: members.reduce((sum, d) => sum + d.avgFte, 0),
+    totalComp: members.reduce((sum, d) => sum + d.totalComp, 0),
+    pctRevenue: members.reduce((sum, d) => sum + d.pctRevenue, 0),
+    avgTenureYears: members.reduce((sum, d) => sum + d.avgTenureYears * d.count, 0) / members.reduce((sum, d) => sum + d.count, 0),
+  };
+  merged.avgComp = merged.avgFte ? merged.totalComp / merged.avgFte : 0;
+  return depts.filter((d) => !members.includes(d)).concat(merged).sort((a, b) => b.count - a.count);
+}
+
 export function headcountByDepartment(ctx: CimContext, w: number): Block | undefined {
   const hc = ctx.out.headcount;
   if (!hc) return undefined;
-  const rows: NumRow[] = hc.byDepartment.map((d, i) => ({ type: "line", label: d.department, key: `dept.${d.department}`, vals: [fmtCount(d.count), k(d.totalComp, { dollar: i === 0 }), k(d.avgComp), pc(d.pctRevenue), d.avgTenureYears.toFixed(1)] }));
+  const rows: NumRow[] = payGroups(hc.byDepartment).map((d, i) => ({ type: "line", label: d.department, key: `dept.${d.department}`, vals: [fmtCount(d.count), k(d.totalComp, { dollar: i === 0 }), k(d.avgComp), pc(d.pctRevenue), d.avgTenureYears.toFixed(1)] }));
   const total = hc.byDepartment.reduce((s, d) => s + d.totalComp, 0);
   const count = hc.byDepartment.reduce((s, d) => s + d.count, 0);
   rows.push({ type: "key", label: "Total", key: "dept.total", vals: [fmtCount(count), k(total, { dollar: true }), k(total / count), pc(total / at(ctx, ctx.latest).pnl.revenue), ""] });
@@ -1175,24 +1241,30 @@ export function unitEconomics(ctx: CimContext, w: number): Block | undefined {
   const ps = periods.map((c) => at(ctx, c));
   if (!ps.some((p) => p.kpis.revenue_per_employee)) return undefined;
   const span = periods.length - 1;
-  const cagrHead = span >= 2 ? "CAGR" : yoyHead(ctx.latest);
-  const cols = fitCols([{ w: 2.3, kind: "label" }, ...periods.map((c): NumCol => ({ w: 0.62, kind: "num", head: c.label, group: "Fiscal year" })), { w: GAP, kind: "gap" }, { w: 0.62, kind: "num", head: cagrHead, group: "Change" }, { w: 1.6, kind: "text", head: "Basis" }, { w: 0.36, kind: "obs", head: "Obs." }], w);
-  const change = (get: (p: PeriodValues) => number) => (span >= 2 ? pc(cagr(get(ps[0]!), get(ps[span]!), span)) : fmtGrowth(get(ps[0]!), get(ps[span]!)));
-  const bpsChange = (get: (p: PeriodValues) => number) => fmtBps(get(ps[0]!), get(ps[span]!));
+  // The table's columns are fiscal years, so the change is between them: a CAGR, or the last fiscal year on the one before, never an LTM head.
+  const changeHead = span >= 2 ? "CAGR" : span === 1 ? yoyHead(periods[1]!) : undefined;
+  const cols = fitCols([{ w: 2.3, kind: "label" }, ...periods.map((c): NumCol => ({ w: 0.62, kind: "num", head: c.label, group: "Fiscal year" })), ...(changeHead ? [{ w: GAP, kind: "gap" } as NumCol, { w: 0.62, kind: "num", head: changeHead, group: "Change" } as NumCol] : []), { w: 1.6, kind: "text", head: "Basis" }, { w: 0.36, kind: "obs", head: "Obs." }], w);
+  const change = (get: (p: PeriodValues) => number): string[] => (!changeHead ? [] : span >= 2 ? [pc(cagr(get(ps[0]!), get(ps[span]!), span))] : [fmtGrowth(get(ps[0]!), get(ps[span]!))]);
+  // One unit per column (spec 4.1): a ratio's change is in basis points, so it goes in words in the Basis column, not under the growth rates.
+  const bpsChange = (get: (p: PeriodValues) => number) => {
+    if (!span) return "";
+    const d = describeDelta(get(ps[0]!), get(ps[span]!));
+    return `${d.charAt(0).toUpperCase()}${d.slice(1)} since ${periods[0]!.label}`;
+  };
   const employees = (p: PeriodValues) => (p.kpis.revenue_per_employee ? Math.round(p.pnl.revenue / p.kpis.revenue_per_employee) : Number.NaN);
   const field = (p: PeriodValues) => (p.kpis.revenue_per_field_employee ? Math.round(p.pnl.revenue / p.kpis.revenue_per_field_employee) : Number.NaN);
   const cnt = (v: number) => (Number.isFinite(v) ? fmtCount(v) : "n.a.");
   const rows: NumRow[] = [
-    { type: "line", label: "Revenue", key: "ue.revenue", vals: [...kv(ps, (p) => p.pnl.revenue, true), change((p) => p.pnl.revenue)], text: "Total revenue" },
-    { type: "line", label: "Employees at year-end (#)", key: "ue.employees", vals: [...ps.map((p) => cnt(employees(p))), change(employees)], text: "Register, excl. owner" },
-    { type: "line", label: "Field employees at year-end (#)", key: "ue.field", vals: [...ps.map((p) => cnt(field(p))), change(field)], text: "Service and installation" },
-    { type: "subtotal", label: "Revenue per employee", key: "ue.revEmp", vals: [...kv(ps, (p) => p.kpis.revenue_per_employee ?? 0, true), change((p) => p.kpis.revenue_per_employee ?? 0)], text: "Revenue ÷ employees" },
-    { type: "line", label: "Revenue per field employee", key: "ue.revField", vals: [...kv(ps, (p) => p.kpis.revenue_per_field_employee ?? 0), change((p) => p.kpis.revenue_per_field_employee ?? 0)], text: "Revenue ÷ field employees" },
-    { type: "ratio", label: "Payroll excl. owner, % revenue", key: "ue.labor", vals: [...pv(ps, (p) => p.kpis.labor_cost_pct_revenue ?? Number.NaN), bpsChange((p) => p.kpis.labor_cost_pct_revenue ?? 0)], text: "Δ in bps" },
+    { type: "line", label: "Revenue", key: "ue.revenue", vals: [...kv(ps, (p) => p.pnl.revenue, true), ...change((p) => p.pnl.revenue)], text: "Total revenue" },
+    { type: "line", label: "Employees at year-end (#)", key: "ue.employees", vals: [...ps.map((p) => cnt(employees(p))), ...change(employees)], text: "Register, excl. owner" },
+    { type: "line", label: "Field employees at year-end (#)", key: "ue.field", vals: [...ps.map((p) => cnt(field(p))), ...change(field)], text: fieldDepartments(ctx) },
+    { type: "subtotal", label: "Revenue per employee", key: "ue.revEmp", vals: [...kv(ps, (p) => p.kpis.revenue_per_employee ?? 0, true), ...change((p) => p.kpis.revenue_per_employee ?? 0)], text: "Revenue ÷ employees" },
+    { type: "line", label: "Revenue per field employee", key: "ue.revField", vals: [...kv(ps, (p) => p.kpis.revenue_per_field_employee ?? 0), ...change((p) => p.kpis.revenue_per_field_employee ?? 0)], text: "Revenue ÷ field employees" },
+    { type: "ratio", label: "Payroll excl. owner, % revenue", key: "ue.labor", vals: [...pv(ps, (p) => p.kpis.labor_cost_pct_revenue ?? Number.NaN), ...(changeHead ? [""] : [])], text: bpsChange((p) => p.kpis.labor_cost_pct_revenue ?? 0) },
   ];
   if (ps.some((p) => p.kpis.customers)) {
     rows.push(
-      { type: "line", label: "Listed commercial accounts (#)", key: "ue.accounts", vals: [...ps.map((p) => cnt(p.kpis.customers ?? Number.NaN)), change((p) => p.kpis.customers ?? 0)], text: "Active at year-end" },
+      { type: "line", label: `${capFirst(population(ctx))} (#)`, key: "ue.accounts", vals: [...ps.map((p) => cnt(p.kpis.customers ?? Number.NaN)), ...change((p) => p.kpis.customers ?? 0)], text: "Active at year-end" },
     );
   }
   return { kind: "numTable", header: { title: "Unit economics", units: "($000s unless noted)" }, spec: { name: "Measure", cols, rows } };
@@ -1209,21 +1281,24 @@ export function capacityFacts(ctx: CimContext, w: number): Block | undefined {
   if (members && recurring.length === 1) {
     const m = latestKpi(members)!;
     const rev = recurring[0]!.amount;
-    rows.push({ type: "line", key: "cap.perMember", label: "Agreement revenue per member", vals: [`$${fmtCount(Math.round(rev / m))}`], text: `${ctx.latest.label} ${recurring[0]!.label.toLowerCase()} revenue ÷ ${fmtCount(m)} members (1)` });
+    rows.push({ type: "line", key: "cap.perMember", label: "Agreement revenue per member", vals: [`$${fmtCount(Math.round(rev / m))} a year`], text: `${ctx.latest.label} ${recurring[0]!.label.toLowerCase()} revenue ÷ ${fmtCount(m)} members (1)` });
     rows.push({ type: "line", key: "cap.visits", label: "Tune-up visits a year (#)", vals: [fmtCount(m * 2)], text: /two tune-ups/i.test(members.definition ?? "") ? "Two tune-ups a year per member (1)" : "" });
     if (!/two tune-ups/i.test(members.definition ?? "")) rows.pop();
-    if (techs) rows.push({ type: "line", key: "cap.membersPerTech", label: "Members per service technician (#)", vals: [fmtCount(Math.round(m / techs.count))], text: `${fmtCount(m)} members ÷ ${techs.count} technicians` });
+    if (techs) rows.push({ type: "line", key: "cap.membersPerTech", label: `Members per ${techs.department.toLowerCase()} employee (#)`, vals: [fmtCount(Math.round(m / techs.count))], text: `${fmtCount(m)} members ÷ ${techs.count} ${techs.department.toLowerCase()} employees` });
   }
   const offer = kpiOf(ctx, "agreement_offer_rate");
   if (offer) rows.push({ type: "line", key: "cap.offer", label: "Service calls offered an agreement", vals: [fmtKpi(offer, latestKpi(offer)!)], text: "Per management (1)" });
   const fleet = fleetCount(ctx);
   if (fleet) {
-    rows.push({ type: "line", key: "cap.revVehicle", label: "Revenue per vehicle", vals: [k(latest.pnl.revenue / fleet.count, { dollar: true })], text: `${ctx.latest.label} revenue ÷ ${fleet.count} vehicles` });
-    if (hc) rows.push({ type: "line", key: "cap.vehiclesField", label: "Vehicles per field employee", vals: [(fleet.count / hc.latestFieldHeadcount).toFixed(2)], text: `${fleet.count} vehicles ÷ ${hc.latestFieldHeadcount} field employees` });
+    rows.push({ type: "line", key: "cap.revVehicle", label: "Revenue per vehicle", vals: [fmtMoney(latest.pnl.revenue / fleet.count)], text: `${ctx.latest.label} revenue ÷ ${fleet.count} vehicles` });
+    if (hc) rows.push({ type: "line", key: "cap.vehiclesField", label: "Vehicles per field employee", vals: [(fleet.count / hc.latestFieldHeadcount).toFixed(1)], text: `${fleet.count} vehicles ÷ ${hc.latestFieldHeadcount} field employees` });
   }
   if (rows.length < 2) return undefined;
   const cols = fitCols([{ w: 2.3, kind: "label" }, { w: 0.62, kind: "num", head: "Value" }, { w: 3.7, kind: "text", head: "Basis" }, { w: 0.36, kind: "obs", head: "Obs." }], w);
-  return { kind: "numTable", header: { title: "Capacity measures", units: `(at ${monthLabel(ctx.latest.end)}; $000s unless noted)` }, spec: { name: "Measure", cols, rows } };
+  // Each figure keeps its own date: the financials run to the as-of month, management's counts to the day they were given (guide 4.6).
+  const kpiDate = [members, offer].flatMap((x) => (x ? Object.keys(x.values).flatMap((key) => (/^AT(\d{4}-\d{2})-\d{2}$/.exec(key)?.[1] ? [key.slice(2)] : [])) : [])).sort().at(-1);
+  const units = kpiDate ? `($ as shown; ${ctx.latest.label} financials; counts per management at ${monthLabel(kpiDate.slice(0, 7))} (1))` : `($ as shown; at ${monthLabel(ctx.latest.end)})`;
+  return { kind: "numTable", header: { title: "Capacity measures", units }, spec: { name: "Measure", cols, rows } };
 }
 
 /** Facilities, fleet and systems (spec 8): what a buyer takes over, from the intake facts. */
@@ -1299,7 +1374,7 @@ export function monthlyRevenue(ctx: CimContext): Block | undefined {
   const values = idx.map((i) => toK(mo.series.revenue![i]!));
   return {
     kind: "chart",
-    header: { title: "Monthly revenue", units: "($000s)", annotation: `${labels[0]} to ${labels[labels.length - 1]}` },
+    header: { title: "Monthly revenue", units: "($000s)", annotation: `${labels[0]} ${EN_DASH} ${labels[labels.length - 1]}` },
     spec: { type: "monthly", labels, values },
   };
 }
@@ -1406,23 +1481,43 @@ export function balanceSheet(ctx: CimContext, w: number): Block | undefined {
 export function workingCapital(ctx: CimContext, w: number): Block | undefined {
   const nwc = ctx.out.nwc;
   if (!nwc) return undefined;
-  const pts = nwc.periods.filter((p) => ctx.fy.some((c) => c.end === p.month));
+  // Fiscal year-ends when the sheets give two; otherwise every dated sheet under its own date (a June year-end client whose sheets are at December).
+  const yearEnd = nwc.periods.filter((p) => ctx.fy.some((c) => c.end === p.month));
+  const pts = yearEnd.length >= 2 ? yearEnd : nwc.periods.slice(-3);
   if (pts.length < 2) return undefined;
-  const heads = pts.map((p) => ctx.fy.find((c) => c.end === p.month)!.label);
-  const cols = fitCols([{ w: 2.4, kind: "label" }, ...heads.map((h): NumCol => ({ w: 0.66, kind: "num", head: h, group: "Year-end" })), { w: 0.36, kind: "obs", head: "Obs." }], w);
+  const heads = pts.map((p) => ctx.fy.find((c) => c.end === p.month)?.label ?? monthLabel(p.month));
+  const group = yearEnd.length >= 2 ? "Year-end" : "Balance-sheet date";
+  const cols = fitCols([{ w: 2.4, kind: "label" }, ...heads.map((h): NumCol => ({ w: 0.66, kind: "num", head: h, group })), { w: 0.36, kind: "obs", head: "Obs." }], w);
   const L = (get: (l: (typeof pts)[number]["lines"]) => number) => pts.map((p) => k(get(p.lines)));
   const avail = nwc.available;
-  const rows: NumRow[] = [
-    { type: "line", label: "Accounts receivable", key: "nwc.ar", vals: pts.map((p, i) => k(p.lines.ar, { dollar: i >= 0 })) },
-    { type: "line", label: "Inventory", key: "nwc.inventory", vals: L((l) => l.inventory) },
-    { type: "line", label: "Prepaid and other", key: "nwc.prepaid", vals: L((l) => l.prepaidOther) },
-    { type: "line", label: `(${EN_DASH}) Accounts payable`, key: "nwc.ap", vals: L((l) => -l.ap) },
-    { type: "line", label: `(${EN_DASH}) Accrued liabilities`, key: "nwc.accrued", vals: L((l) => -l.accrued) },
-  ];
-  if (avail.customer_deposits) rows.push({ type: "line", label: `(${EN_DASH}) Customer deposits`, key: "nwc.deposits", vals: L((l) => -l.customerDeposits) });
-  if (avail.deferred_revenue) rows.push({ type: "line", label: `(${EN_DASH}) Deferred revenue`, key: "nwc.deferred", vals: L((l) => -l.deferredRevenue) });
+  const rows: NumRow[] = [];
+  if (ctx.assetSale) {
+    // Asset purchase (guide S8.2): the lines that transfer first, with the Seller's receivables and payables as a memo beneath.
+    rows.push({ type: "line", label: "Inventory", key: "nwc.inventory", vals: pts.map((p) => k(p.lines.inventory, { dollar: true })) });
+    if (avail.customer_deposits) rows.push({ type: "line", label: `(${EN_DASH}) Customer deposits`, key: "nwc.deposits", vals: L((l) => -l.customerDeposits) });
+    rows.push({ type: "key", label: "Working capital that transfers", key: "nwc.transfer", vals: pts.map((p) => k(p.lines.inventory - (avail.customer_deposits ? p.lines.customerDeposits : 0), { dollar: true })) });
+    rows.push({ type: "section", label: "Retained by the Seller (memo)" });
+    rows.push(
+      { type: "line", label: "Accounts receivable", key: "nwc.ar", vals: L((l) => l.ar) },
+      { type: "line", label: "Prepaid and other", key: "nwc.prepaid", vals: L((l) => l.prepaidOther) },
+      { type: "line", label: `(${EN_DASH}) Accounts payable`, key: "nwc.ap", vals: L((l) => -l.ap) },
+      { type: "line", label: `(${EN_DASH}) Accrued liabilities`, key: "nwc.accrued", vals: L((l) => -l.accrued) },
+    );
+    if (avail.deferred_revenue) rows.push({ type: "line", label: `(${EN_DASH}) Deferred revenue`, key: "nwc.deferred", vals: L((l) => -l.deferredRevenue) });
+    rows.push({ type: "subtotal", label: "Net working capital, all lines", key: "nwc.total", vals: pts.map((p) => k(p.lines.adjustedNwc, { dollar: true })) });
+  } else {
+    rows.push(
+      { type: "line", label: "Accounts receivable", key: "nwc.ar", vals: pts.map((p) => k(p.lines.ar, { dollar: true })) },
+      { type: "line", label: "Inventory", key: "nwc.inventory", vals: L((l) => l.inventory) },
+      { type: "line", label: "Prepaid and other", key: "nwc.prepaid", vals: L((l) => l.prepaidOther) },
+      { type: "line", label: `(${EN_DASH}) Accounts payable`, key: "nwc.ap", vals: L((l) => -l.ap) },
+      { type: "line", label: `(${EN_DASH}) Accrued liabilities`, key: "nwc.accrued", vals: L((l) => -l.accrued) },
+    );
+    if (avail.customer_deposits) rows.push({ type: "line", label: `(${EN_DASH}) Customer deposits`, key: "nwc.deposits", vals: L((l) => -l.customerDeposits) });
+    if (avail.deferred_revenue) rows.push({ type: "line", label: `(${EN_DASH}) Deferred revenue`, key: "nwc.deferred", vals: L((l) => -l.deferredRevenue) });
+    rows.push({ type: "key", label: "Net working capital", key: "nwc.total", vals: pts.map((p) => k(p.lines.adjustedNwc, { dollar: true })) });
+  }
   rows.push(
-    { type: "key", label: "Net working capital", key: "nwc.total", vals: pts.map((p) => k(p.lines.adjustedNwc, { dollar: true })) },
     { type: "ratio", label: "% of revenue", key: "nwc.pct", vals: pts.map((p) => pc(p.lines.pctLtmRevenue)) },
     { type: "ratio", label: "Days sales outstanding", key: "nwc.dso", vals: pts.map((p) => String(Math.round(p.lines.dso))) },
     { type: "ratio", label: "Days inventory outstanding", key: "nwc.dio", vals: pts.map((p) => String(Math.round(p.lines.dio))) },
@@ -1509,7 +1604,7 @@ export function leverBaselines(ctx: CimContext, w: number): Block | undefined {
 }
 
 export function termTable(ctx: CimContext, w: number): Block {
-  return { kind: "textTable", header: { title: "Terms of the offering" }, spec: { colW: [1.45, r3(w - 1.45)], head: ["Term", "Detail"], rows: termRows(ctx, true), tintFirstCol: true, fontSize: 8.5 } };
+  return { kind: "textTable", header: { title: "Terms of the offering" }, spec: { colW: [1.45, r3(w - 1.45)], head: ["Term", "Detail"], rows: termRows(ctx, true), fontSize: 8.5 } };
 }
 
 /** Exhibit header titles on a page, for the divider's "Exhibits in this section" list. */

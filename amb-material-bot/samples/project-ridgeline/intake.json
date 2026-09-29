@@ -41,7 +41,7 @@
   "locations": [
     {
       "name": "Maple Ave shop and office",
-      "function": "Shop, warehouse and office",
+      "function": "Shop and office",
       "sizeSqFt": 8000,
       "arrangement": "leased_from_third_party",
       "leaseExpiry": "2029",
@@ -71,14 +71,14 @@
   "suppliers": [
     {
       "name": "Ferguson",
-      "supplies": "HVAC parts and supplies",
+      "supplies": "Main supplier",
       "source": {
         "locator": "## Operations"
       }
     },
     {
       "name": "Johnstone Supply",
-      "supplies": "HVAC parts and supplies",
+      "supplies": "Main supplier",
       "source": {
         "locator": "## Operations"
       }
@@ -246,7 +246,7 @@
     {
       "lever": "Add after-hours emergency plumbing",
       "baseline": "Calls after 7 pm are turned away today",
-      "mechanism": "Staff an on-call rotation so after-hours calls are served rather than referred away",
+      "mechanism": "Staff an on-call rotation so after-hours calls are served rather than turned away",
       "source": {
         "locator": "## Growth opportunities (owner's view)"
       }

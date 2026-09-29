@@ -301,11 +301,11 @@ function deriveSchedule(ds: FinancialDataset, a: Assumptions): Adjustment[] {
     if (descriptions.some((d) => d.toLowerCase().includes(account.toLowerCase()))) continue;
     rows.push({
       tier: "normalization",
-      description: `${account} (bot-flagged)`,
+      description: `${account} (for review)`,
       category: "personal_discretionary",
-      basis: `Bot-flagged for review: ${reason}. Amount 0 until an advisor enters it.`,
+      basis: `Flagged for review: ${reason}. Amount 0 until an advisor enters it.`,
       sourceDocument: `P&L account ${account}`,
-      evidence: "management_representation",
+      evidence: "pending",
       status: "proposed",
       byFiscalYear: byYear(() => 0),
       origin: "suggested",

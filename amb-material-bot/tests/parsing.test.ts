@@ -22,6 +22,10 @@ describe("clientLabel", () => {
     ["Revenue - Service - Commercial", "Revenue (service, commercial)"],
     ["PPP Loan Forgiveness", "PPP loan forgiveness"],
     ["Owner's Draw (HVAC)", "Owner's draw (HVAC)"],
+    // Proper names keep their exported case.
+    ["Huntington Bank Line of Credit", "Huntington Bank Line of Credit"],
+    ["Service - Columbus", "Service (Columbus)"],
+    ["Loan - Fifth Third", "Loan (Fifth Third)"],
   ])("%s -> %s", (raw, expected) => expect(clientLabel(raw)).toBe(expected));
 });
 

@@ -37,10 +37,12 @@ export function tenureBucket(months: number): (typeof TENURE_BUCKETS)[number] {
 // --- Customers ------------------------------------------------------------------------
 
 /**
- * Active at `date`: started on or before it and not ended before it
- * (DATA_CONTRACT §5.7). A customer the list does not date is active only when
- * it billed in the fiscal year `date` falls in, so an undated account never
- * inflates a count by default.
+ * Active at `date`: started on or before it and not ended on or before it
+ * (DATA_CONTRACT §5.7). A customer whose end date is `date` itself was lost
+ * that day, as the roll-forward books it, so every count, the median tenure
+ * and the roll-forward's ending count agree. A customer the list does not
+ * date is active only when it billed in the fiscal year `date` falls in, so an
+ * undated account never inflates a count by default.
  */
 export function customerActiveAt(c: CustomerRecord, date: string, fye: number): boolean {
   if (!c.startDate) {
@@ -48,7 +50,12 @@ export function customerActiveAt(c: CustomerRecord, date: string, fye: number): 
     return (c.revenueByFiscalYear[fiscalYearOf(y, m, fye)] ?? 0) > 0;
   }
   if (!onOrBefore(c.startDate, date)) return false;
-  return !c.endDate || c.endDate >= date;
+  return !c.endDate || c.endDate > date;
+}
+
+/** Fiscal years a customer list carries revenue for, the residual included. */
+export function customerListYears(list: CustomerList): Set<number> {
+  return new Set([...list.customers, ...(list.residual ? [list.residual] : [])].flatMap((c) => Object.keys(c.revenueByFiscalYear).map(Number)));
 }
 
 /** Fiscal years among `years` with at least one month inside the column's window, in order. */
@@ -108,14 +115,19 @@ export function dollarRollForward(customers: CustomerRecord[], fy: number, fye: 
   let downsell = 0;
   let upsell = 0;
   let newRevenue = 0;
+  let lostInYearRevenue = 0;
   for (const c of customers) {
     // A customer without dates is classified from its revenue: new when the prior year is nil, lost when this year is.
     const dated = !!c.startDate;
-    const activeAtStart = dated ? c.startDate! < start && customerActiveAt(c, start, fye) : prev(c) > 0;
+    // Carried into the year: active on its eve, so a customer whose last day is the year's first day is lost in the year.
+    const activeAtStart = dated ? customerActiveAt(c, dayBefore(start), fye) : prev(c) > 0;
     const startedInYear = dated ? c.startDate! >= start && c.startDate! <= end : prev(c) <= 0 && cur(c) > 0;
     const lostInYear = dated ? !!c.endDate && c.endDate >= start && c.endDate <= end : prev(c) > 0 && cur(c) <= 0;
     if (activeAtStart) startingRevenue += prev(c);
-    if (activeAtStart && lostInYear) churn += prev(c);
+    if (activeAtStart && lostInYear) {
+      churn += prev(c);
+      lostInYearRevenue += cur(c);
+    }
     if (activeAtStart && !lostInYear) {
       const d = cur(c) - prev(c);
       if (d < 0) downsell += -d;
@@ -133,6 +145,7 @@ export function dollarRollForward(customers: CustomerRecord[], fy: number, fye: 
     endingRevenue,
     gdr: startingRevenue ? (startingRevenue - churn - downsell) / startingRevenue : 0,
     ndr: startingRevenue ? (startingRevenue - churn - downsell + upsell) / startingRevenue : 0,
+    lostInYearRevenue,
   };
 }
 
@@ -143,7 +156,10 @@ export function tenureYears(startDate: string | undefined, asOf: string): number
 
 export interface CustomerContext {
   list: CustomerList;
+  /** The window revenue is priced over (concentration, mix): the latest window, or the latest fiscal year for a list by fiscal year. */
   period: PeriodColumn;
+  /** The latest full window, over which the LTM count roll-forward runs (dates are exact for any window); defaults to `period`. */
+  countWindow?: PeriodColumn;
   fye: number;
   asOfDate: string;
   asOfMonth: MonthKey;
@@ -240,14 +256,15 @@ export function customerAnalytics(ctx: CustomerContext): CustomerAnalytics {
       const dollars = dollarRollForward(list.customers, fy, fye);
       byFiscalYear[fy] = { counts, dollars: dollars ?? emptyDollars() };
     }
-    const ltmCounts = countRollForward(dated, `${period.start}-01`, monthEndDate(period.end));
+    const countWindow = ctx.countWindow ?? period;
+    const ltmCounts = countRollForward(dated, `${countWindow.start}-01`, monthEndDate(countWindow.end));
     const stripMonths = ctx.gridMonths ?? months;
     const monthly = stripMonths.map((m) => ({ month: m, counts: countRollForward(dated, `${m}-01`, monthEndDate(m)) }));
     const active = dated.filter((c) => customerActiveAt(c, asOfDate, fye)).map((c) => tenureYears(c.startDate, asOfDate)).sort((a, b) => a - b);
     const medianTenureYears = active.length ? (active.length % 2 ? active[(active.length - 1) / 2]! : (active[active.length / 2 - 1]! + active[active.length / 2]!) / 2) : 0;
     // Customer revenue exists by fiscal year only, so the LTM dollar bridge is the latest fiscal year's when the windows coincide.
     const latestMonths = fiscalYearMonths(latestFy, fye);
-    const ltmIsLatestFy = period.start === latestMonths[0] && period.end === latestMonths[11];
+    const ltmIsLatestFy = countWindow.start === latestMonths[0] && countWindow.end === latestMonths[11];
     out.retention = { byFiscalYear, ltm: { counts: ltmCounts, dollars: ltmIsLatestFy ? byFiscalYear[latestFy]!.dollars : emptyDollars() }, monthly, medianTenureYears, ...(list.customers.some((c) => !c.startDate) ? { revenueInferred: true } : {}) };
 
     // Cohorts by the fiscal year of the start date, when three or more fall inside the window (FY-4 onward);
@@ -289,6 +306,19 @@ function emptyDollars(): RetentionDollars {
 
 // --- Payroll -------------------------------------------------------------------------
 
+/**
+ * FTE-years an employee worked inside [start, end]: FTE × days on payroll ÷
+ * days in the window. The last day on payroll is the day before termination,
+ * as `onPayrollAt` counts it; the workbook's helper column uses the same days.
+ */
+export function fteYears(e: PayrollRecord, start: string, end: string): number {
+  const last = e.terminationDate ? dayBefore(e.terminationDate) : end;
+  const from = e.hireDate > start ? e.hireDate : start;
+  const to = last < end ? last : end;
+  const days = daysBetween(from, to) + 1;
+  return days > 0 ? (e.fte * days) / (daysBetween(start, end) + 1) : 0;
+}
+
 /** On payroll at `date`: hired on or before it and not terminated on or before it (DATA_CONTRACT §5.8). */
 export function onPayrollAt(e: PayrollRecord, date: string): boolean {
   return e.hireDate <= date && (!e.terminationDate || e.terminationDate > date);
@@ -326,14 +356,19 @@ export function headcountAnalytics(ctx: HeadcountContext): HeadcountAnalytics {
   const comp = (e: PayrollRecord) => (e.wagesByFiscalYear[fy] ?? 0) + (e.employerCostsByFiscalYear[fy] ?? 0);
 
   const departments = [...new Set(staff.map((e) => e.department))];
+  const fyMonths = fiscalYearMonths(fy, fye);
+  const fyStart = `${fyMonths[0]}-01`;
+  const fyEnd = monthEndDate(fyMonths[11]!);
   const byDepartment = departments
     .map((department) => {
       const members = staff.filter((e) => e.department === department);
       const onboard = members.filter((e) => onPayrollAt(e, asOfDate));
       const count = onboard.reduce((s, e) => s + e.fte, 0);
       const totalComp = members.reduce((s, e) => s + comp(e), 0);
+      // Pay covers everyone on payroll during the year, leavers included, so the average divides by the year's average FTE, not the year-end count.
+      const avgFte = members.reduce((s, e) => s + fteYears(e, fyStart, fyEnd), 0);
       const avgTenureYears = onboard.length ? onboard.reduce((s, e) => s + tenureYears(e.hireDate, asOfDate), 0) / onboard.length : 0;
-      return { department, count, totalComp, avgComp: count ? totalComp / count : 0, pctRevenue: ctx.fiscalYear.revenue ? totalComp / ctx.fiscalYear.revenue : 0, avgTenureYears };
+      return { department, count, avgFte, totalComp, avgComp: avgFte ? totalComp / avgFte : 0, pctRevenue: ctx.fiscalYear.revenue ? totalComp / ctx.fiscalYear.revenue : 0, avgTenureYears };
     })
     .sort((a, b) => b.totalComp - a.totalComp);
 
@@ -368,7 +403,9 @@ export function headcountAnalytics(ctx: HeadcountContext): HeadcountAnalytics {
     tenureAtDeparture.find((t) => t.bucket === b)!.count++;
   }
 
-  const registerTotal = register.totalsByFiscalYear[fy] ?? staff.reduce((s, e) => s + comp(e), 0);
+  // Staff pay plus the owner's employer costs, which the payroll line carries (the owner's salary is officer compensation).
+  const ownerCosts = register.employees.filter((e) => e.isOwner).reduce((s, e) => s + (e.employerCostsByFiscalYear[fy] ?? 0), 0);
+  const registerTotal = register.totalsByFiscalYear[fy] ?? staff.reduce((s, e) => s + comp(e), 0) + ownerCosts;
   return {
     asOf: asOfDate,
     latestHeadcount,

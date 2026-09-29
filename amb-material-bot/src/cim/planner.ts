@@ -9,8 +9,10 @@
 
 import type { CimContext } from "./context.ts";
 import { resolvePageRefs } from "./context.ts";
+import { smartQuotes } from "../util/format.ts";
 import type { Block, LaidOutPage, PageSpec, SectionEntry } from "./design.ts";
-import { drawDivider, layoutPage } from "./design.ts";
+import { drawDivider, dropEmptyObs, layoutPage, noteRounding } from "./design.ts";
+import { fitNotes } from "./sections/common.ts";
 import { LIBRARY } from "./sections/index.ts";
 import type { PageDraft, PageModule, SectionModule, Toc } from "./sections/types.ts";
 
@@ -61,29 +63,47 @@ export function planDeck(ctx: CimContext, opts: PlanOptions = {}): DeckPlan {
   const forced = new Set<string>();
   const uncarried = new Set<string>();
   const cut = new Set<string>();
+  // Pages that could not be built or laid out even alone: left out and reported, so one page never costs the whole deck.
+  const failed = new Map<string, string>();
   const warnings: string[] = [];
   const target = ctx.mainStreet ? TARGETS.mainStreet : TARGETS.lowerMiddleMarket;
+  const fail = (id: string, e: unknown) => {
+    const message = (e as Error).message;
+    failed.set(id, `Not built: ${message}`);
+    warnings.push(`${id}: page left out of the deck because it could not be built (${message}); review before sending`);
+  };
 
   for (let pass = 0; pass < 40; pass++) {
-    resolvePresence(ctx, cut, forced, uncarried);
-    const built = buildPages(ctx);
+    resolvePresence(ctx, cut, forced, uncarried, failed);
+    const { pages: built, giveBack } = buildPages(ctx, fail);
+    // A host whose build failed gives back its last carried module and is built again without it.
+    if (giveBack) {
+      uncarried.add(giveBack.id);
+      warnings.push(`${giveBack.host}: ${giveBack.message}; ${giveBack.id} moved to its own page`);
+      continue;
+    }
     // A host that did not take a module assigned to it gives it back, so no content is lost.
     const dropped = [...ctx.carried.entries()].flatMap(([host, ids]) => ids.filter((id) => !built.some((p) => p.draft.id === host && p.draft.carries.includes(id))));
     if (dropped.length) {
       dropped.forEach((id) => uncarried.add(id));
       continue;
     }
-    // Lay out; an overflowing page gives back its last carried module, or the build fails loudly.
+    // Lay out; an overflowing page gives back its last carried module, or is left out and reported.
     let retry = false;
     for (const p of built) {
       if (!p.draft.spec) continue;
       try {
+        dropEmptyObs(p.draft.spec);
+        noteRounding(p.draft.spec);
+        // The rounding clause lengthens the Note line after the module fitted its band, so the band is fitted again.
+        p.draft.spec.notes = fitNotes(ctx, p.draft.id, p.draft.spec.notes);
         p.layout = layoutPage(p.draft.spec);
       } catch (e) {
         const last = p.draft.carries[p.draft.carries.length - 1];
-        if (!last) throw e;
-        uncarried.add(last);
-        warnings.push(`${p.draft.id}: ${(e as Error).message}; ${last} moved to its own page`);
+        if (last) {
+          uncarried.add(last);
+          warnings.push(`${p.draft.id}: ${(e as Error).message}; ${last} moved to its own page`);
+        } else fail(p.draft.id, e);
         retry = true;
         break;
       }
@@ -110,7 +130,7 @@ export function planDeck(ctx: CimContext, opts: PlanOptions = {}): DeckPlan {
       }
       warnings.push(`Deck runs ${total} pages against a target of ${target[0]} to ${target[1]}; nothing left in the cut order`);
     }
-    return finish(ctx, built, wantDividers, target, warnings, cut);
+    return finish(ctx, built, wantDividers, target, warnings, cut, failed);
   }
   throw new Error("Deck planning did not converge");
 }
@@ -118,11 +138,11 @@ export function planDeck(ctx: CimContext, opts: PlanOptions = {}): DeckPlan {
 const moduleOf = (id: string): PageModule | undefined => allModules().find((x) => x.m.id === id)?.m;
 
 /** Guide 3.5 rules 1 and 2: every A module plus each C module whose trigger holds; merges to the named host, following chains. */
-function resolvePresence(ctx: CimContext, cut: Set<string>, forced: Set<string>, uncarried: Set<string>): void {
+function resolvePresence(ctx: CimContext, cut: Set<string>, forced: Set<string>, uncarried: Set<string>, failed: Map<string, string>): void {
   ctx.present.clear();
   ctx.carried.clear();
   ctx.openQuestions.length = 0;
-  for (const { m } of allModules()) if (!cut.has(m.id) && !m.absent(ctx)) ctx.present.add(m.id);
+  for (const { m } of allModules()) if (!cut.has(m.id) && !failed.has(m.id) && !m.absent(ctx)) ctx.present.add(m.id);
   const hostOf = new Map<string, string>();
   for (const { m } of allModules()) {
     if (!ctx.present.has(m.id) || !m.mergeInto || uncarried.has(m.id)) continue;
@@ -134,19 +154,30 @@ function resolvePresence(ctx: CimContext, cut: Set<string>, forced: Set<string>,
   }
 }
 
-function buildPages(ctx: CimContext): PlannedPage[] {
+/**
+ * Build every present page. A build that throws on a host carrying other
+ * modules stops the pass and names the module to give back; one that throws
+ * alone is reported through `fail` and the page is left out.
+ */
+function buildPages(ctx: CimContext, fail: (id: string, e: unknown) => void): { pages: PlannedPage[]; giveBack?: { host: string; id: string; message: string } } {
   const carriedIds = new Set([...ctx.carried.values()].flat());
   const out: PlannedPage[] = [];
   for (const s of LIBRARY) {
     for (const m of s.pages) {
       if (!ctx.present.has(m.id) || carriedIds.has(m.id)) continue;
-      for (const d of m.build(ctx)) out.push({ draft: d, section: s, num: 0 });
+      try {
+        for (const d of m.build(ctx)) out.push({ draft: d, section: s, num: 0 });
+      } catch (e) {
+        const last = ctx.carried.get(m.id)?.at(-1);
+        if (last) return { pages: out, giveBack: { host: m.id, id: last, message: (e as Error).message } };
+        fail(m.id, e);
+      }
     }
   }
-  return out;
+  return { pages: out };
 }
 
-function finish(ctx: CimContext, built: PlannedPage[], dividers: boolean, target: [number, number], warnings: string[], cut: Set<string>): DeckPlan {
+function finish(ctx: CimContext, built: PlannedPage[], dividers: boolean, target: [number, number], warnings: string[], cut: Set<string>, failed: Map<string, string>): DeckPlan {
   const pages: PlannedPage[] = [];
   const sectionPages = new Map<string, PlannedPage[]>();
   for (const p of built) sectionPages.set(p.section.id, [...(sectionPages.get(p.section.id) ?? []), p]);
@@ -168,9 +199,11 @@ function finish(ctx: CimContext, built: PlannedPage[], dividers: boolean, target
   for (const p of pages) {
     const spec = p.layout?.spec ?? p.draft.spec;
     if (!spec) continue;
-    resolveRefs(spec, pageOf);
+    resolveRefs(spec, pageOf, p.num);
     p.draft.spec = spec;
   }
+
+  warnings.push(...labelConflicts(pages), ...commentaryDensity(pages));
 
   const sections: SectionEntry[] = [];
   const exhibits = new Map<string, { title: string; page: number }[]>();
@@ -188,7 +221,7 @@ function finish(ctx: CimContext, built: PlannedPage[], dividers: boolean, target
     if (s.front) continue;
     const reason = m.absent(ctx);
     if (cut.has(m.id)) modules.push({ id: m.id, name: m.name, section: s.name, state: "cut", reason: "Cut for length (guide 3.5 rule 5)" });
-    else if (!ctx.present.has(m.id)) modules.push({ id: m.id, name: m.name, section: s.name, state: "omitted", reason });
+    else if (!ctx.present.has(m.id)) modules.push({ id: m.id, name: m.name, section: s.name, state: "omitted", reason: failed.get(m.id) ?? reason });
     else if (carriedBy.has(m.id)) modules.push({ id: m.id, name: m.name, section: s.name, state: "merged", host: carriedBy.get(m.id) });
     else modules.push({ id: m.id, name: m.name, section: s.name, state: "built" });
   }
@@ -209,12 +242,79 @@ function dividerDraft(ctx: CimContext, s: SectionModule): PageDraft {
   };
 }
 
+/** Spec 9: a standard page carries 120 to 220 words of commentary outside its tables. */
+export const COMMENTARY_FLOOR = 120;
+
+/**
+ * Commentary density and evenness (spec 9, guide 3.2, T9), reported for the
+ * advisor: a content page with observations but under the word floor, and
+ * neighbouring pages with the same number of observations, which reads as a
+ * template rather than as the evidence.
+ */
+export function commentaryDensity(pages: PlannedPage[]): string[] {
+  const out: string[] = [];
+  let prev: { id: string; count: number } | undefined;
+  for (const p of pages) {
+    const spec = p.draft.spec;
+    if (p.draft.kind !== "content" || !spec || !p.layout) {
+      prev = undefined;
+      continue;
+    }
+    const obs = spec.rows.flatMap((r) => [...r.columns.flatMap((c) => c.blocks), ...(r.floating ?? [])]).find((b) => b.kind === "observations");
+    if (!obs || obs.kind !== "observations") {
+      prev = undefined;
+      continue;
+    }
+    if (p.layout.words < COMMENTARY_FLOOR) out.push(`${p.draft.id}: ${p.layout.words} words of commentary (floor ${COMMENTARY_FLOOR}, spec 9)`);
+    const count = obs.items.length;
+    if (prev && prev.count === count) out.push(`${p.draft.id}: ${count} observations, as on ${prev.id} before it (T9: counts follow the evidence)`);
+    prev = { id: p.draft.id, count };
+  }
+  return out;
+}
+
+/** Row labels that repeat in every table (a margin line, a total, a subtotal of the table's own lines), so they name no single amount. */
+const GENERIC_LABELS = /^(% |total$|other$|\(|revenue per)/i;
+
+/**
+ * One label, one amount (guide 4.8, T27): a table row label that prints a
+ * different figure for the same period on another page is reported, so
+ * "Other operating expenses" can never mean three amounts in one deck.
+ */
+export function labelConflicts(pages: PlannedPage[]): string[] {
+  const seen = new Map<string, { value: string; page: number }>();
+  const out: string[] = [];
+  for (const p of pages) {
+    const spec = p.draft.spec;
+    if (!spec) continue;
+    for (const b of spec.rows.flatMap((r) => [...r.columns.flatMap((c) => c.blocks), ...(r.floating ?? [])])) {
+      if (b.kind !== "numTable" || /%/.test(b.header?.units ?? "")) continue;
+      const heads = b.spec.cols.filter((c) => c.kind === "num").map((c) => c.head ?? "");
+      for (const row of b.spec.rows) {
+        if (!row.vals || row.type === "ratio" || GENERIC_LABELS.test(row.label)) continue;
+        row.vals.forEach((v, i) => {
+          const period = heads[i]!;
+          // Periods only: a growth head ("LTM y/y", "FY25 y/y") names a comparison, and two tables may compare different pairs.
+          if (!/^(FY\d{4}|LTM|PF)/.test(period) || /y\/y|CAGR/.test(period) || !/\d/.test(v)) return;
+          const key = `${row.label.toLowerCase()}|${period}`;
+          const prev = seen.get(key);
+          if (!prev) seen.set(key, { value: v.replace(/\$/g, ""), page: p.num });
+          else if (prev.value !== v.replace(/\$/g, "")) out.push(`"${row.label}" ${period} prints ${prev.value} on page ${prev.page} and ${v} on page ${p.num}`);
+        });
+      }
+    }
+  }
+  return [...new Set(out)];
+}
+
 /** Resolve page tokens in every string a page will print: title, table cells, observations, prose, notes. */
-function resolveRefs(spec: PageSpec, pageOf: (id: string) => number | undefined): void {
-  const r = (t: string) => resolvePageRefs(t, pageOf);
+function resolveRefs(spec: PageSpec, pageOf: (id: string) => number | undefined, here: number): void {
+  // Page numbers in, then typographic quotes: the last pass over every string the page prints.
+  const r = (t: string) => smartQuotes(resolvePageRefs(t, pageOf, here));
   spec.title = r(spec.title);
   spec.notes = { source: spec.notes.source && r(spec.notes.source), note: spec.notes.note && r(spec.notes.note), footnotes: spec.notes.footnotes?.map(r) };
   const fix = (b: Block): void => {
+    if ("header" in b && b.header) b.header = { ...b.header, title: r(b.header.title), annotation: b.header.annotation && r(b.header.annotation) };
     switch (b.kind) {
       case "numTable":
         for (const row of b.spec.rows) {

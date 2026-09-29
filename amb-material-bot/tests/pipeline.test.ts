@@ -78,7 +78,8 @@ describe("pipeline on the sample request (offline: no Claude)", () => {
     expect(result.verification.mismatches).toEqual([]);
     expect(result.verification.lint).toEqual([]);
     expect(result.verification.formulas).toBeGreaterThan(7_000);
-    expect(result.masterCheck).toBe("All checks OK");
+    // C37 renders the written file; without LibreOffice the master check says the render check is still pending.
+    expect(result.masterCheck).toBe(hasSoffice ? "All checks OK" : "All checks OK (render check pending)");
 
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.readFile(result.workbook);
@@ -109,10 +110,14 @@ describe("pipeline on the sample request (offline: no Claude)", () => {
     for (const q of result.openQuestions) expect(questions).toContain(`- [ ] ${q}`);
     expect(questions).toContain("[Confirm:");
     // Bot-flagged accounts stay proposed and out of Adj. EBITDA until an advisor accepts them (guide Q10).
-    expect(questions).toMatch(/- \[ \] \[N6\] Vehicle Expenses \(bot-flagged\), proposed: .*Not in Adj\. EBITDA until accepted/);
+    expect(questions).toMatch(/- \[ \] \[N6\] Vehicle expenses \(for review\), proposed: .*Not in Adj\. EBITDA until accepted/);
+    // SDE adds back the owner's employer payroll taxes once accepted; until then the statutory estimate is listed for review.
+    expect(questions).toMatch(/- \[ \] \[S4\] Payroll taxes and benefits on owner compensation, proposed: Adds back employer payroll taxes on Mark Delaney's salary, \$13\.9K in FY2025/);
     expect(questions).toMatch(/- \[ \] \[M1\] After-hours emergency plumbing, proposed: .*Memo only/);
     expect(questions).toMatch(/\[S3\] capital reserve is a proxy/);
     expect(questions).toContain("- S3.1 Market size and share: No sourced market inputs");
+    // Financials ending Dec-25 are stale for a September 2026 CIM: the first thing a buyer asks for is the year to date (QA round 1 F45).
+    expect(questions).toMatch(/- \[ \] The financials end at Dec-25, \d+ days before this run: request the P&L and balance sheet year to date through Aug-26/);
   });
 
   it("summarises the deal, the numbers, every check and the CIM's sections with the reason each omission failed", () => {
@@ -125,8 +130,12 @@ describe("pipeline on the sample request (offline: no Claude)", () => {
     expect(summary).toMatch(/\| Adj\. EBITDA \|.*\| \$371,865 \|/);
     expect(summary).toContain("Structured intake facts: intake.json in the source folder.");
     expect(summary).toContain("| cim-copy.fixture.json | CIM copy fixture (used when no API key is set) |");
-    expect(summary).toContain("### Checks (guide 5.7): All checks OK");
-    for (let i = 1; i <= 37; i++) expect(summary).toMatch(new RegExp(`\\| C${String(i).padStart(2, "0")} \\| .* \\| (OK|n\\.a\\.) \\|`));
+    expect(summary).toContain(`### Checks (guide 5.7): ${result.masterCheck}`);
+    for (let i = 1; i <= 36; i++) expect(summary).toMatch(new RegExp(`\\| C${String(i).padStart(2, "0")} \\| .* \\| (OK|n\\.a\\.) \\|`));
+    if (hasSoffice) {
+      expect(summary).toMatch(/\| C37 \| .* \| OK \| .*tabs rendered; smallest body text \d\.\d pt; nothing past the margin/);
+      expect(summary).toMatch(/- Render check \(C37\): \d+ tabs rendered; smallest body text (7\.[0-9]|[89]\.\d) pt/);
+    } else expect(summary).toMatch(/\| C37 \| .* \| Pending \|/);
     expect(summary).toContain("| 4 | Executive summary | S1.1 Company at a glance |");
     expect(summary).toMatch(/\| S3\.1 Market size and share \| Market \| omitted \| No sourced market inputs/);
     expect(summary).toContain(`${result.pages} pages against the Main Street target of 20–28`);
@@ -143,7 +152,7 @@ describe("pipeline on annual statements only, with no intake facts or reviewed c
     const result = await offline(() => processRequest(row, { repoRoot: REPO, outputDir: tmpDir(), firm, now }));
 
     expect(result.verification.ok).toBe(true);
-    expect(result.masterCheck).toBe("All checks OK");
+    expect(result.masterCheck).toBe(hasSoffice ? "All checks OK" : "All checks OK (render check pending)");
     expect(result.copySource).toBe("template");
     const summary = fs.readFileSync(path.join(result.folder, "run-summary.md"), "utf8");
     expect(summary).toContain("Periods: annual statements only (guide 5.2A)");

@@ -8,6 +8,7 @@ import type { FinancialDataset, IntakeFacts, SourceKind } from "../domain/financ
 import { monthLabel } from "../domain/financials.ts";
 import type { ModelOutput, PeriodColumn, PeriodValues } from "../model/types.ts";
 import { findColumn, latestColumn } from "../model/types.ts";
+import { isFieldDepartment } from "../model/analytics.ts";
 import type { RequestRow } from "../requests/schema.ts";
 import { fyRange } from "../util/format.ts";
 import { Brief, buildBrief } from "./brief.ts";
@@ -125,35 +126,89 @@ export function shortNameOf(legal: string): string {
 /** Values of a column. */
 export const at = (ctx: CimContext, c: PeriodColumn): PeriodValues => ctx.out.periods[c.key]!;
 
+
 /** The columns every financial table shows: the fiscal years, then LTM and PF when they differ from the latest year. */
 export const tableColumns = (ctx: CimContext): PeriodColumn[] => [...ctx.fy, ...(ctx.ltm ? [ctx.ltm] : []), ...(ctx.pf ? [ctx.pf] : [])];
 
-/** Standard general note (guide 4.6), naming the fiscal year-end only when it is not December 31. */
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+/** "June 30": the month's last day, from the calendar; a February year-end reads "the last day of February", since leap years move it. */
+export function fiscalYearEndText(month: number): string {
+  if (month === 2) return "the last day of February";
+  return `${MONTH_NAMES[month - 1]} ${new Date(Date.UTC(2023, month, 0)).getUTCDate()}`;
+}
+
+/**
+ * Standard general note (guide 4.6), naming the fiscal year-end only when it
+ * is not December 31. The year-end sentence follows the units, and fitNotes
+ * never drops either, so a tight notes band sheds the other sentences first.
+ */
 export function standardNote(ctx: CimContext, extra?: string): string {
   const fye = ctx.out.fiscalYearEndMonth;
-  const month = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][fye - 1];
-  const parts = ["Figures in USD thousands unless noted. Financials are as provided by the Seller and have not been independently audited."];
-  if (fye !== 12) parts.push(`Fiscal year ends ${month} ${[1, 3, 5, 7, 8, 10].includes(fye) ? 31 : fye === 2 ? 28 : 30}.`);
+  const parts = ["Figures in USD thousands unless noted."];
+  if (fye !== 12) parts.push(`Fiscal year ends ${fiscalYearEndText(fye)}.`);
+  parts.push("Financials are as provided by the Seller and have not been independently audited.");
   if (extra) parts.push(extra);
   return parts.join(" ");
+}
+
+/**
+ * The population every customer exhibit and sentence the modules build
+ * names, one phrase per deal (guide D11): "listed customers" (or clients).
+ * Only the reviewed copy may say more, from the sources.
+ */
+export const population = (ctx: CimContext): string => `listed ${(ctx.ds.customers?.term ?? "Customer").toLowerCase()}s`;
+
+/** Who the customer list leaves out, in its own words without the "(not listed individually)" tag: "residential households and maintenance-agreement members". */
+export function residualName(ctx: CimContext): string | undefined {
+  const label = ctx.ds.customers?.residual?.label.replace(/\s*\((not listed|unlisted)[^)]*\)\s*$/i, "").trim();
+  return label ? label.charAt(0).toLowerCase() + label.slice(1) : undefined;
+}
+
+/** The field departments on the payroll register, as the register names them ("Field service and installation"). */
+export function fieldDepartments(ctx: CimContext): string {
+  const names = (ctx.out.headcount?.byDepartment ?? []).map((d) => d.department).filter(isFieldDepartment);
+  if (!names.length) return "";
+  const joined = names.length === 1 ? names[0]! : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]!.toLowerCase()}`;
+  return joined.charAt(0).toUpperCase() + joined.slice(1);
 }
 
 /** "Per management; not independently verified." */
 export const PER_MANAGEMENT = "Per management; not independently verified.";
 
-/** The non-GAAP sentence for the first page that shows Adj. EBITDA (guide 4.6). */
-export const nonGaap = (ctx: CimContext): string =>
-  `Adj. EBITDA${ctx.mainStreet ? ", SDE" : ""} and PF Adj. EBITDA are non-GAAP measures; see ${pageRef("S7.1")} for the reconciliation to net income.`;
+/**
+ * AMB states Adj. EBITDA after the capital reserve (guide 5.4); the figure
+ * before it is given so a buyer can compare on a pre-capex basis. Empty when
+ * the ladder carries no reserve.
+ */
+export const reserveSentence = (ctx: CimContext): string => {
+  const l = ctx.out.periods[ctx.latest.key]!.ladder;
+  return l.capitalReserve ? `Adj. EBITDA is after a capital reserve [S3] for maintenance capital spending; before it, ${ctx.latest.label} Adj. EBITDA is ${ctx.brief.t("adjBeforeReserve.latest")}.` : "";
+};
+
+/**
+ * The non-GAAP sentence for the pages that show Adj. EBITDA (guide 4.6). The
+ * reserve sentence goes last, so a full notes band gives it up first; the
+ * reconciliation page always carries it.
+ */
+export const nonGaap = (ctx: CimContext): string => {
+  const reserve = reserveSentence(ctx);
+  return `Adj. EBITDA${ctx.mainStreet ? ", SDE" : ""} and PF Adj. EBITDA are non-GAAP measures; see ${pageRef("S7.1")} for the reconciliation to net income.${reserve ? ` ${reserve}` : ""}`;
+};
 
 /** A page reference token resolved after the planner numbers the pages: "{{page:S7.1}}" -> "page 17". */
 export const pageRef = (sectionId: string): string => `{{page:${sectionId}}}`;
 
-/** Replace every page token with its number, or "the appendix" when the deck does not carry that page. */
-export function resolvePageRefs(text: string, pageOf: (id: string) => number | undefined): string {
+/**
+ * Replace every page token with its number, or "the appendix" when the deck
+ * does not carry that page. A reference to the page it prints on (a module
+ * merged onto its host) reads "this page".
+ */
+export function resolvePageRefs(text: string, pageOf: (id: string) => number | undefined, here?: number): string {
   return text
     .replace(/\{\{page:([A-Z0-9.]+)\}\}/g, (_, id: string) => {
       const n = pageOf(id);
-      return n === undefined ? "the appendix" : `page ${n}`;
+      return n === undefined ? "the appendix" : n === here ? "this page" : `page ${n}`;
     })
     .replace(/\{\{pageno:([A-Z0-9.]+)\}\}/g, (_, id: string) => String(pageOf(id) ?? ""));
 }

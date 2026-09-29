@@ -18,7 +18,7 @@ import ExcelJS from "exceljs";
 import { SOURCE_LABELS, type FinancialDataset } from "../domain/financials.ts";
 import type { RequestRow } from "../requests/schema.ts";
 import type { Assumptions } from "./assumptions.ts";
-import { dropEmptyNotesColumn, finalizeNotes, fitLabelColumn, resolveTokens, type CellSpec, type SheetPlan } from "./sheet.ts";
+import { dropEmptyNotesColumn, finalizeNotes, fitPrintWidth, freezeWideOnly, holdTitleInTitleColumns, resolveTokens, wrapLongLabels, type CellSpec, type CfRule, type SheetPlan } from "./sheet.ts";
 import { COLOR, FONT, MARGINS, ROLE_COLOR, ROW_HEIGHT, STYLES, argb, type FontSpec } from "./styles.ts";
 import type { ModelOutput } from "./types.ts";
 import { planAssumptions, type TabContext } from "./workbook/assumptionsTab.ts";
@@ -88,7 +88,7 @@ export function planWorkbook(model: ModelOutput, opts: PlanOptions): WorkbookPla
     asOfLabel: asOfLabel(model),
     masterToggle: masterToggleRef(),
     customers: ds?.customers?.customers.map((c) => ({ id: c.id, startDate: c.startDate, endDate: c.endDate, revenueByFiscalYear: c.revenueByFiscalYear })) ?? [],
-    employees: ds?.payroll?.employees.map((e) => ({ id: e.id, department: e.department, hireDate: e.hireDate, terminationDate: e.terminationDate, isOwner: e.isOwner })) ?? [],
+    employees: ds?.payroll?.employees.map((e) => ({ id: e.id, department: e.department, hireDate: e.hireDate, terminationDate: e.terminationDate, isOwner: e.isOwner, fte: e.fte })) ?? [],
     kpis: ds?.kpis ?? [],
     customerYears: customerYears(fiscalYears, ds?.customers),
   };
@@ -154,7 +154,10 @@ export function planWorkbook(model: ModelOutput, opts: PlanOptions): WorkbookPla
   const plans = order.map((k) => byKey[k]!);
   for (const p of plans) {
     dropEmptyNotesColumn(p);
-    fitLabelColumn(p);
+    holdTitleInTitleColumns(p, opts.businessName);
+    wrapLongLabels(p);
+    fitPrintWidth(p);
+    freezeWideOnly(p);
     finalizeNotes(p);
   }
   resolveTokens(plans);
@@ -231,14 +234,14 @@ export async function renderWorkbook(plan: WorkbookPlan, file: string, opts: { c
     for (const rule of p.cf) {
       ws.addConditionalFormatting({
         ref: rule.ref,
-        rules: [{ type: "expression", priority: priority++, formulae: [rule.formula], style: dxf(rule.font, rule.fill) }],
+        rules: [{ type: "expression", priority: priority++, formulae: [rule.formula], style: dxf(rule) }],
       });
     }
-    if (p.toggle && p.output && p.print.areas.length) {
-      const ref = (p.toggleRanges ?? p.print.areas).join(" ");
+    const toggled = p.toggle && p.output ? printToggleRanges(p) : [];
+    if (toggled.length) {
       ws.addConditionalFormatting({
-        ref,
-        rules: [{ type: "expression", priority: priority++, formulae: [`$${colName(p.toggle.col)}$${p.toggle.row}=1`], style: { font: { color: { argb: argb(COLOR.black) } } } }],
+        ref: toggled.join(" "),
+        rules: [{ type: "expression", priority: priority++, formulae: [`$${colName(p.toggle!.col)}$${p.toggle!.row}=1`], style: { font: { color: { argb: argb(COLOR.black) } } } }],
       });
     }
     if (p.print.areas.length) {
@@ -275,6 +278,66 @@ export async function renderWorkbook(plan: WorkbookPlan, file: string, opts: { c
 /** ExcelJS declares PaperSize as a const enum, which erasable-syntax TypeScript cannot import; 1 is Letter. */
 const LETTER = 1 as ExcelJS.PageSetup["paperSize"];
 
+/** The font colour a cell renders in: its own, its named style's, else its role's (guide 5.9). */
+export function fontColorOf(spec: CellSpec): string {
+  const style = spec.style ? STYLES[spec.style] : undefined;
+  const role = spec.role ?? (spec.f !== undefined ? "calc" : typeof spec.v === "number" ? "input" : "text");
+  return spec.font?.color ?? style?.font?.color ?? ROLE_COLOR[role];
+}
+
+/**
+ * The cells the Print toggle turns black (guide 5.9): every colour-coded cell
+ * inside the print area, as rectangles. Header bands (white on maroon) and
+ * black text are left out, so Print mode never paints a header black.
+ */
+export function printToggleRanges(p: SheetPlan): string[] {
+  const areas = (p.toggleRanges ?? p.print.areas).map(parseRange);
+  const inArea = (r: number, c: number) => areas.some((a) => r >= a.r1 && r <= a.r2 && c >= a.c1 && c <= a.c2);
+  const byRow = new Map<number, number[]>();
+  for (const [key, spec] of p.cells) {
+    const color = fontColorOf(spec).toUpperCase();
+    if (color === COLOR.black || color === COLOR.white) continue;
+    const [r, c] = key.split(":").map(Number) as [number, number];
+    if (inArea(r, c)) byRow.set(r, [...(byRow.get(r) ?? []), c]);
+  }
+  // Runs of adjacent columns per row, then identical runs on consecutive rows merged into one rectangle.
+  const open = new Map<string, { r1: number; r2: number; c1: number; c2: number }>();
+  const done: { r1: number; r2: number; c1: number; c2: number }[] = [];
+  for (const r of [...byRow.keys()].sort((a, b) => a - b)) {
+    const cols = byRow.get(r)!.sort((a, b) => a - b);
+    const runs: [number, number][] = [];
+    for (const c of cols) {
+      const last = runs[runs.length - 1];
+      if (last && c === last[1] + 1) last[1] = c;
+      else runs.push([c, c]);
+    }
+    const seen = new Set<string>();
+    for (const [c1, c2] of runs) {
+      const k = `${c1}:${c2}`;
+      seen.add(k);
+      const cur = open.get(k);
+      if (cur && cur.r2 === r - 1) cur.r2 = r;
+      else {
+        if (cur) done.push(cur);
+        open.set(k, { r1: r, r2: r, c1, c2 });
+      }
+    }
+    for (const [k, rect] of open) if (!seen.has(k) && rect.r2 < r) {
+      done.push(rect);
+      open.delete(k);
+    }
+  }
+  done.push(...open.values());
+  return done.map((x) => (x.r1 === x.r2 && x.c1 === x.c2 ? `${colName(x.c1)}${x.r1}` : `${colName(x.c1)}${x.r1}:${colName(x.c2)}${x.r2}`));
+}
+
+function parseRange(a: string): { r1: number; c1: number; r2: number; c2: number } {
+  const m = /^\$?([A-Z]+)\$?(\d+):\$?([A-Z]+)\$?(\d+)$/.exec(a);
+  if (!m) throw new Error(`Not a range: ${a}`);
+  const col = (letters: string) => [...letters].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0);
+  return { c1: col(m[1]!), r1: Number(m[2]), c2: col(m[3]!), r2: Number(m[4]) };
+}
+
 function renderCell(cell: ExcelJS.Cell, spec: CellSpec): void {
   const style = spec.style ? STYLES[spec.style] : undefined;
   if (spec.f !== undefined) {
@@ -283,8 +346,7 @@ function renderCell(cell: ExcelJS.Cell, spec: CellSpec): void {
     cell.value = spec.v;
   }
   const font: FontSpec = { ...style?.font, ...spec.font };
-  const role = spec.role ?? (spec.f !== undefined ? "calc" : typeof spec.v === "number" ? "input" : "text");
-  const color = spec.font?.color ?? style?.font?.color ?? ROLE_COLOR[role];
+  const color = fontColorOf(spec);
   cell.font = { name: FONT, size: font.size ?? 9, bold: font.bold ?? false, italic: font.italic ?? false, underline: font.underline ? true : undefined, color: { argb: argb(color) } };
   const fill = spec.fill ?? style?.fill;
   if (fill) cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: argb(fill) } };
@@ -300,11 +362,29 @@ function renderCell(cell: ExcelJS.Cell, spec: CellSpec): void {
   }
 }
 
-function dxf(font?: FontSpec, fill?: string): Partial<ExcelJS.Style> {
+function dxf(rule: CfRule): Partial<ExcelJS.Style> {
   const s: Partial<ExcelJS.Style> = {};
-  if (font) s.font = { color: font.color ? { argb: argb(font.color) } : undefined, bold: font.bold, italic: font.italic };
-  if (fill) s.fill = { type: "pattern", pattern: "solid", bgColor: { argb: argb(fill) } };
+  if (rule.font) s.font = { color: rule.font.color ? { argb: argb(rule.font.color) } : undefined, bold: rule.font.bold, italic: rule.font.italic };
+  if (rule.fill) s.fill = { type: "pattern", pattern: "solid", bgColor: { argb: argb(rule.fill) } };
+  if (rule.border) {
+    // The sensitivity frontier's box (guide 5.5): a 1 pt maroon rule on the hurdle-clearing cells.
+    const side = (b?: string) => (b ? { style: b as ExcelJS.BorderStyle, color: { argb: argb(rule.borderColor ?? COLOR.maroon) } } : undefined);
+    s.border = { top: side(rule.border.top), bottom: side(rule.border.bottom), left: side(rule.border.left), right: side(rule.border.right) };
+  }
   return s;
+}
+
+/** Join duplicate `_xlnm.Print_Area` defined names of one sheet into a single name listing every range. */
+export function mergePrintAreas(workbookXml: string): string {
+  const re = /<definedName name="_xlnm\.Print_Area" localSheetId="(\d+)">([^<]*)<\/definedName>/g;
+  const bySheet = new Map<string, string[]>();
+  for (const m of workbookXml.matchAll(re)) bySheet.set(m[1]!, [...(bySheet.get(m[1]!) ?? []), m[2]!]);
+  const written = new Set<string>();
+  return workbookXml.replace(re, (_, id: string) => {
+    if (written.has(id)) return "";
+    written.add(id);
+    return `<definedName name="_xlnm.Print_Area" localSheetId="${id}">${bySheet.get(id)!.join(",")}</definedName>`;
+  });
 }
 
 function colName(n: number): string {
@@ -326,6 +406,9 @@ function colName(n: number): string {
 async function finishPackage(file: string, plan: WorkbookPlan): Promise<void> {
   const JSZip = (await import("jszip")).default;
   const zip = await JSZip.loadAsync(fs.readFileSync(file));
+  // ExcelJS writes one Print_Area name per range; a sheet with several ranges needs them in one name, comma-separated.
+  const wbXml = await zip.file("xl/workbook.xml")!.async("string");
+  zip.file("xl/workbook.xml", mergePrintAreas(wbXml));
   const styles = await zip.file("xl/styles.xml")!.async("string");
   zip.file("xl/styles.xml", styles.replace(/<font>(?:(?!<\/font>)[\s\S])*?<name val="Calibri"\/>(?:(?!<\/font>)[\s\S])*?<\/font>/, '<font><sz val="10"/><name val="Arial"/><family val="2"/></font>'));
   for (const [i, p] of plan.plans.entries()) {

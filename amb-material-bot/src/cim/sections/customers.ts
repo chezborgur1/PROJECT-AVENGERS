@@ -3,15 +3,19 @@
 // retention on the next. Cohort triangles merge into the retention page when
 // it has room and otherwise go to the appendix (S11.3).
 
+import { monthLabel } from "../../domain/financials.ts";
 import type { CimContext } from "../context.ts";
-import { confirm, pageCopy, pageRef, PER_MANAGEMENT, standardNote } from "../context.ts";
+import { confirm, pageCopy, pageRef, PER_MANAGEMENT, population, residualName, resolveCopy, standardNote } from "../context.ts";
 import type { CimCopy } from "../copy.ts";
+import type { Block } from "../design.ts";
 import { spanW } from "../design.ts";
 import { cohortTable, customerMix, customerMixChart, keyCustomers, keyObservations, observationsBlock, retentionCounts, retentionDollars, top10, usable, winsLosses } from "../exhibits.ts";
 import { chooseTitle, draft, present, source } from "./common.ts";
 import type { PageModule, SectionModule } from "./types.ts";
 
 const SECTION = "Customers";
+
+const capFirst = (t: string): string => t.charAt(0).toUpperCase() + t.slice(1);
 
 const hasList = (ctx: CimContext): string | undefined => (ctx.out.customers ? undefined : "No customer list");
 
@@ -23,7 +27,7 @@ const s4_1: PageModule = {
   absent: hasList,
   budget: [1, 1],
   build(ctx) {
-    const copy = pageCopy(ctx, "s4_1") ?? fallback41();
+    const copy = pageCopy(ctx, "s4_1") ?? fallback41(ctx);
     const lw = usable(1, 6);
     const chart = customerMixChart(ctx);
     const mix = customerMix(ctx, lw);
@@ -40,21 +44,24 @@ const s4_1: PageModule = {
         notes: {
           source: source(ctx.sources.financials, ctx.sources.customers),
           note: standardNote(ctx, "Customers are coded; names are available in the data room after a management meeting."),
-          footnotes: [`Residential households and maintenance-agreement members are not listed individually; their revenue is the P&L revenue less the listed accounts.`],
+          footnotes: [
+            ...(residualName(ctx) ? [`${capFirst(residualName(ctx)!)} are not listed individually; their revenue is the P&L revenue less the ${population(ctx)}.`] : []),
+            ...(ctx.out.customers ? [`${capFirst(population(ctx))} billed at any time in ${ctx.out.customers.period.label}; ${b.t("cust.count")} were active at ${monthLabel(ctx.latest.end)}.`] : []),
+          ],
         },
         carries: top ? ["S4.4"] : [],
       }),
     ];
   },
-  fallback: () => ({ s4_1: fallback41() }),
+  fallback: (ctx) => ({ s4_1: fallback41(ctx) }),
 };
 
-function fallback41(): NonNullable<CimCopy["s4_1"]> {
+function fallback41(ctx: CimContext): NonNullable<CimCopy["s4_1"]> {
   return {
     observations: [
       { row: "top.C-001", lead: "The largest account, {{cust.largestId}}, is {{cust.largestShare}} of revenue", body: "at {{cust.largestRevenue}} in the latest year." },
       { row: "top.top10", lead: "The top 10 are {{cust.top10Share}} of revenue", body: "and {{cust.top10ShareOfCoded}} of listed-account revenue." },
-      { row: "mix.residual", lead: "{{cust.residualShare}} of revenue is not listed by customer", body: "because households and members are billed as individuals; no single one is material." },
+      { row: "mix.residual", lead: "{{cust.residualShare}} of revenue is not listed by customer,", body: `because the list does not name ${residualName(ctx) ?? "those customers"} one by one.` },
     ],
   };
 }
@@ -99,6 +106,8 @@ const s4_2: PageModule = {
     const cohorts = ctx.carried.get("S4.2")?.includes("S4.3") ? cohortTable(ctx, rw) : undefined;
     const chart = cohorts ? undefined : winsLosses(ctx);
     const obs = observationsBlock("the retention tables", keyObservations(ctx, "S4.2", copy.observations, present(counts, dollars, cohorts)));
+    // The retention figures cover the listed accounts only; the callout sets them against the revenue they do not cover (QA round 1 F32).
+    const takeaway: Block | undefined = copy.takeaway ? { kind: "callout", lead: "Takeaway:", body: resolveCopy(ctx, copy.takeaway, "S4.2 takeaway") } : undefined;
     const b = ctx.brief;
     const L = ctx.fy[ctx.fy.length - 1]!.key;
     const title = chooseTitle(ctx, "S4.2 title", copy.title, `Listed accounts rose to ${b.maybe(`cust.end.${L}`) ?? b.t("cust.count")} with net dollar retention of ${b.maybe(`cust.ndr.${L}`) ?? "n.a."} in ${ctx.fy[ctx.fy.length - 1]!.label}`);
@@ -107,11 +116,11 @@ const s4_2: PageModule = {
         id: "S4.2",
         section: SECTION,
         title,
-        rows: [{ columns: [{ span: [1, 6], blocks: present(counts, dollars) }, { span: [7, 12], blocks: present(chart, cohorts, obs) }] }],
+        rows: [{ columns: [{ span: [1, 6], blocks: present(counts, dollars) }, { span: [7, 12], blocks: present(chart, cohorts, obs, takeaway) }] }],
         notes: {
           source: source(ctx.sources.customers),
-          note: `Listed (coded) accounts only; households and members are not listed individually. Revenue in USD thousands. Churn is lost accounts over the average of starting and ending accounts; GDR and NDR are defined on ${pageRef("S11.1")}.`,
-          footnotes: [],
+          note: `${capFirst(population(ctx))} (coded) only${residualName(ctx) ? `; ${residualName(ctx)} are not listed individually` : ""}. Revenue in USD thousands. Churn is lost ÷ average accounts; GDR and NDR are defined on ${pageRef("S11.1")}.${b.has(`cust.lostBilled.${L}`) ? ` Ending revenue leaves out ${b.t(`cust.lostBilled.${L}`)} billed in ${ctx.fy[ctx.fy.length - 1]!.label} by accounts lost during the year.` : ""}`,
+          footnotes: copy.takeaway?.includes("(1)") ? [PER_MANAGEMENT] : [],
         },
         carries: cohorts ? ["S4.3"] : [],
       }),
@@ -122,7 +131,9 @@ const s4_2: PageModule = {
 
 function fallback42(ctx: CimContext): NonNullable<CimCopy["s4_2"]> {
   const L = ctx.fy[ctx.fy.length - 1]!.key;
+  const scoped = ctx.brief.has("cust.codedShare") && ctx.brief.has("cust.residualShare");
   return {
+    ...(scoped ? { takeaway: "Listed accounts are {{cust.codedShare}} of revenue; the other {{cust.residualShare}} is not listed individually, so these tables measure retention for the listed accounts only." } : {}),
     observations: [
       { row: "rc.end", lead: `Accounts rose from {{cust.start.${L}}} to {{cust.end.${L}}}`, body: `with {{cust.new.${L}}} won and {{cust.lost.${L}}} lost in ${ctx.fy[ctx.fy.length - 1]!.label}.` },
       { row: "rd.gdr", lead: `Gross dollar retention was {{cust.gdr.${L}}}`, body: `and net dollar retention {{cust.ndr.${L}}}, after upsell of {{cust.upsell.${L}}}.` },

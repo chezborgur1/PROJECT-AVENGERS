@@ -107,12 +107,15 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
     { title: `${group} % Growth`, suffix: "_growth", kind: "growth" },
   ];
   let r = 8;
+  const gaps: number[] = [];
   for (const bl of blocks) {
     b.row(`sec${bl.suffix}`, r++);
     for (const ln of lines) b.row(`${ln.key}${bl.suffix}`, r++);
     if (bl.kind === "growth") b.row("growth_total", r++);
-    r++;
+    gaps.push(r++);
   }
+  // Blocks are separated by spacer rows (guide 5.11), which keeps the three blocks, the checks and the note on one page.
+  for (const g of gaps) b.spacerRow(g);
   b.row("stripCheck", r);
   b.row("stripHeaderCheck", r + 1);
   const lastPrinted = r + 3;
@@ -222,11 +225,14 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
   b.formula(cr, 3, `SUM(${addr(b.r(totalKey), stripFirst)}:${addr(b.r(totalKey), stripLast)})-SUMIFS(${monthlyRow},${monthlyHeader},">="&${addr(6, stripFirst)},${monthlyHeader},"<="&${addr(6, stripLast)})`, { style: "check", fmt: FMT.check, expect: 0, tol: 1e-6, label: "C34" });
   b.checkCf(cr, 3, 3);
   const hr = b.r("stripHeaderCheck");
-  b.text(hr, 2, "Check: strip months end at the as-of date (C35)", { style: "check" });
+  b.text(hr, 2, "Check: strip months to as-of date (C35)", { style: "check" });
   b.formula(hr, 3, `ABS(${addr(6, stripFirst)}-(EOMONTH(${ASOF},-12)+1))+ABS(${addr(6, stripLast)}-(EOMONTH(${ASOF},-1)+1))`, { style: "check", fmt: FMT.check, expect: 0, label: "C35" });
   b.checkCf(hr, 3, 3);
   b.note(lastPrinted, 2, "Note: strip cells link to Monthly P&L; growth is year over year in the summary block and month over month in the strip (n.a. where there is no denominator). The hidden column left of the strip holds the month before the LTM start so the first month's growth has a denominator.");
-  b.print({ area: `B2:${addr(lastPrinted, notesCol)}`, landscape: true, fitToWidth: 1, fitToHeight: 0, titlesRow: "2:6" });
+  // The period block and the strip print as separate ranges with the labels repeated, so neither shrinks under the 7 pt floor (C37).
+  // The strip range stops at its last row of figures: the checks and the note belong to the period block, and printed beside the
+  // strip they showed only a clipped piece of their text in the repeated label column.
+  b.print({ areas: [`B2:${addr(lastPrinted, l.lastValueCol)}`, `${addr(2, stripFirst)}:${addr(b.r("growth_total"), stripLast)}`], landscape: true, fitToWidth: 1, fitToHeight: 0, titlesRow: "2:6", titlesCol: "B:B" });
   b.furniture(ctx.codeName, ctx.asOfLabel);
   b.freeze(7, 3);
   return b;

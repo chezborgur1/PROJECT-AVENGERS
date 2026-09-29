@@ -51,7 +51,9 @@ describe("adjustments.csv", () => {
     const ds = mergeSources({ extracts: [await parseQuickbooksExport(ANNUAL, 12)], overrides: new Map(), addbacks: [], adjustmentRows: rows, request: { replacementSalary: 95_000, passThrough: true } });
     const refs = ds.adjustments!.map((a) => a.ref);
     expect(refs.slice(0, 5)).toEqual(["D1", "D2", "D3", "N1", "N2"]);
-    expect(refs.slice(-4)).toEqual(["S1", "S2", "S3", "PF1"]);
+    expect(refs.slice(-5)).toEqual(["S1", "S2", "S3", "S4", "PF1"]);
+    // [S4] is the owner's employer payroll taxes at statutory rates on the $200,000 salary, proposed until accepted.
+    expect(ds.adjustments!.find((a) => a.ref === "S4")).toMatchObject({ category: "owner_compensation", status: "proposed", evidence: "pending", byFiscalYear: { 2023: 12_584, 2024: 13_250, 2025: 13_860 } });
     const byRef = (ref: string) => ds.adjustments!.find((a) => a.ref === ref)!;
     expect(byRef("N1")).toMatchObject({ description: "Owner's boat", status: "excluded" });
     expect(byRef("N2")).toMatchObject({ category: "non_operating", origin: "pnl", byFiscalYear: { 2025: -3_100 } });
@@ -68,8 +70,10 @@ describe("adjustments.csv", () => {
     expect(ds.addbacks).toEqual([]);
     // Bot-flagged accounts arrive as proposed zeros, one per account, charitable giving included since nothing backs it.
     const flagged = ds.adjustments!.filter((a) => a.origin === "suggested");
-    expect(flagged.map((a) => a.description)).toEqual(["Vehicle Expenses (bot-flagged)", "Fuel (bot-flagged)", "Legal & Professional Fees (bot-flagged)", "Meals & Entertainment (bot-flagged)", "Charitable Contributions (bot-flagged)"]);
-    expect(flagged.every((a) => a.status === "proposed" && Object.values(a.byFiscalYear).every((v) => v === 0))).toBe(true);
+    const flaggedAccounts = flagged.filter((a) => a.category === "personal_discretionary");
+    expect(flaggedAccounts.map((a) => a.description)).toEqual(["Vehicle expenses (for review)", "Fuel (for review)", "Legal & professional fees (for review)", "Meals & entertainment (for review)", "Charitable contributions (for review)"]);
+    // A bot suggestion carries no evidence yet: never "Management representation", which would claim a statement nobody made.
+    expect(flaggedAccounts.every((a) => a.status === "proposed" && a.evidence === "pending" && Object.values(a.byFiscalYear).every((v) => v === 0))).toBe(true);
   });
 
   it("maps the legacy addbacks.csv to accepted N rows and reproduces the flat list", async () => {
@@ -92,7 +96,7 @@ describe("adjustments.csv", () => {
     }
     expect(ds.addbacks.every((a) => ["discretionary", "non_recurring"].includes(a.type))).toBe(true);
     // Charitable giving is fully backed by its N row, so the bot does not flag it again.
-    expect(ds.adjustments!.some((a) => a.description === "Charitable Contributions (bot-flagged)")).toBe(false);
+    expect(ds.adjustments!.some((a) => a.description === "Charitable contributions (for review)")).toBe(false);
   });
 });
 

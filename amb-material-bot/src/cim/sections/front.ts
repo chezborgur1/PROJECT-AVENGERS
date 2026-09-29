@@ -2,10 +2,10 @@
 // Notice, Contents. The disclaimer is ICP1's text verbatim (guide 2.9; counsel
 // sign-off is open question Q5).
 
-import { monthYear } from "../../util/format.ts";
+import { monthYear, smartQuotes } from "../../util/format.ts";
 import type { CimContext } from "../context.ts";
 import type { Slide } from "../design.ts";
-import { BAND, C, colX, CONTENT_W, drawContents, drawCover, drawFooter, hline, run, SANS, SERIF, spanW, text } from "../design.ts";
+import { BAND, C, colX, CONTENT_W, drawContents, drawCover, drawFooter, hline, r3, run, SANS, SERIF, spanW, text, vline } from "../design.ts";
 import type { PageModule, SectionModule } from "./types.ts";
 
 /** ICP1's intro and six headed paragraphs (references: AMB Advisory - ICP Template v1.docx), verbatim. */
@@ -48,12 +48,15 @@ function drawDisclaimer(slide: Slide, code: string, num: number): void {
   const para = (items: { head?: string; body: string }[]) =>
     items.flatMap((p, i) => [
       ...(p.head ? [run(p.head, { bold: true, color: C.maroon, fontSize: 8, breakLine: true })] : []),
-      run(p.body, { color: C.ink, fontSize: 8, breakLine: i < items.length - 1 }),
+      run(smartQuotes(p.body), { color: C.ink, fontSize: 8, breakLine: i < items.length - 1 }),
     ]);
-  const left = [{ body: DISCLAIMER_INTRO }, ...DISCLAIMER.slice(0, 3)];
-  const right = DISCLAIMER.slice(3);
+  // Two headings a side keeps the columns within a few lines of each other.
+  const left = [{ body: DISCLAIMER_INTRO }, ...DISCLAIMER.slice(0, 2)];
+  const right = DISCLAIMER.slice(2);
   text(slide, para(left), { x: colX(1), y: BAND.top, w, h: 5.2, fontSize: 8, valign: "top", paraSpaceAfter: 6, lineSpacingMultiple: 1.1, fontFace: SANS });
   text(slide, para(right), { x: colX(7), y: BAND.top, w, h: 5.2, fontSize: 8, valign: "top", paraSpaceAfter: 6, lineSpacingMultiple: 1.1, fontFace: SANS });
+  // The gutter hairline every two-column page carries (spec 1).
+  vline(slide, r3((colX(1) + w + colX(7)) / 2), BAND.top, 5.2, C.rule, 0.5);
   drawFooter(slide, code, undefined, num);
 }
 

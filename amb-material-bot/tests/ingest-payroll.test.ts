@@ -60,9 +60,11 @@ describe("payroll.csv", () => {
     const { payroll, warnings } = buildPayrollRegister(pf, ctx);
     expect(warnings).toEqual([]);
     expect(payroll.employees.map((e) => e.id)).toEqual(["E-01", "E-02", "E-03"]);
-    // FY2025 pool = 130 − 100 = 30, split 70:30.
-    expect(payroll.employees.map((e) => e.employerCostsByFiscalYear[2025])).toEqual([0, 21, 9]);
-    expect(payroll.employees.map((e) => e.employerCostsByFiscalYear[2024])).toEqual([0, 12, 8]);
+    // The owner's employer taxes on the $50 P&L owner line come out first, at statutory rates: 50 × (6.2% + 1.45% + 0.6%) = $4.
+    // FY2025 staff pool = 130 − 100 − 4 = 26, split 70:30; FY2024 = 120 − 100 − 4 = 16, split 60:40.
+    expect(payroll.employees.map((e) => e.employerCostsByFiscalYear[2025])).toEqual([4, 18, 8]);
+    expect(payroll.employees.map((e) => e.employerCostsByFiscalYear[2024])).toEqual([4, 10, 6]);
+    // The register still ties to the payroll line: staff wages and costs plus the owner's employer taxes.
     expect(payroll.totalsByFiscalYear).toEqual({ 2024: 120, 2025: 130 });
     expect(payroll.employees[0]!.wagesByFiscalYear).toEqual({ 2024: 50, 2025: 50 });
   });
@@ -97,7 +99,9 @@ describe("payroll.csv", () => {
     const { payroll, warnings } = buildPayrollRegister(pf, ctx);
     expect(payroll.employees).toHaveLength(2);
     expect(payroll.employees[1]!.terminationDate).toBeUndefined();
-    expect(payroll.employees[1]!.employerCostsByFiscalYear).toEqual({ 2024: 0, 2025: 30 });
+    // FY2025: 130 − 100 wages − 4 of the owner's employer taxes; FY2024 has no pool, so the owner's share is zero too.
+    expect(payroll.employees[1]!.employerCostsByFiscalYear).toEqual({ 2024: 0, 2025: 26 });
+    expect(payroll.employees[0]!.employerCostsByFiscalYear).toEqual({ 2024: 0, 2025: 4 });
     expect(warnings.some((w) => /FY2024: wages in payroll.csv \(\$200\) exceed the P&L payroll line \(\$120\)/.test(w))).toBe(true);
     expect(warnings.some((w) => /FY2025: owner pay in payroll.csv \(\$60\) differs from the P&L owner compensation line \(\$50\)/.test(w))).toBe(true);
     expect(warnings.some((w) => /1 employee\(s\) hired after the as-of month/.test(w))).toBe(true);

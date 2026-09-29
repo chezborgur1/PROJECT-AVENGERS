@@ -90,7 +90,7 @@ describe("planner: full Ridgeline dataset", () => {
   it("builds the always sections and the conditional ones the data supports", async () => {
     const { plan } = await ridgelineDeal();
     const ids = pageIds(plan);
-    for (const id of ["S0.1", "S0.2", "S0.3", "S1.1", "S1.2", "S1.3", "S1.4", "S2.2", "S2.3", "S4.1", "S4.2", "S5.1", "S6.1", "S6.3", "S6.4", "S7.1", "S7.2", "S8.1", "S9.1", "S10.1", "S10.2", "S11.1", "S11.2"]) {
+    for (const id of ["S0.1", "S0.2", "S0.3", "S1.1", "S1.2", "S1.3", "S1.4", "S2.2", "S2.3", "S4.1", "S4.2", "S5.1", "S6.1", "S6.3", "S6.4", "S7.1", "S7.2", "S8.1", "S10.1", "S11.1", "S11.2"]) {
       expect(ids, id).toContain(id);
     }
     // Pages follow library order.
@@ -105,11 +105,15 @@ describe("planner: full Ridgeline dataset", () => {
     expect(stateOf(plan, "S5.4")).toMatchObject({ state: "merged", host: "S1.4" });
     expect(stateOf(plan, "S7.3")).toMatchObject({ state: "merged", host: "S7.2" });
     expect(stateOf(plan, "S8.2")).toMatchObject({ state: "merged", host: "S8.1" });
+    // The process and contact take the term table's place on the overview (QA round 1 F43).
+    expect(stateOf(plan, "S10.2")).toMatchObject({ state: "merged", host: "S10.1" });
   });
 
   it("omits the modules whose trigger fails and says why", async () => {
     const { plan } = await ridgelineDeal();
-    for (const id of ["S3.1", "S3.2", "S3.3", "S4.5", "S6.5", "S9.2", "S11.5"]) {
+    // S9.1 sizes levers: the notes name five with baselines but no target, so the page waits for one (guide 3.3, QA round 1 F44).
+    expect(stateOf(plan, "S9.1")?.reason).toMatch(/target/);
+    for (const id of ["S3.1", "S3.2", "S3.3", "S4.5", "S6.5", "S9.1", "S9.2", "S11.5"]) {
       const m = stateOf(plan, id);
       expect(m?.state, id).toBe("omitted");
       expect(m?.reason, id).toBeTruthy();
@@ -138,7 +142,7 @@ describe("planner: Main Street deal with annual statements only", () => {
   it("keeps the executive summary, the earnings pages and the transaction pages", async () => {
     const { plan } = await annualDeal();
     const ids = pageIds(plan);
-    for (const id of ["S1.1", "S1.2", "S1.3", "S1.4", "S6.1", "S7.1", "S7.2", "S8.1", "S10.1", "S10.2", "S11.1"]) expect(ids, id).toContain(id);
+    for (const id of ["S1.1", "S1.2", "S1.3", "S1.4", "S6.1", "S7.1", "S7.2", "S8.1", "S10.1", "S11.1"]) expect(ids, id).toContain(id);
   });
 
   it("puts the one leased site on the people page instead of a page of its own", async () => {

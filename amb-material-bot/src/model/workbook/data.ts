@@ -4,7 +4,7 @@
 // export), Mapping, and the Raw tabs (values only, as exported).
 
 import { IS_CATEGORIES, IS_LABELS, SOURCE_LABELS, type FinancialDataset, type IsCategory, type MonthKey } from "../../domain/financials.ts";
-import { addr, colLetter, fitScale, range, rowOf, SheetBuilder } from "../sheet.ts";
+import { addr, colLetter, fitScale, range, rowOf, SheetBuilder, wrappedLines } from "../sheet.ts";
 import { COLOR, FMT, WIDTH } from "../styles.ts";
 import type { ModelOutput } from "../types.ts";
 import type { TabContext } from "./assumptionsTab.ts";
@@ -42,6 +42,15 @@ export interface PnlValues {
 }
 
 /** The rows of the income statement (guide 5.1 row 5 / 27), in print order. Revenue lines come from the dataset. */
+/** The Monthly P&L rows named for the CIM (guide 5.14 `Monthly_<line>`), each keyed to the engine's monthly series. */
+export const MONTHLY_NAMES: [string, string][] = [
+  ["Revenue", "revenue"],
+  ["GrossProfit", "gross_profit"],
+  ["RepEBITDA", "reported_ebitda"],
+  ["SDE", "sde"],
+  ["AdjEBITDA", "adj_ebitda"],
+];
+
 export function pnlRows(model: ModelOutput, opts: { ladder: boolean; kpis?: boolean } = { ladder: false }): PnlRowSpec[] {
   const lines = model.periods[model.columns.find((c) => !c.projected)!.key]!.revenueLines;
   const serviceLines = lines.filter((l) => !(model.assumptions && isContra(model, l.account)));
@@ -94,7 +103,14 @@ export function pnlRows(model: ModelOutput, opts: { ladder: boolean; kpis?: bool
     rows.push({ key: "total_pro_forma", label: "(+) / (-) Pro Forma Adjustments [PF]", kind: "line", value: (v) => v.ladder.totalProForma });
     rows.push({ key: "pf_adj_ebitda", label: "PF Adj. EBITDA", kind: "keyTotal", calc: (at) => `${at("adj_ebitda")}+${at("total_pro_forma")}`, value: (v) => v.ladder.pfAdjEbitda });
   }
-  return rows;
+  // A 3.95 spacer row before every subtotal that follows a line (guide 5.11).
+  const spaced: PnlRowSpec[] = [];
+  for (const row of rows) {
+    const prev = spaced.at(-1);
+    if ((row.kind === "subtotal" || row.kind === "keyTotal") && prev && (prev.kind === "line" || prev.kind === "lineFirst")) spaced.push({ key: `sp_${row.key}`, label: "", kind: "spacer" });
+    spaced.push(row);
+  }
+  return spaced;
 }
 
 function isContra(model: ModelOutput, account: string): boolean {
@@ -160,12 +176,9 @@ export function valueStyle(kind: PnlRowKind): { style: "line" | "lineFirst" | "s
 
 // --- Divider ----------------------------------------------------------------------------------
 
+/** The divider is a tab colour and a name only (guide 5.1): empty, so it prints no page. */
 export function planDivider(): SheetBuilder {
-  const b = new SheetBuilder("divider", SHEET.divider, { output: false, tabColor: COLOR.dividerTab });
-  b.width(1, WIDTH.gutter);
-  b.width(2, 60);
-  b.text(2, 2, "Data tabs follow: the monthly grid, the Databook, the mapping and the raw exports.", { style: "note" });
-  return b;
+  return new SheetBuilder("divider", SHEET.divider, { output: false, tabColor: COLOR.dividerTab });
 }
 
 // --- Monthly P&L ---------------------------------------------------------------------------------
@@ -326,6 +339,8 @@ export function planMonthly(ctx: TabContext): SheetBuilder | undefined {
   });
   b.furniture(ctx.codeName, ctx.asOfLabel);
   b.freeze(7, 3);
+  // Monthly_<line> (guide 5.14): the month-by-month rows the CIM's monthly appendix (S11.2) reads.
+  for (const [name, key] of MONTHLY_NAMES) if (b.plan.rows[key] !== undefined) b.defineName(`Monthly_${name}`, `$${colLetter(firstMonthCol)}$${b.r(key)}:$${colLetter(lastMonthCol)}$${b.r(key)}`);
   return b;
 }
 
@@ -421,9 +436,10 @@ export function planDatabook(ctx: TabContext): SheetBuilder {
     b.outlineCols(MONTH_START, MONTH_START + n - 1, 1);
   }
   b.spacerCol(tie.databook - 1);
-  b.widths(tie.databook, tie.diff, 11);
+  b.widths(tie.databook, tie.diff - 1, 11);
+  b.width(tie.diff, 17);
   b.width(tie.status, 10);
-  b.anatomy({ subtitle: "Databook: account × period ($)", lastCol, toggleCol: lastPeriodCol, masterToggle: ctx.masterToggle });
+  b.anatomy({ subtitle: "Databook: Account × Period ($)", lastCol, toggleCol: lastPeriodCol, masterToggle: ctx.masterToggle });
   b.text(3, lastPeriodCol - 1, "Print", { align: { horizontal: "right" } });
 
   // Period groups sit side by side (the months must start at MONTH_START), so each is labelled rather than spaced.
@@ -444,7 +460,7 @@ export function planDatabook(ctx: TabContext): SheetBuilder {
   headers.forEach((h, i) => header(6, 2 + i, h, true));
   hist.forEach((c, i) => header(6, periodStart + i, c.label));
   if (n) writeMonthHeaders(b, 6, MONTH_START, months);
-  ["Databook ($)", "Raw ($)", "Diff ($)", "Status"].forEach((h, i) => header(6, tie.databook + i, h));
+  ["Databook ($)", "Raw ($)", "Diff by period ($)", "Status"].forEach((h, i) => header(6, tie.databook + i, h));
 
   // P&L accounts: months typed as exported, periods and the tie as formulas.
   const firstRow = DATABOOK_FIRST_ROW;
@@ -469,7 +485,9 @@ export function planDatabook(ctx: TabContext): SheetBuilder {
       engineTotal = fyCols.reduce((s, { c }) => s + (row.byFiscalYear[c.fiscalYear!] ?? 0), 0);
     }
     const raw = `INDEX(${rawPnlTotal},MATCH(${addr(r, 2)},${rawPnlRows(1)},0))`;
-    writeTie(b, r, tie, total, raw, engineTotal, row.account);
+    const periods = n ? { first: MONTH_START, last: MONTH_START + n - 1 } : { first: fyCols[0]!.col, last: fyCols.at(-1)!.col };
+    const count = periods.last - periods.first + 1;
+    writeTie(b, r, tie, total, raw, engineTotal, row.account, { ...periods, rawRow: `${S("rawPnl")}$C$${4 + i}:$${colLetter(2 + count)}$${4 + i}` });
   });
 
   // Balance-sheet accounts: one row per account, one column per statement date, tied to Raw - Balance Sheet date by date.
@@ -499,7 +517,7 @@ export function planDatabook(ctx: TabContext): SheetBuilder {
     bsDates.forEach((m, k) => b.num(r, periodStart + k, row.byMonth[m] ?? 0, { fmt: FMT.body }));
     const dates = bsDates.map((_, k) => addr(r, periodStart + k));
     const raw = bsDates.map((_, k) => `SUMIFS(${rawBsRows(3 + k)},${rawBsRows(1)},${addr(r, 2)})`).join("+");
-    writeTie(b, r, tie, dates.join("+") || "0", raw || "0", bsDates.reduce((s, m) => s + (row.byMonth[m] ?? 0), 0), row.account);
+    writeTie(b, r, tie, dates.join("+") || "0", raw || "0", bsDates.reduce((s, m) => s + (row.byMonth[m] ?? 0), 0), row.account, { first: periodStart, last: periodStart + bsDates.length - 1, rawRow: `${S("rawBs")}$C$${4 + i}:$${colLetter(2 + bsDates.length)}$${4 + i}` });
   });
   const lastPrinted = Math.max(bsLast, lastRow);
 
@@ -535,10 +553,16 @@ export function planDatabook(ctx: TabContext): SheetBuilder {
 }
 
 /** One row of the tie-to-raw block: the Databook's total, the raw export's, the difference and its status at a $1 tolerance (guide 5.2). */
-function writeTie(b: SheetBuilder, r: number, tie: ReturnType<typeof databookTieCols>, total: string, raw: string, expect: number, account: string): void {
+/**
+ * The difference is taken period by period, not on the totals, so errors in
+ * two months (or two statement dates) that offset cannot pass: the root-sum-
+ * square of the differences in `periods` against the same periods of the raw
+ * export, whose row `rawRow` holds the same account in the same order.
+ */
+function writeTie(b: SheetBuilder, r: number, tie: ReturnType<typeof databookTieCols>, total: string, raw: string, expect: number, account: string, periods: { first: number; last: number; rawRow: string }): void {
   b.formula(r, tie.databook, total, { fmt: FMT.body, expect, label: `databook total ${account}` });
   b.formula(r, tie.raw, raw, { fmt: FMT.body, expect, label: `raw total ${account}` });
-  b.formula(r, tie.diff, `${addr(r, tie.databook)}-${addr(r, tie.raw)}`, { style: "check", fmt: FMT.check, expect: 0, tol: 1e-6, label: `tie to raw ${account}` });
+  b.formula(r, tie.diff, `SQRT(SUMXMY2(${addr(r, periods.first)}:${addr(r, periods.last)},${periods.rawRow}))`, { style: "check", fmt: FMT.check, expect: 0, tol: 1e-6, label: `tie to raw ${account}` });
   b.formula(r, tie.status, `IF(ABS(${addr(r, tie.diff)})<=1,"TIES OUT","CHECK")`, { role: "text", align: { horizontal: "center" }, expect: "TIES OUT", label: `tie status ${account}` });
 }
 
@@ -547,7 +571,7 @@ function latestFyOf(model: ModelOutput): number {
 }
 
 /** Months from `a` to `b` (negative when `b` is earlier). */
-function monthOffset(a: MonthKey, b: MonthKey): number {
+export function monthOffset(a: MonthKey, b: MonthKey): number {
   return (Number(b.slice(0, 4)) - Number(a.slice(0, 4))) * 12 + Number(b.slice(5)) - Number(a.slice(5));
 }
 
@@ -578,26 +602,45 @@ function bsLabel(category: string): string {
 export function planMapping(ctx: TabContext): SheetBuilder {
   const { model } = ctx;
   const b = new SheetBuilder("mapping", SHEET.mapping);
-  const headers = ["Account (as exported)", "Statement", "Section", "AMB Category", "Summary Line", "Personal?", "Adjustment Ref", "Source", "File", "Mapped by"];
-  const widths = [40, 12, 26, 22, 30, 9, 12, 20, 34, 10];
+  // Statement, source and file are the same for every account an export holds: each group of rows sits under a
+  // section row naming them, so the table fits one page wide at full scale and every row stays one line tall.
+  const headers = ["Account (as exported)", "Section", "AMB Category", "Summary Line", "Personal?", "Adj. Ref", "Mapped by"];
+  const widths = [36, 30, 32, 32, 9, 8, 10];
   b.width(1, WIDTH.gutter);
   widths.forEach((w, i) => b.width(2 + i, w));
   const lastCol = 1 + headers.length;
-  b.anatomy({ subtitle: "Account mapping: exported account to AMB category and summary line", lastCol });
+  const mappedByCol = lastCol;
+  b.anatomy({ subtitle: "Account Mapping: Exported Account to AMB Category and Summary Line", lastCol });
   b.tier1(5, [{ from: 2, to: lastCol, label: "Mapping" }]);
   headers.forEach((h, i) => b.cell(6, 2 + i, { style: "header", v: h, role: "text", align: { horizontal: "left" } }));
   let r = 8;
+  let group = "";
+  // A balance-sheet section path ("Liabilities > Current Liabilities > ...") is longer than its column: it wraps, never clips.
+  const put = (values: string[]) =>
+    values.forEach((v, i) => {
+      const cell = b.text(r, 2 + i, v);
+      if (i > 0 && wrappedLines(v, widths[i]!) > 1) cell.align = { ...cell.align, wrap: true };
+    });
+  const groupRow = (statement: string, source: keyof typeof SOURCE_LABELS, file: string) => {
+    const label = `${statement}: ${file} (${SOURCE_LABELS[source]})`;
+    if (label === group) return;
+    if (group) r++;
+    group = label;
+    b.section(r++, label, [[2, lastCol]]);
+  };
   for (const row of model.databook?.pnl ?? []) {
-    [row.account, "P&L", row.section ?? "", IS_LABELS[row.category], row.summaryLine, row.personal ? "Personal?" : "", row.adjustmentRef ? `[${row.adjustmentRef}]` : "", SOURCE_LABELS[row.source], row.file, row.mappedBy === "override" ? "Override (mapping-overrides.csv)" : row.mappedBy].forEach((v, i) => b.text(r, 2 + i, v));
-    if (row.mappedBy === "default") b.cell(r, 11, { fill: COLOR.section });
+    groupRow("P&L", row.source, row.file);
+    put([row.account, row.section ?? "", IS_LABELS[row.category], row.summaryLine, row.personal ? "Personal?" : "", row.adjustmentRef ? `[${row.adjustmentRef}]` : "", row.mappedBy === "override" ? "Override" : row.mappedBy]);
+    if (row.mappedBy === "default") b.cell(r, mappedByCol, { fill: COLOR.section });
     r++;
   }
   for (const row of model.databook?.bs ?? []) {
-    [row.account, "Balance sheet", row.section ?? "", bsLabel(row.category), bsLabel(row.category), "", "", SOURCE_LABELS[row.source], row.file, row.mappedBy].forEach((v, i) => b.text(r, 2 + i, v));
-    if (row.mappedBy === "default") b.cell(r, 11, { fill: COLOR.section });
+    groupRow("Balance sheet", row.source, row.file);
+    put([row.account, row.section ?? "", bsLabel(row.category), bsLabel(row.category), "", "", row.mappedBy]);
+    if (row.mappedBy === "default") b.cell(r, mappedByCol, { fill: COLOR.section });
     r++;
   }
-  b.note(r + 1, 2, "Note: rows mapped by default (no rule matched) are shaded; confirm them in mapping-overrides.csv.");
+  b.note(r + 1, 2, "Note: rows mapped by default (no rule matched) are shaded; confirm them in mapping-overrides.csv, where an Override row comes from.");
   b.print({ area: `B2:${addr(r + 1, lastCol)}`, landscape: true, fitToWidth: 1, fitToHeight: 0, titlesRow: "5:6" });
   b.furniture(ctx.codeName, ctx.asOfLabel);
   b.freeze(7, 3);
@@ -609,7 +652,15 @@ export function planMapping(ctx: TabContext): SheetBuilder {
 /** Column of the Total on Raw - P&L: A account, B section, months from C, then Total. */
 export const RAW_PNL_TOTAL_COL = (n: number) => 3 + n;
 
-/** Raw tabs print landscape, one page wide, over the cells they use (they are values as exported, not output tabs). */
+/** Widest a raw tab's text column grows to hold its longest export label; longer labels wrap. */
+const RAW_TEXT_MAX = 60;
+
+/**
+ * Raw tabs print landscape, one page wide, over the cells they use (they are
+ * values as exported, not output tabs). Their account and section columns
+ * widen to the longest label the export holds, up to RAW_TEXT_MAX, and a
+ * longer label wraps, so no exported name is cut at the cell edge.
+ */
 function printRaw(b: SheetBuilder): SheetBuilder {
   let lastRow = 1;
   let lastCol = 1;
@@ -617,6 +668,14 @@ function printRaw(b: SheetBuilder): SheetBuilder {
     const [r, c] = k.split(":").map(Number) as [number, number];
     lastRow = Math.max(lastRow, r);
     lastCol = Math.max(lastCol, c);
+  }
+  for (const c of [1, 2]) {
+    const texts = [...b.plan.cells].filter(([k, spec]) => Number(k.split(":")[0]) >= 4 && Number(k.split(":")[1]) === c && typeof spec.v === "string").map(([, spec]) => spec);
+    if (!texts.length) continue;
+    const longest = Math.max(...texts.map((spec) => String(spec.v).length));
+    const width = Math.min(RAW_TEXT_MAX, Math.max(b.plan.widths.get(c) ?? 0, Math.ceil((longest * 5.8 + 4) / 7)));
+    b.width(c, width);
+    for (const spec of texts) if (wrappedLines(String(spec.v), width) > 1) spec.align = { ...spec.align, wrap: true };
   }
   b.print({ area: `A1:${addr(lastRow, lastCol)}`, landscape: true, fitToWidth: 1, fitToHeight: 0, titlesRow: "3:3" });
   return b;
@@ -643,8 +702,8 @@ export function planRawPnl(model: ModelOutput): SheetBuilder {
     b.text(r, 1, row.account);
     b.text(r, 2, row.section ?? "");
     const values = months.length ? months.map((m) => row.byMonth?.[m] ?? 0) : fyCols.map((c) => row.byFiscalYear[c.fiscalYear!] ?? 0);
-    values.forEach((v, i) => b.num(r, 3 + i, v, { fmt: FMT.rawCents }));
-    b.num(r, 3 + values.length, values.reduce((s, v) => s + v, 0), { fmt: FMT.rawCents });
+    values.forEach((v, i) => b.num(r, 3 + i, v, { fmt: FMT.body }));
+    b.num(r, 3 + values.length, values.reduce((s, v) => s + v, 0), { fmt: FMT.body });
     r++;
   }
   return printRaw(b);
@@ -659,7 +718,7 @@ export function planRawBs(model: ModelOutput): SheetBuilder {
   for (const row of rows) {
     b.text(r, 1, row.account);
     b.text(r, 2, row.section ?? "");
-    dates.forEach((m, i) => b.num(r, 3 + i, row.byMonth[m] ?? 0, { fmt: FMT.rawCents }));
+    dates.forEach((m, i) => b.num(r, 3 + i, row.byMonth[m] ?? 0, { fmt: FMT.body }));
     r++;
   }
   return printRaw(b);
@@ -672,9 +731,9 @@ export function planRawBank(ds: FinancialDataset): SheetBuilder | undefined {
   for (const m of Object.keys(ds.depositsByMonth).sort()) {
     const d = ds.depositsByMonth[m]!;
     b.cell(r, 1, { v: serialOfMonthStart(m), fmt: FMT.monthHeader, role: "input" });
-    b.num(r, 2, d.amount, { fmt: FMT.rawCents });
-    b.num(r, 3, d.excluded, { fmt: FMT.rawCents });
-    b.num(r, 4, d.amount + d.excluded, { fmt: FMT.rawCents });
+    b.num(r, 2, d.amount, { fmt: FMT.body });
+    b.num(r, 3, d.excluded, { fmt: FMT.body });
+    b.num(r, 4, d.amount + d.excluded, { fmt: FMT.body });
     r++;
   }
   return printRaw(b);
@@ -711,14 +770,14 @@ export function planRawCustomers(ds: FinancialDataset, years: number[]): SheetBu
     b.cell(r, 6, date(c.endDate));
     b.text(r, 7, c.lossReason ?? "");
     b.text(r, 8, c.contractBasis ?? "");
-    years.forEach((y, i) => b.num(r, RAW_CUSTOMER_COLS.firstFy + i, c.revenueByFiscalYear[y] ?? 0, { fmt: FMT.raw }));
+    years.forEach((y, i) => b.num(r, RAW_CUSTOMER_COLS.firstFy + i, c.revenueByFiscalYear[y] ?? 0, { fmt: FMT.body }));
     r++;
   }
   b.row("lastCustomer", r - 1);
   if (list.residual) {
     b.text(r, 1, "Residual");
     b.text(r, 2, list.residual.label);
-    years.forEach((y, i) => b.num(r, RAW_CUSTOMER_COLS.firstFy + i, list.residual!.revenueByFiscalYear[y] ?? 0, { fmt: FMT.raw }));
+    years.forEach((y, i) => b.num(r, RAW_CUSTOMER_COLS.firstFy + i, list.residual!.revenueByFiscalYear[y] ?? 0, { fmt: FMT.body }));
     b.row("residual", r);
     r++;
   }
@@ -750,8 +809,8 @@ export function planRawPayroll(ds: FinancialDataset, years: number[]): SheetBuil
     b.text(r, 9, e.terminationType ?? "");
     b.text(r, 10, e.payBasis);
     b.num(r, 11, e.fte, { fmt: FMT.oneDp });
-    years.forEach((y, i) => b.num(r, RAW_PAYROLL_COLS.firstWages + i, e.wagesByFiscalYear[y] ?? 0, { fmt: FMT.raw }));
-    years.forEach((y, i) => b.num(r, RAW_PAYROLL_COLS.firstWages + years.length + i, e.employerCostsByFiscalYear[y] ?? 0, { fmt: FMT.raw }));
+    years.forEach((y, i) => b.num(r, RAW_PAYROLL_COLS.firstWages + i, e.wagesByFiscalYear[y] ?? 0, { fmt: FMT.body }));
+    years.forEach((y, i) => b.num(r, RAW_PAYROLL_COLS.firstWages + years.length + i, e.employerCostsByFiscalYear[y] ?? 0, { fmt: FMT.body }));
     r++;
   }
   b.row("lastEmployee", r - 1);
