@@ -4,6 +4,7 @@
 // verifier can compare them.
 
 import { BS_DETAIL_LINES, addMonths, monthRange, type BalanceSheetPeriod, type BsDetailLine, type DealForm, type FinancialDataset, type MonthKey } from "../domain/financials.ts";
+import { DEBT_LIKE_LINES } from "../domain/chartOfAccounts.ts";
 import type { BalanceSheetValues } from "./engine.ts";
 import type { DebtLikeSummary, HistoricalCashFlowYear, NwcAnalysis, NwcLines, PnlLines } from "./types.ts";
 
@@ -36,7 +37,9 @@ export function nwcLines(p: BalanceSheetPeriod, trailing: { revenue: number; cog
   const reportedNwc = totalCurrentAssetsExCash - totalCurrentLiabExDebt;
   // Balances a buyer settles outside working capital: liabilities removed (NWC rises), a related-party receivable removed (NWC falls).
   // Under the debt-like override, customer money leaves NWC here and is deducted on Debt-Like Items instead, never both (C19).
-  const adjustments = (d.related_party_balances ?? 0) + (d.accrued_interest ?? 0) + (d.income_tax_payable ?? 0) - (d.related_party_receivable ?? 0) + (deferredAsDebtLike ? deferredRevenue + customerDeposits : 0);
+  // The liabilities removed are the DEBT_LIKE_LINES the debt-like schedule deducts, so a balance is never in both (C19).
+  const debtLike = [...DEBT_LIKE_LINES].reduce((s, l) => s + (d[l] ?? 0), 0);
+  const adjustments = debtLike - (d.related_party_receivable ?? 0) + (deferredAsDebtLike ? deferredRevenue + customerDeposits : 0);
   const adjustedNwc = reportedNwc + adjustments;
   const rev = trailing?.revenue ?? 0;
   const cogs = trailing?.cogs ?? 0;

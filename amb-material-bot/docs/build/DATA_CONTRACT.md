@@ -162,7 +162,7 @@ Structured facts transcribed from the notes, each with a `Provenance { source, l
 
 - `reconciliations: SourceReconciliation[]`: for every fiscal year two P&L sources cover, one row per line (`revenue`, `cogs`, `total_expenses`, `net_income`) with `chosen`, `other`, `difference`, `differencePct` and `material` (above 2%, the S7.4 trigger). Present, possibly empty, whenever the merge ran.
 - `depositsByMonth: Record<MonthKey, { amount, excluded }>`: operating deposits with transfers, loan proceeds and owner contributions excluded (the `bankCsv.ts` rule). Feeds `Proof of Cash` and check C14 (flag above 5%). The legacy `deposits` by year is its sum.
-- `debtLikeItems: DebtLikeItem[]`: the guide 5.6 list at the latest balance-sheet date, each with `treatment` (`debt`, `debt_like`, `nwc`), `status` and, for an asset purchase, `payoffLetter`. Deferred revenue and customer deposits are `nwc` under the AMB default and appear in exactly one of `NWC` and `Debt-Like Items` (check C19).
+- `debtLikeItems: DebtLikeItem[]`: the guide 5.6 list at the latest balance-sheet date, each with `treatment` (`debt`, `debt_like`, `nwc`), `status` and, for an asset purchase, `payoffLetter`. Deferred revenue and customer deposits are `nwc` under the AMB default and appear in exactly one of `NWC` and `Debt-Like Items`. Every `debt_like` balance (the `DEBT_LIKE_LINES` in `chartOfAccounts.ts`: accrued interest, income taxes, related-party balances, accrued bonuses and payroll taxes) is removed from NWC by the same list, so check C19 ties the debt-like total to what NWC removes at the latest date.
 
 ---
 

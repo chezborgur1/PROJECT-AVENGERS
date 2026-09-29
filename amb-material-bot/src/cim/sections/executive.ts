@@ -11,7 +11,6 @@ import type { Block, TextCell } from "../design.ts";
 import { blockHeight, CONTENT_H, r3, SPACE, spanW } from "../design.ts";
 import {
   condensedLadder,
-  keyFigures,
   keyObservations,
   observationsBlock,
   ownerResponsibilities,
@@ -128,10 +127,8 @@ const s1_2: PageModule = {
     const copy = pageCopy(ctx, "s1_2") ?? fallbackConsiderations(ctx);
     const lw = usable(1, 8);
     const rows: TextCell[][] = copy.considerations.map((c) => [{ lead: resolveCopy(ctx, c.lead, "S1.2"), body: resolveCopy(ctx, c.evidence, "S1.2") }, pageNo(c.page)]);
-    // The list is the page's only left-hand exhibit, so it takes the largest body size that still fits the column.
-    const listAt = (fontSize: number): Block => ({ kind: "textTable", header: { title: "Investment considerations", units: "(each proved on the page shown)" }, spec: { colW: [r3(lw - 0.55), 0.55], head: ["Consideration and evidence", "Page"], rows, aligns: ["left", "right"], fontSize, firstBold: false } });
-    const list = [10.5, 10].map(listAt).find((b) => blockHeight(b, lw) <= CONTENT_H) ?? listAt(9.5);
-    const rw = spanW(9, 12);
+    // Body size from the type scale (spec 2): the list is never padded with a larger font to fill the column (spec 1).
+    const list: Block = { kind: "textTable", header: { title: "Investment considerations", units: "(each proved on the page shown)" }, spec: { colW: [r3(lw - 0.55), 0.55], head: ["Consideration and evidence", "Page"], rows, aligns: ["left", "right"], fontSize: 9.5, firstBold: false } };
     const b = ctx.brief;
     const growth = b.has("rev.cagr") ? `grew at a ${b.t("rev.cagr")} CAGR to` : b.has("rev.yoy") ? `${verb(b.value("rev.yoy"))} ${b.t("rev.yoy")} to` : "reached";
     // Alternates in the same words, so a line break never leaves the period alone on the title's last line.
@@ -145,7 +142,8 @@ const s1_2: PageModule = {
         id: "S1.2",
         section: SECTION,
         title,
-        rows: [{ columns: [{ span: [1, 8], blocks: [list] }, { span: [9, 12], blocks: [revenueAdjPanels(ctx, true), keyFigures(ctx, rw, "(2)")] }] }],
+        // The rail carries the twin panels alone, at full height: its key figures repeated the Quick Stats page (F29).
+        rows: [{ columns: [{ span: [1, 8], blocks: [list] }, { span: [9, 12], blocks: [revenueAdjPanels(ctx, true, "adj", "(2)")] }] }],
         // The headline Adj. EBITDA is after the capital reserve; the page says so and gives the pre-reserve figure (QA round 1 F35).
         notes: { source: source(ctx.sources.financials, ctx.sources.customers, ctx.sources.payroll, "Management"), note: standardNote(ctx), footnotes: [PER_MANAGEMENT, nonGaap(ctx)] },
       }),

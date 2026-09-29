@@ -2,12 +2,12 @@
 // AMB's, the contents index is hyperlinked with the master Print switch and
 // the master check, the summary is one page of linked tables.
 
-import { SOURCE_LABELS, parsePeriodKey, periodLabel, type KpiSeries } from "../../domain/financials.ts";
+import { SOURCE_LABELS, parsePeriodKey, periodLabel } from "../../domain/financials.ts";
 import { ltmEqualsFiscalYear } from "../periods.ts";
 import { addr, colLetter, rowOf, SheetBuilder } from "../sheet.ts";
 import { COLOR, FMT, WIDTH } from "../styles.ts";
 import type { ModelOutput, PeriodColumn } from "../types.ts";
-import { A, type TabContext } from "./assumptionsTab.ts";
+import { A, KPI_FMT, kpiLabel, type TabContext } from "./assumptionsTab.ts";
 import { nwcLayout } from "./balance.ts";
 import { masterFormula } from "./checksTab.ts";
 import { headerLabel, periodLayout, S, SHEET, type SheetKey } from "./layout.ts";
@@ -195,17 +195,6 @@ const K = 1000;
 const NOTES_WIDTH = 48;
 
 /** Number format for a stated operating metric by its unit. */
-const KPI_FMT: Record<KpiSeries["unit"], string> = {
-  count: FMT.body,
-  currency: FMT.currency,
-  percent: FMT.pct,
-  ratio: FMT.oneDp,
-  hours: FMT.body,
-  rating: FMT.oneDp,
-  sq_ft: FMT.body,
-  miles: FMT.body,
-};
-
 export function planSummary(ctx: TabContext): SheetBuilder {
   const { model } = ctx;
   const b = new SheetBuilder("summary", SHEET.summary);
@@ -339,8 +328,9 @@ export function planSummary(ctx: TabContext): SheetBuilder {
     for (const k of ctx.kpis) {
       const [key, value] = Object.entries(k.values).at(-1)!;
       const ref = parsePeriodKey(key);
-      b.text(r, 2, k.label, { style: "line" });
-      b.num(r, latest.col, value, { fmt: KPI_FMT[k.unit], align: { horizontal: "right" } });
+      // The fact is an input on Assumptions, with its source; the output tab links it (guide 5.1: Assumptions holds every input).
+      b.text(r, 2, kpiLabel(k), { style: "line" });
+      b.formula(r, latest.col, A(`kpi_${k.key}`), { fmt: KPI_FMT[k.unit], expect: value, label: `fact ${k.key}`, align: { horizontal: "right" } });
       b.note(r, notesCol, `${ref.kind === "point" ? `As of ${periodLabel(ref)}` : periodLabel(ref)}${k.definition ? `. ${k.definition}` : ""}`);
       r++;
     }

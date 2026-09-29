@@ -5,6 +5,7 @@
 
 import { monthLabel } from "../../domain/financials.ts";
 import type { CimContext } from "../context.ts";
+import { dataAgeDays, STALE_DAYS } from "../../model/types.ts";
 import { fieldDepartments, standardNote } from "../context.ts";
 import type { Block, TextCell } from "../design.ts";
 import { blockHeight, gapBefore, r3, spanW } from "../design.ts";
@@ -21,6 +22,7 @@ const MONTHS = ["January", "February", "March", "April", "May", "June", "July", 
 function definitionRows(ctx: CimContext): TextCell[][] {
   const fye = MONTHS[ctx.out.fiscalYearEndMonth - 1];
   const fy = ctx.ds.years[ctx.ds.years.length - 1];
+  const techDept = ctx.out.headcount?.byDepartment.find((d) => /field service|service/i.test(d.department))?.department;
   return [
     ["Reported EBITDA", "Net income plus interest expense [D1], income taxes [D2] and depreciation and amortization [D3]. Includes other income and expense; non-operating items are removed as normalization adjustments."],
     ["Normalization adjustments [N]", "Accepted adjustments that remove owner-discretionary, non-recurring and non-operating items. Positive amounts increase EBITDA."],
@@ -41,7 +43,8 @@ function definitionRows(ctx: CimContext): TextCell[][] {
     ["Free cash flow", "Cash from operations less capital expenditure derived as the change in net fixed assets plus depreciation."],
     ...(ctx.out.nwc ? [["DSO, DIO, DPO", "Days sales, inventory and payables outstanding: receivables ÷ revenue, inventory ÷ cost of revenue and payables ÷ cost of revenue, each over the trailing twelve months, × 365."]] : []),
     ...(ctx.out.customers ? [["Cum. %", "Cumulative share of revenue of the accounts ranked above and including the row."]] : []),
-    ...(ctx.out.headcount && ctx.ds.kpis?.some((k) => k.key === "maintenance_members") ? [["Members per technician", "Maintenance-agreement members at the stated date ÷ service technicians on payroll."]] : []),
+    // Named by the payroll department the capacity table divides by, never by the sample's trade.
+    ...(techDept && ctx.ds.kpis?.some((k) => k.key === "maintenance_members") ? [[`Members per ${techDept.toLowerCase()} employee`, `Maintenance-agreement members at the stated date ÷ ${techDept.toLowerCase()} employees on payroll.`]] : []),
     ["Fiscal year", `The Company's fiscal year ends in ${fye}; FY${fy} is the year ending ${fye} ${fy}.`],
   ];
 }
@@ -79,13 +82,27 @@ function sourcesTable(ctx: CimContext, w: number): Block {
   const ds = ctx.ds;
   const years = `FY${ds.years[0]}–FY${ds.years[ds.years.length - 1]}`;
   const rows: TextCell[][] = [[ctx.sources.statements, ds.monthly ? `${monthLabel(ds.monthly.months[0]!.key)} to ${monthLabel(ds.monthly.months[ds.monthly.months.length - 1]!.key)}, monthly` : years, "Income statement, EBITDA ladder, margins"]];
-  if (ds.balanceSheets?.length) rows.push(["Balance sheets", ds.balanceSheets.map((b) => b.asOf.slice(0, 4)).join(", "), "Working capital, debt, cash conversion"]);
+  // Periods are named as the tables name them (Dec-23, Jan-25 to Dec-25), never as bare years or a count (QA round 2 F42).
+  if (ds.balanceSheets?.length) rows.push(["Balance sheets", ds.balanceSheets.map((b) => monthLabel(b.asOf.slice(0, 7))).join(", "), "Working capital, debt, cash conversion"]);
   if (ds.adjustments?.length) rows.push(["Seller add-back list and GL detail", years, "Normalization adjustments"]);
   if (ds.customers) rows.push([`${ds.customers.term} list (coded)`, `To ${monthLabel(ds.customers.asOfMonth)}`, "Concentration, mix and retention"]);
   if (ds.payroll) rows.push(["Payroll register", `To ${monthLabel(ds.payroll.asOfMonth)}`, "Headcount, compensation and tenure"]);
-  if (ds.depositsByMonth) rows.push(["Bank statements", `${Object.keys(ds.depositsByMonth).length} months`, "Proof of cash against revenue"]);
+  const bankMonths = Object.keys(ds.depositsByMonth ?? {}).sort();
+  if (bankMonths.length) rows.push(["Bank statements", bankMonths.length === 1 ? monthLabel(bankMonths[0]!) : `${monthLabel(bankMonths[0]!)} to ${monthLabel(bankMonths.at(-1)!)}`, "Proof of cash against revenue"]);
   if (ds.intake) rows.push(["Management (intake call)", "As of the intake call", "Operations, people, transaction terms"]);
   return { kind: "textTable", header: { title: "Sources" }, spec: { colW: [1.6, 1.15, r3(w - 2.75)], head: ["Source", "Period", "Used for"], rows, fontSize: 8.5 } };
+}
+
+/**
+ * When the deck is dated well after its latest figures, the basis of
+ * preparation says the months since are not included: the current year to
+ * date is a buyer's first request, and open-questions.md asks the Seller for it.
+ */
+function staleNote(ctx: CimContext): string {
+  if (dataAgeDays(ctx.out.asOfDate, ctx.date) <= STALE_DAYS) return "";
+  const year = ctx.date.getUTCFullYear();
+  const since = monthLabel(ctx.out.asOfDate.slice(0, 7));
+  return ` Results after ${since}${Number(ctx.out.asOfDate.slice(0, 4)) < year ? `, including ${year} year to date,` : ""} are not included and have been requested from the Seller.`;
 }
 
 const s11_1: PageModule = {
@@ -104,7 +121,8 @@ const s11_1: PageModule = {
         rows: [{ columns: [{ span: [1, 7], blocks: left }, { span: [8, 12], blocks: right }] }],
         notes: {
           source: source(ctx.sources.financials, "Management"),
-          note: standardNote(ctx, `Revenue is reported gross. Margins are of total revenue. Adjustment tiers: [D] definitional, [N] normalization, [S] owner compensation${ctx.mainStreet ? " and capital reserve" : ""}, [PF] pro forma.`),
+          // The tiers are in the Definitions table; the note says instead what a buyer asks first when the figures are old (QA round 2 F42, F43).
+          note: standardNote(ctx, `Revenue is reported gross. Margins are of total revenue.${staleNote(ctx)}`),
         },
         kind: "reference",
       }),

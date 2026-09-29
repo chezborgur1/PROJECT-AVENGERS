@@ -145,7 +145,7 @@ export function planValuation(ctx: TabContext): SheetBuilder | undefined {
     for (const ln of lines) {
       row(`pf_${ln.key}`, ln.label, "line", (i) => {
         const m = A_AT(ln.method, i);
-        return { f: `IF(${m}="3-year average",AVERAGE(${fyRange(ln.key)}),IF(${m}="% of sales, 3-year blended",SUM(${fyRange(ln.key)})/SUM(${fyRange("revenue")})*${addr(b.r("pfRevenue"), 3 + i)},${pnl(ln.key)}))`, expect: ln.value(scenarios[i]!.pnl) / K };
+        return { f: `IF(${m}="3-year average",AVERAGE(${fyRange(ln.key)}),IF(${m}="% of sales, 3-year blended",SUM(${fyRange(ln.key)})/SUM(${fyRange("revenue")})*${addr(b.r("pfRevenue"), 3 + i)},IF(${m}="% of sales, latest year",${pnl(ln.key)}/${pnl("revenue")}*${addr(b.r("pfRevenue"), 3 + i)},${pnl(ln.key)})))`, expect: ln.value(scenarios[i]!.pnl) / K };
       }, FMT.body, "By the case's method on Assumptions");
     }
     const costDelta = (i: number) => lines.map((ln) => `(${addr(b.r(`pf_${ln.key}`), 3 + i)}-${pnl(ln.key)})`).join("-");
@@ -161,7 +161,7 @@ export function planValuation(ctx: TabContext): SheetBuilder | undefined {
   row("multiple", "(x) Valuation Multiple", "line", (i) => ({ f: A_AT(mainStreet ? "sdeMultiples" : "ebitdaMultiples", i), expect: vd.cases[cases[i]!].multiple }), FMT.multiple, model.assumptions!.multiplesSource);
   row("businessValuation", "Business Valuation", "subtotal", (i) => ({ f: `${addr(b.r("earnings"), 3 + i)}*${addr(b.r("multiple"), 3 + i)}`, expect: vd.cases[cases[i]!].businessValuation / K }), FMT.currency);
   row("deferredCapex", "(+) Deferred Capex / Renovation", "line", () => ({ f: `${A("deferredCapex")}/${K}`, expect: vd.cases.low.deferredCapex / K }), FMT.body, "Assumptions");
-  row("totalInvestment", "Total Investment", "keyTotal", (i) => ({ f: `ROUND((${addr(b.r("businessValuation"), 3 + i)}+${addr(b.r("deferredCapex"), 3 + i)})*${K},-1)/${K}`, expect: vd.cases[cases[i]!].totalInvestment / K }), FMT.currency, "Rounded to the nearest $10 (SUN)");
+  row("totalInvestment", "Total Investment", "keyTotal", (i) => ({ f: `ROUND((${addr(b.r("businessValuation"), 3 + i)}+${addr(b.r("deferredCapex"), 3 + i)})*${K},-1)/${K}`, expect: vd.cases[cases[i]!].totalInvestment / K }), FMT.currency, "Rounded to the nearest $10");
   row("impliedSde", "Implied SDE Multiple", "line", (i) => ({ f: `IFERROR(${addr(b.r("totalInvestment"), 3 + i)}/${addr(b.r("basisSde"), 3)},"n.a.")`, expect: vd.cases[cases[i]!].impliedSdeMultiple }), FMT.multiple);
   row("impliedAdj", "Implied Adj. EBITDA Multiple", "line", (i) => ({ f: `IFERROR(${addr(b.r("totalInvestment"), 3 + i)}/${addr(b.r("basisAdj"), 3)},"n.a.")`, expect: vd.cases[cases[i]!].impliedAdjEbitdaMultiple }), FMT.multiple);
   b.spacerRow(r++);
@@ -297,7 +297,7 @@ export function planDealStructure(ctx: TabContext): SheetBuilder | undefined {
   input("cashAtClose", "Cash at Close", `${addr(b.r("price"), 3)}*${A("cashAtClosePct")}`, d.cashAtClose / K, FMT.currency);
   input("sellerNote", "Seller Note", `${addr(b.r("price"), 3)}*${A("sellerNotePct")}`, d.sellerNote / K, FMT.currency);
   input("escrow", "Indemnity Escrow", `${addr(b.r("cashAtClose"), 3)}*${A("escrowPct")}`, d.escrow / K, FMT.currency, "10% of cash at close, held 15 months (LOI12 §7(h))");
-  input("holdback", "Reconciliation Holdback", `${S("pnl")}${colLetter(periodLayout(model, 3).byKey[model.valuationDetail!.period.key]!)}${rowOf("pnl", "payroll")}/12*${A("reconciliationHoldbackMonths")}`, d.reconciliationHoldback / K, FMT.currency, asset ? "One month of LTM payroll (ICP5)" : "Equity purchase: months set to zero on Assumptions");
+  input("holdback", "Reconciliation Holdback", `${S("pnl")}${colLetter(periodLayout(model, 3).byKey[model.valuationDetail!.period.key]!)}${rowOf("pnl", "payroll")}/12*${A("reconciliationHoldbackMonths")}`, d.reconciliationHoldback / K, FMT.currency, asset ? "One month of LTM payroll, per recent AMB offers" : "Equity purchase: months set to zero on Assumptions");
   input("fees", "Buyer Transaction Fees", `${A("transactionFees")}/${K}`, model.assumptions!.deal.transactionFees / K, FMT.currency);
   input("offerCount", "Structure Columns (#)", "SUMPRODUCT(--(LEN($C$6:$G$6)>0))", model.deal!.length, FMT.term, "Offer Comparison builds at two or more");
   b.defineName("Offer_Count", `$C$${b.r("offerCount")}`);
@@ -371,10 +371,10 @@ export function planDealStructure(ctx: TabContext): SheetBuilder | undefined {
         ["pPrice", "Purchase Price", addr(b.r("price"), 3), p.purchasePrice, "lineFirst"],
         ...(cards !== undefined
           ? ([
-              ["pDebt", "(-) Liens and Secured Debt Paid at Close", `${debtLink("fundedDebt")}+${S("debtLike")}$C$${rowOf("debtLike", "creditCards")}`, -(p.debtPaidAtClose - cards), "line", "Written payoff letters and lien releases at close (SUNPA)"],
+              ["pDebt", "(-) Liens and Secured Debt Paid at Close", `${debtLink("fundedDebt")}+${S("debtLike")}$C$${rowOf("debtLike", "creditCards")}`, -(p.debtPaidAtClose - cards), "line", "Written payoff letters and lien releases at close"],
               ["pCards", "(-) Credit Card Balances Paid at Close", `-${S("debtLike")}$C$${rowOf("debtLike", "creditCards")}`, -cards, "line", "Unsecured; repaid from proceeds at close (LOI12)"],
             ] as ProceedsRow[])
-          : ([["pDebt", "(-) Liens and Secured Debt Paid at Close", -p.debtPaidAtClose / K, -p.debtPaidAtClose, "line", "Written payoff letters at close (SUNPA)"]] as ProceedsRow[])),
+          : ([["pDebt", "(-) Liens and Secured Debt Paid at Close", -p.debtPaidAtClose / K, -p.debtPaidAtClose, "line", "Written payoff letters at close"]] as ProceedsRow[])),
         ["pHoldback", "(-) Reconciliation Holdback", `-${addr(b.r("holdback"), 3)}`, -p.reconciliationHoldback, "line", "One month of payroll"],
         ["pFees", "(-) Transaction Expenses", -p.transactionExpenses / K, -p.transactionExpenses, "line", "Seller's advisors; enter when known"],
         ["pEscrow", "(-) Indemnity Escrow (funded at close)", `-${addr(b.r("escrow"), 3)}`, -p.indemnityEscrow, "line"],
@@ -454,7 +454,7 @@ export function planDealStructure(ctx: TabContext): SheetBuilder | undefined {
         r++;
       };
       tangible("aEquipment", "FF&E / Equipment", "fixed", alloc.equipment, `Net book value at ${ctx.asOfLabel.replace("As of ", "")}; an equipment appraisal or agreed schedule replaces it`);
-      tangible("aInventory", "Inventory", "inventory", alloc.inventory, "At cost; counted at close (Q17b)");
+      tangible("aInventory", "Inventory", "inventory", alloc.inventory, "At cost; counted at close");
       b.row("aNonCompete", r);
       b.text(r, 2, "Non-Compete", { style: "line" });
       b.num(r, 3, alloc.nonCompete / K, { fmt: FMT.body });

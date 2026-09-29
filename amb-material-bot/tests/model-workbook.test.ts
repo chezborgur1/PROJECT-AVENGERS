@@ -417,7 +417,7 @@ describe("period and balance-sheet cases beyond the sample", () => {
     const file = path.join(dir, `${name}.xlsx`);
     await writeWorkbook({ row: s.row, dataset: ds, assumptions, model: out, firmName: "AMB Advisory Services", preparedOn: "2026-09-28" }, file);
     const v = await verifyWorkbook(file, out);
-    return { ds, out, v };
+    return { ds, out, v, file };
   }
   const clean = (v: VerifyResult) => {
     expect(v.errors).toEqual([]);
@@ -427,9 +427,18 @@ describe("period and balance-sheet cases beyond the sample", () => {
   };
 
   it("an as-of month that does not close the fiscal year: [S2] and [S3] run through every YTD and LTM month", async () => {
-    const { ds, out, v } = await run(midYear(31, { ytdAddbacks: false }), "mid-year");
+    const { ds, out, v, file: midFile } = await run(midYear(31, { ytdAddbacks: false }), "mid-year");
     clean(v);
     expect(ds.years).toEqual([2023, 2024]);
+    // The dollar roll-forward runs on fiscal years, so with an LTM that is no fiscal year there is no GDR_LTM / NDR_LTM: the
+    // names are left undefined and the engine's are null, never a fiscal-year figure labelled LTM (QA round 2 F18).
+    expect(out.customers?.retention).toBeDefined();
+    expect([out.namedOutputs.GDR_LTM, out.namedOutputs.NDR_LTM]).toEqual([null, null]);
+    const book = new ExcelJS.Workbook();
+    await book.xlsx.readFile(midFile);
+    const names = (book.definedNames as unknown as { model: { name: string }[] }).model.map((n) => n.name);
+    expect(names).not.toContain("GDR_LTM");
+    expect(names).toContain("AdjEBITDA_LTM");
     const ltm = out.periods["LTM2025-07"]!.ladder;
     const ytd = out.periods["YTD2025-07"]!.ladder;
     expect(ltm.marketReplacement).toBeCloseTo(-109_250, 4);
@@ -569,7 +578,16 @@ describe("QA round 1 fixes on the written workbook", () => {
       else expect(flag).toBe("");
     }
     expect(flags.length).toBeGreaterThan(0);
-    for (const f of flags) expect(f).toBe("Explain: deposits differ from revenue by more than 5%");
+    for (const f of flags) expect(f).toBe("Explain: variance above the threshold");
+    // The 5% is the Checks tab's C14 tolerance, linked in green, and every flag reads that one cell (QA round 2 F12).
+    const at = rowOfLabel(poc, "Flag threshold (Checks tab, C14 tolerance)");
+    const link = (poc.getCell(at, 6).value as { formula?: string }).formula!;
+    expect(link).toMatch(/^'Checks'!\$F\$\d+$/);
+    const checks = wb.getWorksheet("Checks")!;
+    expect(checks.getCell(Number(link.split("$").at(-1)), 2).value).toBe("C14");
+    expect(ev.value("Proof of Cash", at, 6)).toBe(0.05);
+    expect(poc.getCell(at, 6).font?.color?.argb).toBe("FF008000");
+    expect((poc.getCell(8, 8).value as { formula?: string }).formula).toContain(`$F$${at}`);
   });
 
   it("allocates monthly add-backs by formula on the account they come out of, not as typed decimals (F18)", () => {
@@ -659,5 +677,100 @@ describe("QA round 1 fixes on the written workbook", () => {
       // Title case before the units: every word longer than three letters starts with a capital.
       expect(subtitle.replace(/\s*\([^)]*\)$/, "").split(/[\s:,]+/).filter((w) => /^[a-z]/.test(w) && w.length > 3), ws.name).toEqual([]);
     }
+  });
+});
+
+// QA round 2 workbook minors, read off the written Ridgeline workbook (and a copy edited to break a rule the lint must catch).
+describe("QA round 2 fixes on the written workbook", () => {
+  const rowOfLabel = (ws: ExcelJS.Worksheet, label: string, col = 2) => ws.getColumn(col).values.findIndex((v) => v === label);
+  async function editAndVerify(edit: (book: ExcelJS.Workbook) => void, suffix: string): Promise<VerifyResult> {
+    const book = new ExcelJS.Workbook();
+    await book.xlsx.readFile(file);
+    edit(book);
+    const out = file.replace(/\.xlsx$/, `-${suffix}.xlsx`);
+    await book.xlsx.writeFile(out);
+    return verifyWorkbook(out, model);
+  }
+
+  it("writes [S4] as a formula on [S1] at the statutory rates, which are blue inputs on Assumptions (F12)", () => {
+    const adj = wb.getWorksheet("Adjustments")!;
+    const r = rowOfLabel(adj, "Payroll taxes and benefits on owner compensation", 3);
+    const statutory: number[] = [];
+    adj.getRow(r).eachCell((c, col) => {
+      const f = (c.value as { formula?: string } | null)?.formula;
+      if (f && /^ROUND\(MIN\(/.test(f)) {
+        expect(f).toMatch(/'Assumptions'!\$C\$\d+/);
+        statutory.push(ev.value("Adjustments", r, col) as number);
+      }
+    });
+    expect(statutory.sort()).toEqual([12.584, 13.25, 13.86]);
+    const assumptions = wb.getWorksheet("Assumptions")!;
+    const rate = rowOfLabel(assumptions, "Social Security rate");
+    expect(assumptions.getCell(rate, 3).value).toBe(0.062);
+    expect(assumptions.getCell(rate, 3).font?.color?.argb).toBe("FF0000FF");
+    expect(assumptions.getCell(rowOfLabel(assumptions, "Social Security wage base, FY2025"), 3).value).toBe(176_100);
+  });
+
+  it("colours every formula that reaches another sheet green, string builders included, and the lint catches one left black (F12)", async () => {
+    const summary = wb.getWorksheet("Summary")!;
+    let crossSheetText = 0;
+    summary.eachRow((row) => row.eachCell((c) => {
+      const f = (c.value as { formula?: string } | null)?.formula;
+      // Header bands keep their white; every other cross-sheet string builder is a green link.
+      if (f && f.replace(/"(?:[^"]|"")*"/g, "").includes("!") && /&/.test(f) && c.font?.color?.argb !== "FFFFFFFF") {
+        crossSheetText++;
+        expect(c.font?.color?.argb, c.address).toBe("FF008000");
+      }
+    }));
+    expect(crossSheetText).toBeGreaterThan(0);
+    const v = await editAndVerify((book) => {
+      const ws = book.getWorksheet("Summary")!;
+      ws.eachRow((row) => row.eachCell((c) => {
+        const f = (c.value as { formula?: string } | null)?.formula;
+        if (f && /&/.test(f) && f.includes("!") && c.font?.color?.argb !== "FFFFFFFF") c.font = { ...c.font, color: { argb: "FF000000" } };
+      }));
+    }, "black-link");
+    expect(v.lint.some((l) => /reaching another sheet in black/.test(l.issue))).toBe(true);
+  }, 120_000);
+
+  it("writes plain sources, and the lint catches a guide or precedent code in a cell (F19)", async () => {
+    const assumptions = wb.getWorksheet("Assumptions")!;
+    const sources = (assumptions.getColumn(9).values as unknown[]).filter((v): v is string => typeof v === "string");
+    expect(sources.some((s) => /AMB default: 70-80% cash at close/.test(s))).toBe(true);
+    for (const s of sources) expect(s).not.toMatch(/\bguide \d|\bICP\d|\bBENP\b|\bSUNPA\b|\(Q\d+\)/);
+    const v = await editAndVerify((book) => {
+      const ws = book.getWorksheet("Assumptions")!;
+      ws.getCell(rowOfLabel(ws, "Cash at close, % of price"), 9).value = "AMB precedent (MISC, ICP5)";
+    }, "internal-code");
+    expect(v.lint.some((l) => /internal guide or precedent code/.test(l.issue))).toBe(true);
+  }, 120_000);
+
+  it("prints currency on the first row and totals only, and statement dates as mmm-yy (F16)", () => {
+    const co = wb.getWorksheet("Customer Overview")!;
+    const first = 8;
+    // The reader drops the format strings' escapes, so both sides are compared without them.
+    const plain = (f: string | undefined) => (f ?? "").replace(/\\/g, "");
+    expect(plain(co.getCell(first, 5).numFmt)).toBe(plain(FMT.currency));
+    expect(plain(co.getCell(first + 1, 5).numFmt)).toBe(plain(FMT.body));
+    expect(plain(co.getCell(first + 1, 7).numFmt)).toBe(plain(FMT.body));
+    for (const tab of ["Balance Sheet", "NWC"]) expect(plain(wb.getWorksheet(tab)!.getCell(6, 3).numFmt), tab).toBe(plain(FMT.monthHeader));
+  });
+
+  it("recomputes every P&L Summary line from the grid's months by SUMPRODUCT, not the grid's own SUMIFS block (C03, F17)", () => {
+    const pnl = wb.getWorksheet("P&L Summary")!;
+    const r = rowOfLabel(pnl, "Check: every line less the grid's months in its window");
+    expect(r).toBeGreaterThan(0);
+    const f = (pnl.getCell(r, 3).value as { formula?: string }).formula!;
+    expect(f).toMatch(/SUMPRODUCT\(--\('Monthly P&L'!\$\w+\$6:\$\w+\$6>=/);
+    expect(f).not.toMatch(/'Monthly P&L'!C\d/);
+    expect(ev.value("P&L Summary", r, 3)).toBeCloseTo(0, 6);
+  });
+
+  it("ties the debt-like total to what NWC removes at the latest date (C19, F54)", () => {
+    const checks = wb.getWorksheet("Checks")!;
+    const r = rowOfLabel(checks, "C19");
+    expect((checks.getCell(r, 5).value as { formula?: string }).formula).toMatch(/^ABS\('Debt-Like Items'!\$C\$\d+-\('NWC'!\$\w+\$\d+/);
+    expect(ev.value("Checks", r, 5)).toBeCloseTo(0, 9);
+    expect(ev.value("Checks", r, 7)).toBe("OK");
   });
 });

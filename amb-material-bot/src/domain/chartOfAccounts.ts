@@ -65,16 +65,18 @@ const BS_RULES: Rule<BsCategory>[] = [
 
 // Account names worth an advisor's look as potential add-backs. These are
 // suggestions only; nothing here changes the numbers.
-const ADDBACK_HINTS: { test: RegExp; reason: string }[] = [
-  { test: /meal|entertain/i, reason: "Meals & entertainment are often partly personal" },
-  { test: /auto|vehicle|car |fuel|gas\b/i, reason: "Vehicle costs may include the owner's personal use" },
-  { test: /travel/i, reason: "Travel may include personal trips" },
-  { test: /charit|donat|contribution/i, reason: "Charitable giving is discretionary" },
-  { test: /life insurance|officer life/i, reason: "Owner life insurance is typically an add-back" },
-  { test: /personal|owner expense|family/i, reason: "Labelled personal / owner" },
-  { test: /legal|professional fee|consult/i, reason: "Check for one-time legal or consulting work" },
-  { test: /one[- ]time|non[- ]recurring|moving|relocation|settlement|lawsuit/i, reason: "Labelled one-time / non-recurring" },
-  { test: /cell phone|phone - personal|club|dues|country club|subscriptions - personal/i, reason: "May include personal memberships or phones" },
+// `personal` marks the hints that point at owner-personal or discretionary spend, the Databook's "Personal?" column; the
+// others (legal work, one-time items) point at non-recurring costs, which that column must not call personal.
+const ADDBACK_HINTS: { test: RegExp; reason: string; personal: boolean }[] = [
+  { test: /meal|entertain/i, reason: "Meals & entertainment are often partly personal", personal: true },
+  { test: /auto|vehicle|car |fuel|gas\b/i, reason: "Vehicle costs may include the owner's personal use", personal: true },
+  { test: /travel/i, reason: "Travel may include personal trips", personal: true },
+  { test: /charit|donat|contribution/i, reason: "Charitable giving is discretionary", personal: true },
+  { test: /life insurance|officer life/i, reason: "Owner life insurance is typically an add-back", personal: true },
+  { test: /personal|owner expense|family/i, reason: "Labelled personal / owner", personal: true },
+  { test: /legal|professional fee|consult/i, reason: "Check for one-time legal or consulting work", personal: false },
+  { test: /one[- ]time|non[- ]recurring|moving|relocation|settlement|lawsuit/i, reason: "Labelled one-time / non-recurring", personal: false },
+  { test: /cell phone|phone - personal|club|dues|country club|subscriptions - personal/i, reason: "May include personal memberships or phones", personal: true },
 ];
 
 export type MappingOverrides = Map<string, Category>;
@@ -165,6 +167,11 @@ export function addbackHint(account: string): string | undefined {
   return ADDBACK_HINTS.find((h) => h.test.test(account))?.reason;
 }
 
+/** Whether an account's add-back hint is owner-personal or discretionary spend (the Databook's "Personal?" flag). */
+export function isPersonalHint(account: string): boolean {
+  return ADDBACK_HINTS.find((h) => h.test.test(account))?.personal ?? false;
+}
+
 // --- Balance-sheet detail and debt-like items (guide 5.6) -------------------
 
 // Sub-lines the NWC and debt-like schedules read out of the ten categories.
@@ -179,6 +186,8 @@ const BS_DETAIL_RULES: { test: RegExp; line: BsDetailLine; side: "asset" | "liab
   { test: /customer deposit|deposits? (received|from customers)|retainers? (received|held)/i, line: "customer_deposits", side: "liability" },
   { test: /credit card|\bvisa\b|mastercard|\bamex\b|american express/i, line: "credit_cards", side: "liability" },
   { test: /current portion|current maturit/i, line: "current_portion_debt", side: "liability" },
+  // Before the general accrued rule: an accrued bonus or unpaid payroll tax is settled by the Seller, not carried as working capital.
+  { test: /\bbonus|unpaid payroll tax|payroll tax(es)? payable/i, line: "accrued_bonus_payroll_tax", side: "liability" },
   { test: /accrued|payroll liabilit|wages payable|sales tax payable|401\s?k payable|garnishment/i, line: "accrued_liabilities", side: "liability" },
 ];
 
@@ -202,11 +211,18 @@ export function bsDetailLine(account: string, section: string, category?: BsCate
       if (asset) return category === undefined || category === "other_current_assets" ? "related_party_receivable" : undefined;
       return category === undefined || category === "other_current_liabilities" ? "related_party_balances" : undefined;
     }
-    if ((r.line === "accrued_interest" || r.line === "income_tax_payable") && category !== undefined && category !== "other_current_liabilities") return undefined;
+    if (DEBT_LIKE_LINES.has(r.line) && category !== undefined && category !== "other_current_liabilities") return undefined;
     return r.line;
   }
   return undefined;
 }
+
+/**
+ * The detail lines inside other current liabilities that are debt-like: the
+ * debt-like schedule deducts them and NWC removes them, by this one list, so
+ * no balance is counted in both (check C19).
+ */
+export const DEBT_LIKE_LINES: ReadonlySet<BsDetailLine> = new Set(["accrued_interest", "income_tax_payable", "related_party_balances", "accrued_bonus_payroll_tax"]);
 
 export interface DebtLikeClassification {
   treatment: DebtLikeTreatment;
@@ -218,9 +234,10 @@ export interface DebtLikeClassification {
 /**
  * How a liability account is treated in the debt-like schedule. Funded debt
  * and credit cards are debt; deferred revenue and customer deposits stay in
- * NWC (the AMB default) and appear as memo rows; accrued interest, income
- * taxes and related-party balances are debt-like. Everything else in
- * accrued liabilities is ordinary working capital.
+ * NWC (the AMB default) and appear as memo rows; the DEBT_LIKE_LINES
+ * (accrued interest, income taxes, related-party balances, accrued bonuses
+ * and unpaid payroll taxes) are debt-like. Everything else in accrued
+ * liabilities is ordinary working capital.
  */
 export function debtLikeTreatment(account: string, category: BsCategory, section: string): DebtLikeClassification | undefined {
   const name = normaliseAccount(account);
@@ -231,8 +248,7 @@ export function debtLikeTreatment(account: string, category: BsCategory, section
   if (category !== "other_current_liabilities") return undefined;
   const detail = bsDetailLine(account, section, category);
   if (detail === "deferred_revenue" || detail === "customer_deposits") return { treatment: "nwc", revolving: false, note: "In NWC (AMB default)" };
-  if (detail === "accrued_interest" || detail === "income_tax_payable" || detail === "related_party_balances") return { treatment: "debt_like", revolving: false };
-  if (/bonus|unpaid payroll tax|payroll tax(es)? payable/i.test(name)) return { treatment: "debt_like", revolving: false };
+  if (detail && DEBT_LIKE_LINES.has(detail)) return { treatment: "debt_like", revolving: false };
   return { treatment: "nwc", revolving: false };
 }
 

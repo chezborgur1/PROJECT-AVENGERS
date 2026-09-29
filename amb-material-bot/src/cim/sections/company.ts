@@ -8,8 +8,8 @@
 import type { CimContext } from "../context.ts";
 import { confirm, pageCopy, PER_MANAGEMENT, standardNote } from "../context.ts";
 import type { CimCopy } from "../copy.ts";
-import { spanW } from "../design.ts";
-import { capacityFacts, facilities, keyObservations, milestones, observationsBlock, revenueByLine, revenueMixChart, serviceLines, unitEconomics, usable } from "../exhibits.ts";
+import { MAX_EXHIBITS, spanW } from "../design.ts";
+import { capacityFacts, facilities, keyObservations, milestoneProse, milestones, observationsBlock, revenueByLine, revenueMixChart, serviceLines, unitEconomics, usable } from "../exhibits.ts";
 import { chooseTitle, draft, present, source, verb } from "./common.ts";
 import type { PageModule, SectionModule } from "./types.ts";
 
@@ -54,7 +54,8 @@ const s2_2: PageModule = {
     const mix = revenueMixChart(ctx);
     const svc = serviceLines(ctx, lw);
     const byLine = carries(ctx, "S2.2", "S6.2") ? revenueByLine(ctx, rw) : undefined;
-    const ms = carries(ctx, "S2.2", "S2.1") ? milestones(ctx, rw) : undefined;
+    // With three exhibits already on the page the milestones read as a run-in paragraph, not a fourth table (spec 7.3).
+    const ms = !carries(ctx, "S2.2", "S2.1") ? undefined : present(mix, svc, byLine).length >= MAX_EXHIBITS ? milestoneProse(ctx) : milestones(ctx, rw);
     const obs = observationsBlock(byLine ? "the revenue table" : "the service lines", keyObservations(ctx, "S2.2", copy.observations, present(byLine, svc)));
     const b = ctx.brief;
     const lines = ctx.out.periods[ctx.latest.key]!.revenueLines.filter((l) => l.amount > 0);

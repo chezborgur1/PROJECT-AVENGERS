@@ -513,7 +513,7 @@ export function mergeSources(input: MergeInput): FinancialDataset {
       suggested: suggestedAddbacks,
       fileRows,
       replacementSalary,
-      burden: { pct: DEFAULT_BURDEN_PCT, source: `AMB default ${Math.round(DEFAULT_BURDEN_PCT * 100)}% (guide 5.3, Q8); confirm` },
+      burden: { pct: DEFAULT_BURDEN_PCT, source: `AMB default ${Math.round(DEFAULT_BURDEN_PCT * 100)}% for payroll taxes and benefits; confirm with the Seller` },
       ...(Object.keys(equipment).length ? { equipmentPlacedInService: equipment } : {}),
       ...(owner ? { owner: { name: owner.name, role: owner.role } } : {}),
       ...(ownerRow ? { ownerEmployerCosts: { byFiscalYear: ownerRow.employerCostsByFiscalYear!, file: input.payroll!.file } } : {}),

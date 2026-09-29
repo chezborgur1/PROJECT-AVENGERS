@@ -215,5 +215,12 @@ describe("annual-only mode (guide 5.2A)", () => {
     expect(low!.pnl.ebitda).toBeLessThan(mid!.pnl.ebitda);
     expect(mid!.pnl.ebitda).toBeLessThan(high!.pnl.ebitda);
     expect(annual.checks.find((c) => c.id === "C29")!.status).toBe("OK");
+    // Both cases keep the latest year's cost ratio, never an older, worse one, and hold payroll, so Low gets no cushion
+    // from a payroll that shrinks with sales and High no penalty from a blended cost of revenue (QA round 2 F14).
+    const ratio = (p: { cogs: number; revenue: number }) => p.cogs / p.revenue;
+    expect(ratio(high!.pnl)).toBeCloseTo(ratio(mid!.pnl), 9);
+    expect(ratio(low!.pnl)).toBeCloseTo(ratio(mid!.pnl), 9);
+    expect(low!.pnl.payroll).toBe(mid!.pnl.payroll);
+    expect(high!.pnl.ebitda - mid!.pnl.ebitda).toBeCloseTo(0.03 * (mid!.pnl.revenue - mid!.pnl.cogs), 6);
   });
 });

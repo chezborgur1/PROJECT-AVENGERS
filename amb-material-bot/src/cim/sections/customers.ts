@@ -107,7 +107,8 @@ const s4_2: PageModule = {
     const chart = cohorts ? undefined : winsLosses(ctx);
     const obs = observationsBlock("the retention tables", keyObservations(ctx, "S4.2", copy.observations, present(counts, dollars, cohorts)));
     // The retention figures cover the listed accounts only; the callout sets them against the revenue they do not cover (QA round 1 F32).
-    const takeaway: Block | undefined = copy.takeaway ? { kind: "callout", lead: "Takeaway:", body: resolveCopy(ctx, copy.takeaway, "S4.2 takeaway") } : undefined;
+    // The retention page's callout states the tables' scope, so it is a note, not a takeaway (spec 6.5).
+    const takeaway: Block | undefined = copy.takeaway ? { kind: "callout", lead: "Note:", body: resolveCopy(ctx, copy.takeaway, "S4.2 takeaway") } : undefined;
     const b = ctx.brief;
     const L = ctx.fy[ctx.fy.length - 1]!.key;
     const title = chooseTitle(ctx, "S4.2 title", copy.title, `Listed accounts rose to ${b.maybe(`cust.end.${L}`) ?? b.t("cust.count")} with net dollar retention of ${b.maybe(`cust.ndr.${L}`) ?? "n.a."} in ${ctx.fy[ctx.fy.length - 1]!.label}`);

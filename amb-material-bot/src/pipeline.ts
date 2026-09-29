@@ -15,7 +15,7 @@ import { gatherIntake, type IntakeBundle } from "./ingest/index.ts";
 import { describeSources } from "./ingest/merge.ts";
 import { defaultAssumptions } from "./model/assumptions.ts";
 import { runModel } from "./model/engine.ts";
-import { latestColumn, MODE_LABELS, type ModelOutput, type PeriodColumn } from "./model/types.ts";
+import { dataAgeDays, latestColumn, MODE_LABELS, STALE_DAYS, type ModelOutput, type PeriodColumn } from "./model/types.ts";
 import { writeWorkbook, type WorkbookPlan } from "./model/workbook.ts";
 import { verifyWorkbook, type VerifyResult } from "./model/verifyWorkbook.ts";
 import { withRenderCheck } from "./model/checks.ts";
@@ -136,12 +136,9 @@ export async function processRequest(row: RequestRow, cfg: PipelineConfig): Prom
 
 // --- open-questions.md -------------------------------------------------------------------------
 
-/** Days after the as-of date past which the financials read as stale to a buyer, who asks first for the current year to date (PE reader). */
-const STALE_DAYS = 120;
-
 function openQuestionsMd(p: { row: RequestRow; ds: FinancialDataset; model: ModelOutput; cim: CimBuildResult; draft: DraftResult; now: Date }): string {
   const { row, ds, model, cim, draft, now } = p;
-  const age = (now.getTime() - Date.parse(`${model.asOfDate}T00:00:00Z`)) / 86_400_000;
+  const age = dataAgeDays(model.asOfDate, now);
   const prevMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
   const lastFull = monthLabel(`${prevMonth.getUTCFullYear()}-${String(prevMonth.getUTCMonth() + 1).padStart(2, "0")}`);
   const stale = age > STALE_DAYS ? [`The financials end at ${monthLabel(model.asOfDate.slice(0, 7))}, ${Math.round(age)} days before this run: request the P&L and balance sheet year to date through ${lastFull}, so the model can add YTD and LTM columns (guide 5.2).`] : [];

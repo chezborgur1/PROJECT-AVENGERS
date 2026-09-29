@@ -5,7 +5,7 @@
 // operating deposits on the raw bank tab.
 
 import { BS_DETAIL_LINES, addMonths, monthRange, type BsCategory, type BsDetailLine, type FinancialDataset, type MonthKey } from "../../domain/financials.ts";
-import { bsDetailLine } from "../../domain/chartOfAccounts.ts";
+import { bsDetailLine, DEBT_LIKE_LINES } from "../../domain/chartOfAccounts.ts";
 import { fiscalYearEndKey } from "../periods.ts";
 import { addr, colLetter, rowOf, SheetBuilder } from "../sheet.ts";
 import { COLOR, FMT, WIDTH } from "../styles.ts";
@@ -76,6 +76,7 @@ const DETAIL_LABELS: Record<BsDetailLine, string> = {
   related_party_balances: "Related-party payables (in accrued and other)",
   accrued_interest: "Accrued interest (in accrued and other)",
   income_tax_payable: "Income taxes payable (in accrued and other)",
+  accrued_bonus_payroll_tax: "Accrued bonuses and payroll taxes (in accrued and other)",
   related_party_receivable: "Related-party receivables (in other current assets)",
 };
 
@@ -99,7 +100,8 @@ export function planBalanceSheet(ctx: TabContext): SheetBuilder | undefined {
   b.tier2(6, { from: 3, to: lastValue }, [], "Balance Sheet");
   b.cell(6, notesCol, { style: "header", v: null, role: "text" });
   const dbHeader = (i: number) => `${S("databook")}${colLetter(DATABOOK_COL.periodStart + i)}$${rowOf("databook", "bsHeader")}`;
-  dates.forEach((m, i) => b.formula(6, 3 + i, `EOMONTH(${dbHeader(i)},0)`, { style: "header", fmt: FMT.date, role: "text", expect: serialOfMonthEnd(m), label: `bs date ${m}` }));
+  // Statement dates head their columns as mmm-yy, like every period header (guide 5.10).
+  dates.forEach((m, i) => b.formula(6, 3 + i, `EOMONTH(${dbHeader(i)},0)`, { style: "header", fmt: FMT.monthHeader, role: "text", expect: serialOfMonthEnd(m), label: `bs date ${m}` }));
   const dbRange = (c: number) => `${S("databook")}$${colLetter(c)}$${rowOf("databook", "bsFirst")}:$${colLetter(c)}$${rowOf("databook", "bsLast")}`;
   let r = 8;
   for (const spec of BS_ROWS) b.row(spec.key, r++);
@@ -200,7 +202,9 @@ export function planNwc(ctx: TabContext): SheetBuilder | undefined {
   b.width(2, WIDTH.label);
   b.widths(3, 3 + n - 1, WIDTH.value);
   b.spacerCol(3 + n);
-  b.widths(pegCol, vsCol - 1, 11);
+  // "Peg (T12M avg.)" needs the width; Latest keeps the value width.
+  b.width(pegCol, 14);
+  b.widths(pegCol + 1, vsCol - 1, 11);
   b.width(vsCol, 13);
   b.spacerCol(vsCol + 1);
   if (transfersCol) {
@@ -218,7 +222,7 @@ export function planNwc(ctx: TabContext): SheetBuilder | undefined {
   ];
   b.tier1(5, groups);
   b.tier2(6, { from: 3, to: vsCol }, [], "NWC");
-  nwc.periods.forEach((p, i) => b.formula(6, 3 + i, `${S("bs")}${colLetter(bsColumn(dates, p.month))}6`, { style: "header", fmt: FMT.date, role: "text", expect: serialOfMonthEnd(p.month), label: `nwc date ${p.month}` }));
+  nwc.periods.forEach((p, i) => b.formula(6, 3 + i, `${S("bs")}${colLetter(bsColumn(dates, p.month))}6`, { style: "header", fmt: FMT.monthHeader, role: "text", expect: serialOfMonthEnd(p.month), label: `nwc date ${p.month}` }));
   b.cell(6, pegCol, { style: "header", v: `Peg (${nwc.pegBasis === "n.a." ? "n.a." : nwc.pegBasis === "T12M average" ? "T12M avg." : "T4Q avg."})`, role: "text" });
   b.cell(6, latestCol, { style: "header", v: "Latest", role: "text" });
   b.cell(6, vsCol, { style: "header", v: "Latest vs. Peg", role: "text" });
@@ -342,7 +346,7 @@ export function planNwc(ctx: TabContext): SheetBuilder | undefined {
           expect = l.reportedNwc / K;
           break;
         case "adjustments":
-          f = `${num(detail(m, "related_party_balances"))}+${num(detail(m, "accrued_interest"))}+${num(detail(m, "income_tax_payable"))}-${num(detail(m, "related_party_receivable"))}+IF(${A("deferredRevenueTreatment")}="Debt-like",${num(at("deferredRevenue"))}+${num(at("customerDeposits"))},0)`;
+          f = `${[...DEBT_LIKE_LINES].map((d) => num(detail(m, d))).join("+")}-${num(detail(m, "related_party_receivable"))}+IF(${A("deferredRevenueTreatment")}="Debt-like",${num(at("deferredRevenue"))}+${num(at("customerDeposits"))},0)`;
           expect = l.adjustments / K;
           break;
         case "adjustedNwc":
@@ -443,7 +447,7 @@ export function planNwc(ctx: TabContext): SheetBuilder | undefined {
     b.formula(sr, latestCol, `${addr(b.r("ar"), latestCol)}+${num(addr(b.r("unbilled"), latestCol))}+${addr(b.r("prepaidOther"), latestCol)}-${addr(b.r("ap"), latestCol)}-${addr(b.r("accrued"), latestCol)}`, { style: "line", fmt: FMT.body, expect: (nwc.sellerRetainedNwc ?? 0) / K, label: "seller retained nwc" });
   }
   const pegNote = nwc.pegBasis === "n.a." ? "Year-end balance sheets only: no peg (monthly balance sheets required, check C20)." : nwc.pegBasis === "T12M average" ? "Peg is the trailing-twelve-month average of adjusted NWC (AMB convention)." : "Peg is the trailing four quarter-ends' average (info flag: quarter-ends only).";
-  b.note(lastPrinted, 2, `Note: ${pegNote} Deferred revenue and customer deposits are operating liabilities inside NWC (AMB default); adjustments remove related-party balances, accrued interest and income taxes. Books basis: ${model.assumptions!.booksBasis === "unconfirmed" ? "unconfirmed" : model.assumptions!.booksBasis}.`);
+  b.note(lastPrinted, 2, `Note: ${pegNote} Deferred revenue and customer deposits are operating liabilities inside NWC (AMB default); adjustments remove the debt-like balances (related-party balances, accrued interest, income taxes, accrued bonuses and payroll taxes), which Debt-Like Items deducts instead (check C19). Books basis: ${model.assumptions!.booksBasis === "unconfirmed" ? "unconfirmed" : model.assumptions!.booksBasis}.`);
   b.print({ area: `B2:${addr(lastPrinted, notesCol)}`, landscape: n > 6, fitToWidth: 1, fitToHeight: 0, titlesRow: "5:6" });
   b.furniture(ctx.codeName, ctx.asOfLabel);
   b.freeze(7, 3);
@@ -658,7 +662,7 @@ export function planProofOfCash(ctx: TabContext, ds: FinancialDataset | undefine
   b.text(3, 5, "Print", { align: { horizontal: "right" } });
   b.tier1(5, [{ from: 2, to: 6, label: "Proof of cash" }, { from: 8, to: 8, label: "Notes" }]);
   ["Month", "P&L Revenue", "Bank Deposits", "Variance ($)", "Variance (%)"].forEach((h, i) => b.cell(6, 2 + i, { style: "header", v: h, role: "text", align: { horizontal: i === 0 ? "left" : "center" } }));
-  b.cell(6, 8, { style: "header", v: "Flag (above 5%)", role: "text", align: { horizontal: "left" } });
+  b.cell(6, 8, { style: "header", v: "Flag (above the threshold)", role: "text", align: { horizontal: "left" } });
   const monthlyRow = `${S("monthly")}$${colLetter(MONTH_START)}$${rowOf("monthly", "revenue")}:$${colLetter(MONTH_START + months.length - 1)}$${rowOf("monthly", "revenue")}`;
   const monthlyHeader = `${S("monthly")}$${colLetter(MONTH_START)}$6:$${colLetter(MONTH_START + months.length - 1)}$6`;
   // Deposits: the Operating lines of the pasted transactions in the month (n.a. when the month has no statement lines),
@@ -672,8 +676,12 @@ export function planProofOfCash(ctx: TabContext, ds: FinancialDataset | undefine
       : `IFERROR(INDEX(${S("rawBank")}$B:$B,MATCH(${month},${S("rawBank")}$A:$A,0))/${K},"n.a.")`;
   let r = 8;
   const first = r;
-  // Months derive from AsOfDate like every period label (guide 5.2): the first from its offset, each next one from the row above.
-  const flagText = (pct: number | string) => (typeof pct !== "number" ? "No bank statement for the month" : Math.abs(pct) > 0.05 ? "Explain: deposits differ from revenue by more than 5%" : "");
+  // The flag threshold is the Checks tab's C14 tolerance, linked into a cell below the table (row fixed by the layout: the months,
+  // the total, a gap and the check row), so the flags and C14 read one input.
+  const tolerance = model.checks.find((c) => c.id === "C14")?.tolerance ?? 0.05;
+  const thresholdRow = first + bankMonths.length + 3;
+  const threshold = addr(thresholdRow, 6, { row: true, col: true });
+  const flagText = (pct: number | string) => (typeof pct !== "number" ? "No bank statement for the month" : Math.abs(pct) > tolerance ? "Explain: variance above the threshold" : "");
   bankMonths.forEach((m, i) => {
     const rev = model.monthly!.series.revenue![months.indexOf(m)]!;
     const dep = deposits[m]?.amount;
@@ -684,7 +692,7 @@ export function planProofOfCash(ctx: TabContext, ds: FinancialDataset | undefine
     b.formula(r, 5, `IFERROR(${addr(r, 4)}-${addr(r, 3)},"n.a.")`, { style: "line", fmt: FMT.body, expect: dep === undefined ? "n.a." : (dep - rev) / K, label: `variance ${m}` });
     const pct = dep === undefined || !rev ? "n.a." : (dep - rev) / rev;
     b.formula(r, 6, `IFERROR(${addr(r, 5)}/${addr(r, 3)},"n.a.")`, { style: "ratio", fmt: FMT.pct1, expect: pct, label: `variance pct ${m}` });
-    b.formula(r, 8, `IF(ISNUMBER(${addr(r, 6)}),IF(ABS(${addr(r, 6)})>0.05,"Explain: deposits differ from revenue by more than 5%",""),"No bank statement for the month")`, { role: "text", font: { color: COLOR.pending }, expect: flagText(pct), label: `flag ${m}`, align: { horizontal: "left" } });
+    b.formula(r, 8, `IF(ISNUMBER(${addr(r, 6)}),IF(ABS(${addr(r, 6)})>${threshold},"Explain: variance above the threshold",""),"No bank statement for the month")`, { role: "text", font: { color: COLOR.pending }, expect: flagText(pct), label: `flag ${m}`, align: { horizontal: "left" } });
     r++;
   });
   const last = r - 1;
@@ -701,12 +709,16 @@ export function planProofOfCash(ctx: TabContext, ds: FinancialDataset | undefine
   r += 2;
   b.row("variancePct", r);
   // The label runs on across the empty figure cells rather than wrapping in the 16-wide Month column.
-  b.text(r, 2, "Check: deposits less revenue, % (flag above 5%)", { style: "check", align: { wrap: false } });
+  b.text(r, 2, "Check: deposits less revenue, % (flag above the threshold)", { style: "check", align: { wrap: false } });
   // The check sits under Variance (%) so its label has the width of the table.
   b.formula(r, 6, `IFERROR(${addr(totalRow, 5)}/${addr(totalRow, 3)},0)`, { style: "check", fmt: FMT.pct1, expect: totalRev ? (totalDep - totalRev) / totalRev : 0, tol: 1e-6, label: "C14" });
-  b.cf({ ref: addr(r, 6), formula: `ABS(${addr(r, 6)})>0.05`, font: { color: "FF0000" } });
+  b.cf({ ref: addr(r, 6), formula: `ABS(${addr(r, 6)})>${threshold}`, font: { color: "FF0000" } });
+  r++;
+  if (r !== thresholdRow) throw new Error("Proof of Cash: flag threshold row moved");
+  b.text(r, 2, "Flag threshold (Checks tab, C14 tolerance)", { style: "line", align: { wrap: false } });
+  b.formula(r, 6, `${S("checks")}$F$@{checks.check_C14}`, { fmt: FMT.pct1, expect: tolerance, label: "flag threshold" });
   r += 2;
-  b.note(r, 2, `Note: ${tx ? "deposits are the Operating lines of Raw - Bank, whose Classification column (an input) marks transfers, loan proceeds, owner contributions and reversals" : "operating deposits exclude transfers, loan proceeds and owner contributions (Raw - Bank)"}. A variance inside 5% is consistent with timing of collections and sales tax; a larger one needs an explanation before the revenue figure is relied on.`);
+  b.note(r, 2, `Note: ${tx ? "deposits are the Operating lines of Raw - Bank, whose Classification column (an input) marks transfers, loan proceeds, owner contributions and reversals" : "operating deposits exclude transfers, loan proceeds and owner contributions (Raw - Bank)"}. A variance inside the threshold (${Math.round(tolerance * 100)}%, the C14 tolerance on the Checks tab) is consistent with timing of collections and sales tax; a larger one needs an explanation before the revenue figure is relied on.`);
   b.print({ area: `B2:${addr(r, 8)}`, landscape: false, fitToWidth: 1, fitToHeight: 0, titlesRow: "5:6" });
   b.furniture(ctx.codeName, ctx.asOfLabel);
   return b;

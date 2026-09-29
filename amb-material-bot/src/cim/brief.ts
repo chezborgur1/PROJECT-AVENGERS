@@ -190,6 +190,9 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
   money("payroll", "Payroll excluding the owner (his employer payroll taxes moved to owner compensation)", staffPayroll);
   money("ownerComp", "Owner compensation as paid (salary)", (p) => p.pnl.ownerComp);
   money("ownerTaxes", "The owner's employer payroll taxes, inside the P&L payroll line", (p) => p.ownerPayrollTaxes ?? 0, false);
+  // Salaries print in whole dollars ("$200,000"), as the guide writes them (4.6).
+  for (const c of cols) b.add(`ownerSalary.${c.key}`, fmtDollars(P(c).pnl.ownerComp), P(c).pnl.ownerComp, `The owner's salary as paid, ${c.label}`);
+  b.add("ownerSalary.latest", fmtDollars(P(latest).pnl.ownerComp), P(latest).pnl.ownerComp, `The owner's salary as paid, ${latest.label}`);
   money("ownerCompPaid", "Owner compensation SDE adds back: salary as paid and his accepted employer payroll taxes ([S1] rung)", (p) => p.ladder.ownerCompAsPaid, false);
   money("rent", "Rent", (p) => p.pnl.rent);
   money("marketing", "Marketing", (p) => p.pnl.marketing);
@@ -214,7 +217,8 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
   ratio("gm", "Gross margin", of((p) => p.pnl.grossProfit));
   ratio("cogsPct", "Cost of revenue as % of revenue", of((p) => p.pnl.cogs));
   ratio("payrollPct", "Payroll excluding the owner as % of revenue", of(staffPayroll));
-  ratio("ownerCompPct", "Owner compensation as % of revenue", of((p) => p.pnl.ownerComp));
+  // With his payroll taxes, as the cost tables show owner compensation (F21).
+  ratio("ownerCompPct", "Owner compensation with his employer payroll taxes as % of revenue", of((p) => p.pnl.ownerComp + (p.ownerPayrollTaxes ?? 0)));
   ratio("opexPct", "Total operating expenses as % of revenue", of((p) => p.pnl.totalOpex));
   ratio("marketingPct", "Marketing as % of revenue", of((p) => p.pnl.marketing));
   ratio("repMargin", "Reported EBITDA margin", (p) => p.ladder.reportedMargin);
@@ -522,9 +526,15 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
 
 /** A client-grade label from an exported account name: "Payroll Expenses : Technician Wages" -> "Technician wages". */
 export function accountLabel(account: string): string {
-  const leaf = account.split(":").pop()!.trim().replace(/\s+-\s+/g, ", ").replace(/&/g, "and");
+  const parts = account.split(":").map((s) => s.trim());
+  let leaf = parts.pop()!.replace(/\s+-\s+/g, ", ").replace(/&/g, "and");
+  // A generic leaf ("Payroll Expenses : Taxes") reads as income tax, or as anything, on its own, so it takes its parent's name.
+  const parent = parts.at(-1)?.replace(/\s+(expenses?|costs?)$/i, "");
+  if (parent && GENERIC_LEAF.test(leaf)) leaf = `${parent} ${leaf.toLowerCase()}`;
   return leaf.charAt(0).toUpperCase() + leaf.slice(1).toLowerCase();
 }
+
+const GENERIC_LEAF = /^(taxes|other|fees|benefits|miscellaneous|misc\.?)$/i;
 
 /** The most recent value of a KPI series, whatever its period key. */
 export function latestKpi(k: KpiSeries): number | undefined {

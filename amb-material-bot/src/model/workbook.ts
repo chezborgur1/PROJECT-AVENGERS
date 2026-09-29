@@ -278,12 +278,21 @@ export async function renderWorkbook(plan: WorkbookPlan, file: string, opts: { c
 /** ExcelJS declares PaperSize as a const enum, which erasable-syntax TypeScript cannot import; 1 is Letter. */
 const LETTER = 1 as ExcelJS.PageSetup["paperSize"];
 
-/** The font colour a cell renders in: its own, its named style's, else its role's (guide 5.9). */
+/**
+ * The font colour a cell renders in: its own, its named style's, else its
+ * role's (guide 5.9). A formula that reaches another sheet is a link, green,
+ * whatever it computes: a string builder or a step on another tab's input as
+ * much as a figure (QA round 2 F12).
+ */
 export function fontColorOf(spec: CellSpec): string {
   const style = spec.style ? STYLES[spec.style] : undefined;
-  const role = spec.role ?? (spec.f !== undefined ? "calc" : typeof spec.v === "number" ? "input" : "text");
+  let role = spec.role ?? (spec.f !== undefined ? "calc" : typeof spec.v === "number" ? "input" : "text");
+  if (spec.f !== undefined && (role === "calc" || role === "text") && crossesSheet(spec.f)) role = "link";
   return spec.font?.color ?? style?.font?.color ?? ROLE_COLOR[role];
 }
+
+/** Whether a formula references another sheet, outside its string literals. */
+export const crossesSheet = (f: string): boolean => f.replace(/"(?:[^"]|"")*"/g, '""').includes("!");
 
 /**
  * The cells the Print toggle turns black (guide 5.9): every colour-coded cell

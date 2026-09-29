@@ -72,11 +72,13 @@ export function planCustomerOverview(ctx: TabContext): SheetBuilder | undefined 
   const asOf = ASOF;
   for (const row of ca.mixByType) {
     const residual = row.residual === true;
+    // Currency on the first row and the total, body format between (guide 5.10).
+    const money = r === b.r("mixFirst") ? FMT.currency : FMT.body;
     b.text(r, 2, row.type, { style: "line" });
     if (residual) {
       b.na(r, 3, "n.a.", { style: "line" });
       b.na(r, 4, "n.a.", { style: "ratio" });
-      b.formula(r, 5, windowRevenue(`${CODE()},"Residual"`), { style: "line", fmt: FMT.currency, expect: row.revenue, label: "residual revenue" });
+      b.formula(r, 5, windowRevenue(`${CODE()},"Residual"`), { style: "line", fmt: money, expect: row.revenue, label: "residual revenue" });
       b.na(r, 7, "n.a.", { style: "line" });
     } else {
       const t = `"${row.type.replace(/"/g, '""')}"`;
@@ -86,8 +88,8 @@ export function planCustomerOverview(ctx: TabContext): SheetBuilder | undefined 
       const activeOnly = [`COUNTIFS(${TYPE()},${t}${none(touched.length)},${START()},"<="&${asOf},${END()},"")`, `COUNTIFS(${TYPE()},${t}${none(touched.length)},${START()},"<="&${asOf},${END()},">"&${asOf})`];
       b.formula(r, 3, [...withRevenue, ...activeOnly].join("+"), { style: "line", fmt: FMT.body, expect: row.count, label: `count ${row.type}` });
       b.formula(r, 4, `IFERROR(${addr(r, 3)}/C$${rowOf("customers", "codedCount")},"n.a.")`, { style: "ratio", fmt: FMT.pct, expect: row.countPct, label: `count pct ${row.type}` });
-      b.formula(r, 5, windowRevenue(`${TYPE()},${t}`), { style: "line", fmt: FMT.currency, expect: row.revenue, label: `revenue ${row.type}` });
-      b.formula(r, 7, `IFERROR(${addr(r, 5)}/${addr(r, 3)},"n.a.")`, { style: "line", fmt: FMT.currency, expect: row.count ? row.avgRevenue : "n.a.", label: `avg ${row.type}` });
+      b.formula(r, 5, windowRevenue(`${TYPE()},${t}`), { style: "line", fmt: money, expect: row.revenue, label: `revenue ${row.type}` });
+      b.formula(r, 7, `IFERROR(${addr(r, 5)}/${addr(r, 3)},"n.a.")`, { style: "line", fmt: money, expect: row.count ? row.avgRevenue : "n.a.", label: `avg ${row.type}` });
     }
     b.formula(r, 6, `IFERROR(${addr(r, 5)}/E$${rowOf("customers", "total")},"n.a.")`, { style: "ratio", fmt: FMT.pct, expect: row.revenuePct, label: `rev pct ${row.type}` });
     r++;

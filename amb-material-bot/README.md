@@ -48,7 +48,7 @@ Requires Node 20 or later (developed on Node 22).
 ```bash
 cd amb-material-bot
 npm install
-npm test          # 193 tests, all offline (about 4 minutes)
+npm test          # vitest, all offline (about 4 minutes)
 npm run demo      # builds the fictional sample deal into output/ (about 45 seconds)
 ```
 

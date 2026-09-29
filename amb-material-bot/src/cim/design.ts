@@ -101,6 +101,9 @@ export const BAND = {
 };
 export const CONTENT_H = r3(BAND.bottom - BAND.top);
 
+/** Most exhibits (tables and charts) a content page carries (spec 7.3: one to three). */
+export const MAX_EXHIBITS = 3;
+
 /** White gap column between period groups inside a numeric table. */
 export const GAP = 0.08;
 
@@ -126,7 +129,10 @@ export const SPACE = {
 
 const ASCII_REG = [278,278,355,556,556,889,667,191,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,278,278,584,584,584,556,1015,667,667,722,722,667,611,778,722,278,500,667,556,833,722,778,667,778,722,667,611,722,667,944,667,667,611,278,278,278,469,556,333,556,556,500,556,556,278,556,556,222,222,500,222,833,556,556,556,556,333,500,278,556,500,722,500,500,500,334,260,334,584];
 const ASCII_BOLD = [278,333,474,556,556,889,722,238,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,333,333,584,584,584,611,975,722,722,722,722,667,611,778,722,278,556,722,611,833,722,778,667,778,722,667,611,722,667,944,667,667,611,333,278,333,584,556,333,556,611,556,611,556,333,611,611,278,278,556,278,889,611,611,611,611,389,556,333,611,556,778,556,556,500,389,280,389,584];
-const WIDE: Record<string, number> = { "–": 556, "—": 1000, "÷": 584, "Δ": 612, "’": 222, "‘": 222, "“": 333, "”": 333, "·": 278, "▪": 604, "≥": 549, "≤": 549 };
+const WIDE: Record<string, number> = { "–": 556, "—": 1000, "÷": 584, "Δ": 612, "’": 222, "‘": 222, "“": 333, "”": 333, "·": 278, "▪": 604, "≥": 549, "≤": 549, "\u00a0": 278 };
+
+/** A trailing footnote marker ("… compensation (2)") is tied to the word before it, so a wrap never leaves it alone on a line (QA round 2 F36). */
+export const keepMarker = (label: string): string => label.replace(/ (\((?:\d+|[a-z])\))$/, "\u00a0$1");
 
 /** Advance width of a string in inches at a point size. */
 export function textWidth(t: string, pt: number, bold = false): number {
@@ -450,7 +456,7 @@ export function numTableRowHeights(spec: NumTableSpec): { head: number[]; rows: 
     spec.cols.forEach((c) => {
       if (c.kind === "label") {
         const indent = r.type === "section" || r.type === "key" || r.type === "subtotal" ? 0.05 : r.type === "sub" ? 0.29 : 0.17;
-        lines = Math.max(lines, linesFor(`${r.label}${r.note ? ` (${r.note})` : ""}`, c.w - indent + 0.05, pt, r.type === "key" || r.type === "subtotal" || r.type === "section"));
+        lines = Math.max(lines, linesFor(`${keepMarker(r.label)}${r.note ? `\u00a0(${r.note})` : ""}`, c.w - indent + 0.05, pt, r.type === "key" || r.type === "subtotal" || r.type === "section"));
       } else if (c.kind === "text" && r.type !== "section") lines = Math.max(lines, linesFor(r.text ?? "", c.w - 0.03, 8));
       else if (c.kind === "num") {
         if (c.left && r.type !== "section") lines = Math.max(lines, linesFor(r.vals?.[v] ?? "", c.w, pt));
@@ -742,8 +748,8 @@ export function layoutPage(spec: PageSpec): LaidOutPage {
 
 /** Spec 1: the columns of a row end within 0.50 in of each other. */
 const BALANCE = 0.5;
-/** Chart heights the balancing step may set: a panel stays legible at 2.0 in and never outgrows the band. */
-const CHART_H = { min: 2.0, max: 3.8 };
+/** Chart heights the balancing step may set: never under the spec's 2.60 in minimum (spec 5, spec 14), never past the band. */
+const CHART_H = { min: 2.6, max: 4.3 };
 
 interface Uneven {
   row: number;
@@ -1018,7 +1024,8 @@ export function numTable(slide: Slide, x: number, y: number, spec: NumTableSpec)
   const twoTier = cols.some((c) => c.group);
   const headCell = (t: string, o: TableCellProps = {}) => cell(t, { fill: { color: C.maroon }, color: C.white, bold: true, fontSize: 8, ...o });
   const gapCell = () => cell("", { margin: [0, 0, 0, 0] });
-  const headAlign = (c: NumCol, i: number): "left" | "right" | "center" => (i === 0 || c.kind === "label" || c.kind === "text" || c.left ? "left" : c.kind === "obs" ? "center" : "right");
+  // A header sits over its cells: Ref codes print left-aligned, so their header does too (QA round 2 F36).
+  const headAlign = (c: NumCol, i: number): "left" | "right" | "center" => (i === 0 || c.kind === "label" || c.kind === "text" || c.kind === "ref" || c.left ? "left" : c.kind === "obs" ? "center" : "right");
 
   if (twoTier) {
     const tier1: TableCell[] = [];
@@ -1076,7 +1083,7 @@ export function numTable(slide: Slide, x: number, y: number, spec: NumTableSpec)
         o.margin = [0, 0.05, 0, indent];
         o.align = "left";
         if (isSection) o.bold = true;
-        const label = r.note ? [cellRun(r.label, { fontSize, bold: o.bold, italic: o.italic, color: o.color ?? C.ink }), cellRun(` (${r.note})`, { fontSize: 7, color: C.muted })] : r.label;
+        const label = r.note ? [cellRun(keepMarker(r.label), { fontSize, bold: o.bold, italic: o.italic, color: o.color ?? C.ink }), cellRun(`\u00a0(${r.note})`, { fontSize: 7, color: C.muted })] : keepMarker(r.label);
         return cell(label, o);
       }
       if (c.kind === "ref") return cell(isSection ? "" : (r.ref ?? ""), { ...o, align: "left", color: C.muted, bold: false, italic: false, fontSize: 8 });

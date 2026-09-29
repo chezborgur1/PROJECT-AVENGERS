@@ -33,6 +33,7 @@ import { customerActiveAt, customerAnalytics, customerListYears, headcountAnalyt
 import { computeChecks } from "./checks.ts";
 import { dealStructure, sensitivityGrids, valuationDetail } from "./deal.ts";
 import { databookTotals } from "./exportTotals.ts";
+import { isPersonalHint } from "../domain/chartOfAccounts.ts";
 import { debtLikeSummary, historicalCashFlow, nwcAnalysis } from "./nwc.ts";
 import {
   amountInWindow,
@@ -368,6 +369,8 @@ function buildScenario(name: ProFormaScenario["name"], drivers: ScenarioDrivers,
         return sum(c) / history.length;
       case "% of sales, 3-year blended":
         return sum("revenue") ? (sum(c) / sum("revenue")) * revenue : 0;
+      case "% of sales, latest year":
+        return base.revenue ? (base[c] / base.revenue) * revenue : 0;
       default:
         return base[c];
     }
@@ -593,8 +596,14 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
 
   // --- Databook -------------------------------------------------------------------------------------
   // Files are named, never located: a source folder's path usually carries the client's real name (guide 5.1 raw tabs).
-  const suggested = new Set(ds.suggestedAddbacks.map((s) => s.account));
-  const refFor = (account: string) => schedule.find((r) => r.origin !== "pnl" && r.sourceDocument.includes(account))?.ref;
+  // "Personal?" flags a suggested account only when its hint is personal or discretionary spend, never a one-time legal fee.
+  const suggested = new Set(ds.suggestedAddbacks.map((s) => s.account).filter(isPersonalHint));
+  // Every schedule row an account feeds, the definitional and P&L-read rows included ([D3] and [S3] for depreciation).
+  const names = (doc: string, account: string) => new RegExp(`(^|[\\s;,(])${account.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[\\s;,)])`).test(doc);
+  const refFor = (account: string) => {
+    const refs = schedule.filter((r) => r.status !== "excluded" && (r.accounts?.includes(account) || names(r.sourceDocument, account))).map((r) => r.ref);
+    return refs.length ? refs.join(", ") : undefined;
+  };
   const databookPnl: DatabookRow[] = grid
     ? grid.lines.map((l) => ({
         account: l.account,

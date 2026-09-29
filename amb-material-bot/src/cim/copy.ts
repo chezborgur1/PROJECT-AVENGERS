@@ -80,7 +80,7 @@ export const CimCopySchema = z.object({
     })
     .optional(),
   s2_2: z.object({ title: Title, observations: observations(2, 4, "the revenue by service line table and the service-line table", "s2_2.observations") }).optional(),
-  s2_3: z.object({ title: Title, observations: observations(2, 4, "the unit economics table", "s2_3.observations") }).optional(),
+  s2_3: z.object({ title: Title, observations: observations(2, 5, "the unit economics and capacity tables", "s2_3.observations") }).optional(),
   s2_4: z.object({ title: Title, observations: observations(2, 3, "the facilities and systems tables", "s2_4.observations") }).optional(),
   s3_1: z.object({ title: Title, observations: observations(2, 3, "the market and competitor tables", "s3_1.observations") }).optional(),
   s4_1: z.object({ title: Title, observations: observations(3, 4, "the top-10 list and the customer mix table", "s4_1.observations") }).optional(),
@@ -235,6 +235,8 @@ export function lintText(text: string, path: string): LintIssue[] {
   }
   if (LEVERAGE_VERB.test(bare)) out.push({ path, issue: 'banned phrase "leverage" as a verb', text });
   if (PRICE_TALK.test(bare)) out.push({ path, issue: "valuation or price language (guide D5)", text });
+  // "a 18.5% margin" reads "a eighteen": figures spoken with a vowel sound take "an" (guide 4.2).
+  if (/\ba \$?(8|11(?![\d,])|18(?![\d,]))/.test(bare)) out.push({ path, issue: 'use "an" before a figure read with a vowel sound (8, 11, 18)', text });
   for (const s of sentences(bare)) {
     for (const o of BANNED_OPENERS) if (s.startsWith(`${o},`) || s.startsWith(`${o} `)) out.push({ path, issue: `filler opener "${o}"`, text: s });
     if (!HAS_FIGURE.test(s)) {
@@ -263,6 +265,8 @@ export function lintTitle(title: string, path: string): LintIssue[] {
   if (widow) out.push({ path, issue: `title leaves "${widow}" alone on its last line (widow)`, text: title });
   if (title.length > 110) out.push({ path, issue: `title is ${title.length} characters (target 60 to 110)`, text: title });
   if (!HAS_FIGURE.test(title)) out.push({ path, issue: "title carries no figure (a label, not a finding)", text: title });
+  // A dollar or percentage figure names its period (spec 6.1): a fiscal year, LTM or YTD, a month, a year, or a span of years.
+  if (/[$%]/.test(title) && !/\bFY\d{2,4}\b|\b(LTM|YTD|PF)\b|\b(19|20)\d{2}\b|\b[A-Z][a-z]{2}-\d{2}\b|\b(two|three|four|five) years\b/.test(title)) out.push({ path, issue: "title gives no period for its figures", text: title });
   if (title.length > 130) out.push({ path, issue: `title is ${title.length} characters (cap 130)`, text: title });
   if (title.length < 40) out.push({ path, issue: `title is ${title.length} characters (60 to 110 expected)`, text: title });
   if (/[.:;]\s*$/.test(title)) out.push({ path, issue: "title ends with punctuation", text: title });

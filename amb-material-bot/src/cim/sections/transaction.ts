@@ -73,41 +73,53 @@ function fallback101(ctx: CimContext): NonNullable<CimCopy["s10_1"]> {
     transaction: `${offer} ${i?.reasonForSale.text ? `The reason for sale is ${i.reasonForSale.text.charAt(0).toLowerCase()}${i.reasonForSale.text.slice(1)} (1).` : `Reason for sale: ${confirm(ctx, "reason for sale", "Reason for sale")}.`}`,
     transition: i?.owner.transition.description ? `${owner} is ${i.owner.transition.description.charAt(0).toLowerCase()}${i.owner.transition.description.slice(1)} (1).` : `${confirm(ctx, "transition", "Owner transition offer")}.`,
     premises: i?.locations[0] ? `The Company operates from ${i.locations[0].name}${i.locations[0].leaseExpiry ? `, leased through ${i.locations[0].leaseExpiry}` : ""} (1).` : `${confirm(ctx, "premises", "Premises and lease terms")}.`,
-    process: "Qualified buyers who have signed a confidentiality agreement may request a management meeting through AMB Advisory. All inquiries should be directed to AMB Advisory.",
+    // ICP1's closing sentences, verbatim (guide 2.9).
+    process: `Qualified buyers who have signed a confidentiality agreement may request a management meeting through AMB Advisory. ${NO_CONTACT}`,
   };
 }
 
+/** ICP1's no-contact instruction, verbatim (guide 2.9). */
+const NO_CONTACT = "All inquiries should be directed to AMB Advisory. Do not contact the Seller or its employees directly.";
+
 /**
- * ICP1's eight stages verbatim, with AMB's post-LOI wording for stages 6 to 8
- * (guide S10.2). A target date follows its stage's text rather than sitting in
- * a column that five of eight stages leave blank (spec 14: no empty columns).
+ * ICP1's eight stages verbatim, with AMB's post-LOI wording for stages 6 to 8,
+ * in the guide S10.2 layout `# | Stage | What happens | Target timing`: each
+ * date in its own column, a stage without one left blank (QA round 2 F40).
  */
 function processRows(ctx: CimContext): TextCell[][] {
   const n = ctx.out.namedOutputs;
   const date = (d: string | null, what: string) => (d ? new Date(`${d}T00:00:00Z`).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" }) : confirm(ctx, "date", what));
   const timing = ctx.intake?.transaction.timing;
-  const close = n.EffectiveDate ? `Target: ${date(n.EffectiveDate, "")}.` : timing ? `Seller's target: ${timing.charAt(0).toLowerCase()}${timing.slice(1)} (1).` : `Target: ${confirm(ctx, "date", "Target effective date")}.`;
+  const close = n.EffectiveDate ? date(n.EffectiveDate, "") : timing ? `${timing} (1)` : confirm(ctx, "date", "Target effective date");
   return [
-    ["1", "NDA Execution", "Prospective buyer executes AMB Advisory's standard NDA to receive full financial package and data room access."],
-    ["2", "Initial Call", "AMB Advisory schedules an introductory call with the prospective buyer to review the opportunity and answer preliminary questions."],
-    ["3", "Buyer Q&A / IOI", "Buyer submits written questions or an Indication of Interest (IOI) with preliminary valuation range and proposed structure."],
-    ["4", "Management Meeting", "Qualified buyers are introduced to the Seller for a formal management meeting / Q&A session."],
-    ["5", "LOI Submission", `Buyer submits a non-binding Letter of Intent (LOI) with proposed purchase price, structure, and key terms. Target: ${date(n.LOIDate, "Target LOI date")}.`],
-    ["6", "Due Diligence", "Confirmatory diligence, definitive agreements and transition planning (about 9–11 weeks from LOI)."],
-    ["7", "Purchase Agreement", `Sign the definitive Purchase Agreement and fund the escrow account. Target: ${date(n.SigningDate, "Target signing date")}.`],
-    ["8", "Close & Transition", `Effective closing date set with tax counsel; the Seller begins the agreed transition period. ${close}`],
+    ["1", "NDA Execution", "Prospective buyer executes AMB Advisory's standard NDA to receive full financial package and data room access.", ""],
+    ["2", "Initial Call", "AMB Advisory schedules an introductory call with the prospective buyer to review the opportunity and answer preliminary questions.", ""],
+    ["3", "Buyer Q&A / IOI", "Buyer submits written questions or an Indication of Interest (IOI) with preliminary valuation range and proposed structure.", ""],
+    ["4", "Management Meeting", "Qualified buyers are introduced to the Seller for a formal management meeting / Q&A session.", ""],
+    ["5", "LOI Submission", "Buyer submits a non-binding Letter of Intent (LOI) with proposed purchase price, structure, and key terms.", date(n.LOIDate, "Target LOI date")],
+    ["6", "Due Diligence", "Confirmatory diligence, definitive agreements and transition planning.", "LOI + 9–11 weeks"],
+    ["7", "Purchase Agreement", "Sign the definitive Purchase Agreement and fund the escrow account.", date(n.SigningDate, "Target signing date")],
+    ["8", "Close & Transition", "Effective closing date set with tax counsel; the Seller begins the agreed transition period.", close],
   ];
 }
+
+/** Width of the Target timing column: a date or a "[Confirm: …]" placeholder on two lines at most. */
+const TIMING_W = 1.05;
 
 function processTable(ctx: CimContext, w: number): Block {
   return {
     kind: "textTable",
     header: { title: "Process and next steps" },
-    spec: { colW: [0.3, 1.45, r3(w - 0.3 - 1.45)], head: ["#", "Stage", "What happens"], rows: processRows(ctx), firstBold: false, boldRows: [4, 6, 7], fontSize: 9 },
+    spec: { colW: [0.3, 1.3, r3(w - 0.3 - 1.3 - TIMING_W), TIMING_W], head: ["#", "Stage", "What happens", "Target timing"], rows: processRows(ctx), firstBold: false, boldRows: [4, 6, 7], fontSize: 9 },
   };
 }
 
-/** The contact block: one firm header over its details. Standing alone it carries the no-contact note, which the overview's prose states when the two share a page. */
+/**
+ * The contact block: a headerless two-column text table, the firm its first
+ * row, since a maroon band is for headings, not data (QA round 2 F40). Standing
+ * alone it carries the no-contact note, which the overview's prose states when
+ * the two share a page.
+ */
 function contactTable(ctx: CimContext, w: number, withNote: boolean): Block {
   const f = ctx.firm;
   return {
@@ -115,13 +127,13 @@ function contactTable(ctx: CimContext, w: number, withNote: boolean): Block {
     header: { title: "Contact" },
     spec: {
       colW: [1.0, r3(w - 1.0)],
-      head: ["Firm", "AMB Advisory Services LLC"],
       rows: [
+        ["Firm", "AMB Advisory Services LLC"],
         ["Contact", f.contact || confirm(ctx, "contact", "Principal's name and title for the contact block (guide Q6)")],
         ["Phone", f.phone || "813.364.2178"],
         ["Email", f.email || "info@ambadvisoryservices.com"],
         ["Office", "Tampa, Florida; ambadvisoryservices.com"],
-        ...(withNote ? [["Note", "All inquiries should be directed to AMB Advisory. Do not contact the Seller or its employees directly."]] : []),
+        ...(withNote ? [["Note", NO_CONTACT]] : []),
       ],
       fontSize: 9,
     },

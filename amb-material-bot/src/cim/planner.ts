@@ -11,8 +11,8 @@ import type { CimContext } from "./context.ts";
 import { resolvePageRefs } from "./context.ts";
 import { smartQuotes } from "../util/format.ts";
 import type { Block, LaidOutPage, PageSpec, SectionEntry } from "./design.ts";
-import { drawDivider, dropEmptyObs, layoutPage, noteRounding } from "./design.ts";
-import { fitNotes } from "./sections/common.ts";
+import { drawDivider, dropEmptyObs, layoutPage, MAX_EXHIBITS, noteRounding } from "./design.ts";
+import { fitNotes, markersIn } from "./sections/common.ts";
 import { LIBRARY } from "./sections/index.ts";
 import type { PageDraft, PageModule, SectionModule, Toc } from "./sections/types.ts";
 
@@ -203,7 +203,7 @@ function finish(ctx: CimContext, built: PlannedPage[], dividers: boolean, target
     p.draft.spec = spec;
   }
 
-  warnings.push(...labelConflicts(pages), ...commentaryDensity(pages), ...mixedUnits(pages));
+  warnings.push(...labelConflicts(pages), ...commentaryDensity(pages), ...mixedUnits(pages), ...narrowTables(pages), ...orphanMarkers(pages), ...exhibitCounts(pages));
 
   const sections: SectionEntry[] = [];
   const exhibits = new Map<string, { title: string; page: number }[]>();
@@ -251,6 +251,9 @@ export const COMMENTARY_FLOOR = 120;
  * neighbouring pages with the same number of observations, which reads as a
  * template rather than as the evidence.
  */
+/** Share of the content band a body page must cover (spec 9, the spec 14 page-budget assertion). */
+export const STANDARD_FILL = 0.8;
+
 export function commentaryDensity(pages: PlannedPage[]): string[] {
   const out: string[] = [];
   let prev: { id: string; count: number } | undefined;
@@ -260,6 +263,8 @@ export function commentaryDensity(pages: PlannedPage[]): string[] {
       prev = undefined;
       continue;
     }
+    // Body pages (S2 to S9) fill the band; the executive summary, transaction and appendix pages have their own archetypes.
+    if (/^S[2-9]\./.test(p.draft.id) && p.layout.fill < STANDARD_FILL) out.push(`${p.draft.id}: fill ${(p.layout.fill * 100).toFixed(0)}% is below the ${STANDARD_FILL * 100}% floor for a body page (spec 9, spec 14)`);
     const obs = spec.rows.flatMap((r) => [...r.columns.flatMap((c) => c.blocks), ...(r.floating ?? [])]).find((b) => b.kind === "observations");
     if (!obs || obs.kind !== "observations") {
       prev = undefined;
@@ -269,6 +274,45 @@ export function commentaryDensity(pages: PlannedPage[]): string[] {
     const count = obs.items.length;
     if (prev && prev.count === count) out.push(`${p.draft.id}: ${count} observations, as on ${prev.id} before it (T9: counts follow the evidence)`);
     prev = { id: p.draft.id, count };
+  }
+  return out;
+}
+
+/** Footnote markers with no footnote on their page (guide 4.6, F31). */
+export function orphanMarkers(pages: PlannedPage[]): string[] {
+  const out: string[] = [];
+  for (const p of pages) {
+    const spec = p.layout?.spec ?? p.draft.spec;
+    if (!spec) continue;
+    const count = spec.notes.footnotes?.length ?? 0;
+    const blocks = spec.rows.flatMap((r) => [...r.columns.flatMap((c) => c.blocks), ...(r.floating ?? [])]);
+    for (const n of markersIn(blocks)) if (n > count) out.push(`${p.draft.id}: marker (${n}) has no footnote`);
+  }
+  return out;
+}
+
+/** A table may end this far inside its exhibit rule; beyond it the right edge reads as ragged (spec 1, 9). */
+const TABLE_SHORT = 0.25;
+
+/** Content pages carrying more exhibits than spec 7.3 allows; prose, callouts and the observations list are not exhibits (F39). */
+export function exhibitCounts(pages: PlannedPage[]): string[] {
+  return pages
+    .filter((p) => p.draft.kind === "content")
+    .map((p) => ({ id: p.draft.id, n: (p.layout?.placed ?? []).filter((x) => x.block.kind === "chart" || x.block.kind === "numTable" || x.block.kind === "textTable").length }))
+    .filter((x) => x.n > MAX_EXHIBITS)
+    .map((x) => `${x.id}: ${x.n} exhibits (spec 7.3 allows one to ${MAX_EXHIBITS})`);
+}
+
+/** Tables that end more than TABLE_SHORT in short of the block (and exhibit rule) they sit in (F27). */
+export function narrowTables(pages: PlannedPage[]): string[] {
+  const out: string[] = [];
+  for (const p of pages) {
+    for (const placed of p.layout?.placed ?? []) {
+      const b = placed.block;
+      if (b.kind !== "numTable" && b.kind !== "textTable") continue;
+      const w = b.kind === "numTable" ? b.spec.cols.reduce((s, c) => s + c.w, 0) : b.spec.colW.reduce((s, c) => s + c, 0);
+      if (placed.w - w > TABLE_SHORT) out.push(`${p.draft.id}: "${b.header?.title ?? "table"}" ends ${(placed.w - w).toFixed(2)} in short of its block`);
+    }
   }
   return out;
 }

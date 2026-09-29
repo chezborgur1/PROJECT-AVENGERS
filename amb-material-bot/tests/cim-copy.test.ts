@@ -65,7 +65,9 @@ describe("copy lint", () => {
   it("requires a figure in titles and caps their length", () => {
     expect(lintTitle("Financial overview", "t").map((i) => i.issue)).toContain("title carries no figure (a label, not a finding)");
     expect(lintTitle(`Revenue grew 12% ${"and more ".repeat(20)}`, "t").some((i) => /cap 130/.test(i.issue))).toBe(true);
-    expect(lintTitle("Revenue grew at a 12.4% CAGR to $3.04M while Reported EBITDA doubled to $319.5K", "t")).toEqual([]);
+    expect(lintTitle("Revenue grew at a 12.4% CAGR to $3.04M in FY2025 while Reported EBITDA doubled", "t")).toEqual([]);
+    // A dollar or percentage figure names its period (QA round 2 F32).
+    expect(lintTitle("Revenue grew at a 12.4% CAGR to $3.04M while Reported EBITDA doubled to $319.5K", "t").map((i) => i.issue)).toContain("title gives no period for its figures");
   });
 
   it("flags figures typed as literals that the numbers brief does not hold, and unknown tokens", () => {

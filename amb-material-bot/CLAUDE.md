@@ -11,7 +11,7 @@ Advisory Services (sell-side M&A for Main Street / lower middle market).
 - `docs/build/DATA_CONTRACT.md` and `src/domain/financials.ts` (`FinancialDataset`), `src/model/types.ts` (`ModelOutput`): the contract between ingest, model and CIM. `tests/fixtures/sampleDataset.ts` is the Ridgeline fixture every layer tests against.
 
 ## Commands
-- `npm test`: vitest, 193 tests, offline (about 4 minutes; the LibreOffice tests run when `soffice` is installed)
+- `npm test`: vitest, all offline (about 4 minutes; the LibreOffice tests run when `soffice` is installed)
 - `npm run typecheck`
 - `npm run bot -- list` / `npm run bot -- run [--id REQ-0001] [--priority P2] [--force] [--no-update]`
 - `npm run demo`: builds the fictional Ridgeline deal from `samples/project-ridgeline/` into `output/REQ-0001 Project Ridgeline/` without touching the request list

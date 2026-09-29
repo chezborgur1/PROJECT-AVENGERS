@@ -482,6 +482,8 @@ export async function verifyWorkbook(file: string, model: ModelOutput, options?:
           if (/#REF!/.test(v.formula)) lint.push({ cell: at, issue: "literal #REF! in a formula" });
           if (/^-?\d+(\.\d+)?$/.test(v.formula.trim())) lint.push({ cell: at, issue: "hard-coded number written as a formula (C18)" });
           if (hexOf(c.font) === COLOR.input) lint.push({ cell: at, issue: "formula in blue input colour (guide 5.9)" });
+          if (outputTabs.has(ws.name) && f.includes("!") && hexOf(c.font) === COLOR.black) lint.push({ cell: at, issue: "formula reaching another sheet in black, not a green link (guide 5.9)" });
+          if (!RAW_TAB.test(ws.name)) for (const s of v.formula.matchAll(/"((?:[^"]|"")*)"/g)) if (INTERNAL_CODE.test(s[1]!)) lint.push({ cell: at, issue: `internal guide or precedent code in text: "${s[1]!.slice(0, 40)}"` });
         } else if (outputTabs.has(ws.name) && typeof v === "number") {
           const colour = hexOf(c.font);
           // A placeholder input awaiting a quote is typed in Pending red (guide 5.9), still an input.
@@ -516,6 +518,16 @@ export async function verifyWorkbook(file: string, model: ModelOutput, options?:
 }
 
 /** An absolute file path in a cell: a client's folder name must never print on a buyer-version workbook. */
+/**
+ * The bot's own references (guide sections, open-question numbers, precedent
+ * file keys) mean nothing to a reviewer or client reading a cell; they belong
+ * in code comments (QA round 2 F19).
+ */
+const INTERNAL_CODE = /\bguide (?:\d+(?:\.\d+)*[A-Z]?|[A-Z]\d+|Q\d+)\b|\bICP\d+\b|\bBENP\b|\bSUNPA\b|\((?:SUN|MISC[^)]*)\)/i;
+
+/** Tabs that hold the client's own text as exported, which the bot does not write. */
+const RAW_TAB = /^Raw - |^Databook$/;
+
 const FILE_PATH = /(^|[\s(])(\/[^\s/]+){2,}|[A-Za-z]:\\|\\\\[^\s\\]+\\/;
 
 /** Tabs whose typed numbers are inputs by design: the advisor's schedule and assumptions, and the data behind the model. */
@@ -537,6 +549,7 @@ function lintTypedCopies(workbook: ExcelJS.Workbook, outputTabs: Set<string>, li
         const at = `'${ws.name}'!${colName(colNumber)}${rowNumber}`;
         const v = c.value;
         if (typeof v === "string" && FILE_PATH.test(v)) lint.push({ cell: at, issue: "file path in a cell value; write the file name only" });
+        if (typeof v === "string" && !RAW_TAB.test(ws.name) && INTERNAL_CODE.test(v)) lint.push({ cell: at, issue: `internal guide or precedent code in text: "${v.slice(0, 40)}"` });
         if (typeof v !== "number" || !outputTabs.has(ws.name) || INPUT_TABS.test(ws.name)) return;
         // At $000s a copied balance is either fractional or at least 100; small whole numbers are counts and settings.
         if ((Math.abs(v) >= 100 || !Number.isInteger(v)) && databook.has(Math.round(v * 1000 * 100))) lint.push({ cell: at, issue: `typed ${v} copies a Databook balance; link it (C18)` });

@@ -6,12 +6,11 @@
 import { IS_CATEGORIES, type FinancialDataset } from "../domain/financials.ts";
 import type { CheckResult, CheckStatus, ModelOutput } from "./types.ts";
 import { totalsDifference } from "./exportTotals.ts";
-import { isCustomerMoney } from "./nwc.ts";
 
 export const CHECKS: { id: string; check: string; tab: string }[] = [
   { id: "C01", check: "Databook ties to each raw export, every subtotal and period", tab: "Databook" },
   { id: "C02", check: "Monthly P&L category totals equal Databook, every month", tab: "Monthly P&L" },
-  { id: "C03", check: "Every period column equals the SUMIFS of the monthly grid for its window", tab: "P&L Summary" },
+  { id: "C03", check: "Every P&L Summary line equals the grid's months in its window, recomputed by SUMPRODUCT", tab: "P&L Summary" },
   { id: "C04", check: "P&L Summary Net Income equals Monthly P&L Net Income", tab: "P&L Summary" },
   { id: "C05", check: "Reported EBITDA equals Net Income + D1:D3", tab: "Adj. EBITDA" },
   { id: "C06", check: "Adjustments schedule totals by tier equal the ladder", tab: "Adj. EBITDA" },
@@ -27,7 +26,7 @@ export const CHECKS: { id: string; check: string; tab: string }[] = [
   { id: "C16", check: "Every period label equals its derived value", tab: "P&L Summary" },
   { id: "C17", check: "No volatile functions (TODAY, NOW, OFFSET, INDIRECT) anywhere", tab: "Checks" },
   { id: "C18", check: "No hard-coded number inside a formula grid", tab: "Checks" },
-  { id: "C19", check: "Deferred revenue and customer deposits appear in exactly one of NWC and Debt-Like Items", tab: "Debt-Like Items" },
+  { id: "C19", check: "Every debt-like balance is removed from NWC, and only those: none counted twice (deferred revenue and deposits included)", tab: "Debt-Like Items" },
   { id: "C20", check: "NWC peg built from >= 12 month-ends", tab: "NWC" },
   { id: "C21", check: "Every chart-data row equals its source row for the same months", tab: "Revenue Charts" },
   { id: "C22", check: "Chart lint: ranges, names, colours, axes", tab: "Revenue Charts" },
@@ -101,7 +100,7 @@ export function computeChecks(ctx: CheckContext): { checks: CheckResult[]; maste
 
   // C03, C04: period columns against the grid.
   if (grid) {
-    ok("C03", 0, DOLLAR_TOLERANCE, "Each period column is a SUMIFS over the grid");
+    ok("C03", 0, DOLLAR_TOLERANCE, "Each line's SUMIFS against a SUMPRODUCT of the grid over the same window");
     const c04 = maxAbs(
       hist
         .filter((c) => c.ref.kind === "fiscal_year")
@@ -181,9 +180,11 @@ export function computeChecks(ctx: CheckContext): { checks: CheckResult[]; maste
 
   // C19, C20: NWC and debt-like items.
   if (out.debtLike && out.nwc) {
-    // Debt-like customer money is fine only when the override also takes it out of NWC.
-    const doubleListed = out.nwc.deferredRevenueTreatment === "debt_like" ? 0 : out.debtLike.items.filter((i) => isCustomerMoney(i.item) && i.treatment !== "nwc").length;
-    ok("C19", doubleListed, 0, "Count of deferred-revenue or deposit balances treated as debt-like while NWC carries them");
+    // The debt-like total at the latest date is what NWC removes there, less nothing and plus nothing: a debt-like balance NWC
+    // still carries (an accrued bonus, customer money without the override) would be deducted twice from the price.
+    const latest = out.nwc.periods.find((p) => p.asOf === out.debtLike!.asOf) ?? out.nwc.periods.at(-1)!;
+    const removed = latest.lines.adjustments + (latest.detail?.related_party_receivable ?? 0);
+    ok("C19", Math.abs(out.debtLike.debtLike - removed), DOLLAR_TOLERANCE, "Debt-like items less the balances NWC removes at the latest date");
   } else na("C19", "No balance sheet");
   if (out.nwc) {
     if (out.nwc.pegBasis === "T12M average") ok("C20", 0, 0, "Peg is the trailing-twelve-month average");

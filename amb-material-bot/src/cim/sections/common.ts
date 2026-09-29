@@ -3,10 +3,10 @@
 // and assembling a page draft from rows of blocks.
 
 import type { CimContext } from "../context.ts";
-import { resolveCopy } from "../context.ts";
+import { PER_MANAGEMENT, resolveCopy } from "../context.ts";
 import { lintTitle, titleWidow } from "../copy.ts";
-import type { Block, Notes, PageSpec, Row } from "../design.ts";
-import { notesLineCount, proseHeight } from "../design.ts";
+import type { Block, ExhibitHeader, Notes, PageSpec, Row } from "../design.ts";
+import { cellText, notesLineCount, proseHeight } from "../design.ts";
 import { exhibitTitles } from "../exhibits.ts";
 import type { PageDraft } from "./types.ts";
 
@@ -32,9 +32,36 @@ export function chooseTitle(ctx: CimContext, where: string, copyTitle: string | 
 /** Drop undefined blocks from a column's list. */
 export const present = (...blocks: (Block | undefined | false)[]): Block[] => blocks.filter((b): b is Block => Boolean(b));
 
+/**
+ * Footnote numbers a page's blocks point at: "(1)" in prose, observations,
+ * text-table cells, row labels and markers, headers and annotations. Figures
+ * are not read, where "(1)" is a negative one.
+ */
+export function markersIn(blocks: Block[]): number[] {
+  const texts: string[] = [];
+  const header = (h?: ExhibitHeader) => h && texts.push(h.title, h.units ?? "", h.annotation ?? "");
+  for (const b of blocks) {
+    if (b.kind === "prose") texts.push(...b.paragraphs.flatMap((p) => [p.lead ?? "", p.body]));
+    else if (b.kind === "observations") texts.push(...b.items.flatMap((i) => [i.lead, i.body]));
+    else if (b.kind === "callout") texts.push(b.lead, b.body);
+    else if (b.kind === "textTable") {
+      header(b.header);
+      // A cell that is a figure alone ("(3)", "$1,964") is an amount, not a marker.
+      texts.push(...b.spec.rows.flat().map(cellText).filter((t) => !/^[($–-]*\$?[\d,.]+[%KM]?\)?$/.test(t.trim())));
+    } else if (b.kind === "numTable") {
+      header(b.header);
+      texts.push(...b.spec.rows.flatMap((r) => [r.label, r.text ?? "", r.note ? `(${r.note})` : ""]));
+    } else if (b.kind === "chart" || b.kind === "orgChart") header(b.header);
+  }
+  return [...new Set(texts.flatMap((t) => [...t.matchAll(/\((\d)\)/g)].map((m) => Number(m[1]))))].sort((a, b) => a - b);
+}
+
 export function draft(ctx: CimContext, p: { id: string; section: string; title: string; rows: Row[]; notes: Notes; carries?: string[]; kind?: PageDraft["kind"] }): PageDraft {
-  const spec: PageSpec = { id: p.id, section: p.section, title: p.title, rows: p.rows.filter((r) => r.columns.some((c) => c.blocks.length) || r.floating?.length), notes: fitNotes(ctx, p.id, p.notes) };
-  const blocks = spec.rows.flatMap((r) => [...r.columns.flatMap((c) => c.blocks), ...(r.floating ?? [])]);
+  const rows = p.rows.filter((r) => r.columns.some((c) => c.blocks.length) || r.floating?.length);
+  const blocks = rows.flatMap((r) => [...r.columns.flatMap((c) => c.blocks), ...(r.floating ?? [])]);
+  // (1) is "per management" throughout the deck: a page that marks a fact (1) and lists no footnote gets that one (guide 4.6).
+  const notes = markersIn(blocks).includes(1) && !p.notes.footnotes?.length ? { ...p.notes, footnotes: [PER_MANAGEMENT] } : p.notes;
+  const spec: PageSpec = { id: p.id, section: p.section, title: p.title, rows, notes: fitNotes(ctx, p.id, notes) };
   return { id: p.id, spec, exhibits: exhibitTitles(blocks), carries: p.carries ?? [], kind: p.kind ?? "content" };
 }
 

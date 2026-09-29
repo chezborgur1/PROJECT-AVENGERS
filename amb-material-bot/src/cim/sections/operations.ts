@@ -4,10 +4,11 @@
 // on the considerations page, as the spec's sample places it.
 
 import { monthLabel } from "../../domain/financials.ts";
+import { fmtCount } from "../../util/format.ts";
 import type { CimContext } from "../context.ts";
 import { pageCopy, PER_MANAGEMENT, standardNote } from "../context.ts";
 import type { CimCopy } from "../copy.ts";
-import type { Block, TextCell } from "../design.ts";
+import type { Block, Paragraph, TextCell } from "../design.ts";
 import { r3, spanW } from "../design.ts";
 import { facilities, headcountByDepartment, headcountRollForward, keyObservations, observationsBlock, organization, tenureAtDeparture, usable } from "../exhibits.ts";
 import { chooseTitle, draft, present, source } from "./common.ts";
@@ -25,6 +26,12 @@ function orgRoles(ctx: CimContext): number {
   return new Set(pr.employees.filter((e) => e.hireDate <= asOf && (!e.terminationDate || e.terminationDate > asOf)).map((e) => e.role)).size;
 }
 
+/** A trade business that lists no contractor license is asked for it once, whichever form the operations page takes. */
+function askLicenses(ctx: CimContext): void {
+  const q = "Contractor licenses held by the Company or its technicians (state and trade, with numbers), for the operations page";
+  if (!ctx.intake?.company.licenses.length && !ctx.openQuestions.includes(q)) ctx.openQuestions.push(q);
+}
+
 /** Suppliers, certifications and licenses from the intake facts (guide S5.5). */
 function suppliers(ctx: CimContext, w: number): Block | undefined {
   const i = ctx.intake;
@@ -36,7 +43,68 @@ function suppliers(ctx: CimContext, w: number): Block | undefined {
     ...i.company.licenses.map((l) => [l.name, "License"]),
   ];
   if (!rows.length) return undefined;
-  return { kind: "textTable", header: { title: "Suppliers, certifications and licenses", units: "(per management)" }, spec: { colW: [1.9, r3(w - 1.9)], head: ["Name", "Role"], rows, fontSize: 8.5 } };
+  // The title names only the kinds the table holds; a trade that needs a contractor license and lists none is asked for.
+  const kinds = [i.suppliers.length ? "Suppliers" : "", i.company.certifications.length ? "certifications" : "", i.company.licenses.length ? "licenses" : ""].filter(Boolean);
+  askLicenses(ctx);
+  const title = series(kinds.map((k, n) => (n === 0 ? k.charAt(0).toUpperCase() + k.slice(1) : k)));
+  return { kind: "textTable", header: { title, units: "(per management)" }, spec: { colW: [1.9, r3(w - 1.9)], head: ["Name", "Relationship"], rows, fontSize: 8.5 } };
+}
+
+/** "a, b and c". */
+const series = (xs: string[]): string => (xs.length <= 1 ? (xs[0] ?? "") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`);
+
+/** A clause starting a sentence. */
+const inTextUpper = (s: string): string => `${s.charAt(0).toUpperCase()}${s.slice(1)}`;
+
+/** A phrase from the notes in running text: its first letter lowered unless it starts an acronym or a name ("CSR", "HVAC"). */
+const inText = (s: string): string => (/^[A-Z][a-z]/.test(s) && !/^[A-Z][a-z]+ [A-Z]/.test(s) ? `${s.charAt(0).toLowerCase()}${s.slice(1)}` : s);
+
+/**
+ * The people page's run-in paragraphs (spec archetype P2, guide 3.3 S5.1),
+ * each built only from the facts the notes and the payroll register state,
+ * with the notes' facts marked (1): staffing, the owner's role, fleet and
+ * systems, suppliers and reputation, and who the customers are. Management
+ * is in the organization table beside it. Undefined without
+ * intake facts; a paragraph whose facts are missing is left out.
+ */
+function peopleProse(ctx: CimContext): Block | undefined {
+  const i = ctx.intake;
+  if (!i) return undefined;
+  const b = ctx.brief;
+  const L = ctx.latest.label;
+  const paragraphs: Paragraph[] = [];
+  const roles = i.workforce.composition.filter((c) => !/\bowner\b/i.test(c.role)).map((c) => `${inText(c.role)} ${fmtCount(c.count)}`);
+  if (roles.length) {
+    const size = b.has("hc.total") ? `${b.t("hc.total")} employees besides the owner, by role: ` : "By role: ";
+    const pay = i.workforce.payBasis ? ` ${i.workforce.payBasis}${i.workforce.union === false ? "; there is no union" : i.workforce.union ? "; the workforce is unionized" : ""} (1).` : "";
+    const flow = b.has(`hc.hires.${ctx.latest.key}`) ? ` ${L} saw ${b.t(`hc.hires.${ctx.latest.key}`)} hires and ${b.t(`hc.departures.${ctx.latest.key}`)} departures.` : "";
+    paragraphs.push({ lead: "Staffing.", body: `${size}${series(roles)} (1).${pay}${flow}` });
+  }
+  const o = i.owner;
+  if (o.responsibilities.length) {
+    const hours = o.hoursPerWeek ? `about ${o.hoursPerWeek} hours a week` : "the week";
+    const stay = o.transition.months ? ` ${o.name} will support the transition for up to ${o.transition.months} months after closing (1).` : "";
+    paragraphs.push({ lead: "The owner's role.", body: `${o.name} spends ${hours} on ${series(o.responsibilities.map((r) => inText(r.responsibility)))} (1).${stay}` });
+  }
+  const fleet = i.fleetAndEquipment.map((f) => `${f.count !== undefined ? `${fmtCount(f.count)} ` : ""}${inText(f.item)} (${inText(f.ownership)})`);
+  const systems = i.systems.map((s) => `${s.system} for ${inText(s.function)}`);
+  if (fleet.length || systems.length) {
+    paragraphs.push({ lead: "Fleet and systems.", body: `${fleet.length ? `The fleet is ${series(fleet)} (1).` : ""}${systems.length ? `${fleet.length ? " " : ""}The Company runs ${series(systems)} (1).` : ""}` });
+  }
+  const main = i.suppliers.filter((s) => /^main supplier/i.test(s.supplies)).map((s) => s.name);
+  const other = i.suppliers.filter((s) => !/^main supplier/i.test(s.supplies)).map((s) => `${s.name} for ${inText(s.supplies)}`);
+  const buys = [...(main.length ? [`main suppliers ${series(main)}`] : []), ...other];
+  const certified = i.company.certifications.map((c) => `a ${c.name}${c.since ? ` since ${c.since}` : ""}`);
+  const rated = i.company.reputation.map((r) => `its ${r.metric} is ${r.value}`);
+  const standing = certified.length ? [`It has been ${series(certified)}`, ...rated].join(", and ") : rated.length ? `${inTextUpper(series(rated))}` : "";
+  if (buys.length || standing) {
+    askLicenses(ctx);
+    paragraphs.push({ lead: "Suppliers and reputation.", body: `${buys.length ? `The Company buys from ${series(buys)} (1).` : ""}${standing ? `${buys.length ? " " : ""}${standing} (1).` : ""}` });
+  }
+  // Customer facts without a share: the shares are printed from the data on the customer pages.
+  const who = i.customerFacts.filter((f) => !/%/.test(f.fact)).map((f) => f.fact);
+  if (who.length) paragraphs.push({ lead: "Customers.", body: `${who.map((f) => `${f.charAt(0).toUpperCase()}${f.slice(1)}`).join("; ")} (1).` });
+  return paragraphs.length ? { kind: "prose", paragraphs } : undefined;
 }
 
 const s5_1: PageModule = {
@@ -48,9 +116,12 @@ const s5_1: PageModule = {
   budget: [1, 1],
   build(ctx) {
     const copy = pageCopy(ctx, "s5_1") ?? fallback51(ctx);
+    // Text-led when the notes give the facts (spec archetype P2): run-in paragraphs lead the page with the organization
+    // under them; compensation, the roll-forward and the observations take the right-hand columns. The suppliers are a paragraph.
+    const prose = peopleProse(ctx);
     const org = organization(ctx, usable(1, 7));
-    const roll = carries(ctx, "S5.1", "S5.3") ? headcountRollForward(ctx, usable(1, 7)) : undefined;
-    const sup = carries(ctx, "S5.1", "S5.5") ? suppliers(ctx, spanW(8, 12)) : undefined;
+    const roll = carries(ctx, "S5.1", "S5.3") ? headcountRollForward(ctx, prose ? spanW(8, 12) : usable(1, 7)) : undefined;
+    const sup = carries(ctx, "S5.1", "S5.5") && !prose ? suppliers(ctx, spanW(8, 12)) : undefined;
     const dept = carries(ctx, "S5.1", "S5.2") ? headcountByDepartment(ctx, spanW(8, 12)) : undefined;
     // Without the unit-economics page (no payroll register) the facilities table comes here; S5.5 lists the suppliers.
     const fac = carries(ctx, "S5.1", "S2.4") || carries(ctx, "S5.1", "S2.5") ? facilities(ctx, spanW(8, 12), !sup) : undefined;
@@ -69,13 +140,13 @@ const s5_1: PageModule = {
         id: "S5.1",
         section: SECTION,
         title: chooseTitle(ctx, "S5.1 title", copy.title, fallback),
-        rows: [{ columns: [{ span: [1, 7], blocks: present(org, roll) }, { span: [8, 12], blocks: present(dept, sup, fac, obs) }] }],
+        rows: [prose ? { columns: [{ span: [1, 7], blocks: present(prose, org) }, { span: [8, 12], blocks: present(dept, roll, fac, obs) }] } : { columns: [{ span: [1, 7], blocks: present(org, roll) }, { span: [8, 12], blocks: present(dept, sup, fac, obs) }] }],
         notes: {
           source: source(ctx.sources.payroll, "Management"),
           note: standardNote(ctx, "Employees other than management are described by role only; compensation includes employer taxes and benefits."),
           footnotes: [PER_MANAGEMENT],
         },
-        carries: [dept ? "S5.2" : "", roll ? "S5.3" : "", sup ? "S5.5" : "", ...(fac ? ["S2.4", "S2.5"].filter((id) => carries(ctx, "S5.1", id)) : [])].filter(Boolean),
+        carries: [dept ? "S5.2" : "", roll ? "S5.3" : "", sup || (prose && carries(ctx, "S5.1", "S5.5")) ? "S5.5" : "", ...(fac ? ["S2.4", "S2.5"].filter((id) => carries(ctx, "S5.1", id)) : [])].filter(Boolean),
       }),
     ];
   },

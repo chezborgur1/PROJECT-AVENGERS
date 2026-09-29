@@ -13,7 +13,7 @@ import type { Ladder, PeriodColumn, PeriodValues } from "../model/types.ts";
 import { cagr, describeDelta, EN_DASH, fmtBps, fmtCount, fmtGrowth, fmtMoney, fmtPct, fyRange, k, toK, wholeShares } from "../util/format.ts";
 import { accountLabel, fmtKpi, latestKpi, MIN_PAY_GROUP, revenueMix } from "./brief.ts";
 import type { CimContext } from "./context.ts";
-import { at, confirm, fieldDepartments, pageNo, pageRef, population, resolveCopy, tableColumns } from "./context.ts";
+import { at, confirm, fieldDepartments, pageRef, population, resolveCopy, tableColumns } from "./context.ts";
 import type { Observation } from "./copy.ts";
 import type { Block, ExhibitHeader, NumCol, NumRow, NumTableSpec, ObsItem, TextCell, TextTableSpec } from "./design.ts";
 import { GAP, r3, spanW } from "./design.ts";
@@ -49,10 +49,18 @@ function periodCols(cols: PeriodColumn[], w: number): NumCol[] {
 
 const widthOf = (cols: NumCol[]): number => r3(cols.reduce((s, c) => s + c.w, 0));
 
+/** Clearance a table keeps inside its exhibit rule (spec 1: the hairline, not a ragged gap). */
+const TABLE_CLEARANCE = 0.1;
+/** Widest a label column grows to fill its block before the figures share the rest. */
+const LABEL_MAX = 2.8;
+
 /**
  * Fit a numeric table's columns into `max` inches: first narrow the label and
  * text columns, then the figures, then drop the analytic columns named in
- * `droppable` (CAGR before y/y). Returns the columns and the heads kept.
+ * `droppable` (CAGR before y/y). A table narrower than its block widens to
+ * it, less the hairline clearance (spec 1, 9): its text column takes the
+ * room, else the label column up to LABEL_MAX, then the figures share what
+ * is left. Returns the columns and the heads kept.
  */
 function fitCols(cols: NumCol[], max: number, droppable: string[] = []): NumCol[] {
   let out = cols.map((c) => ({ ...c }));
@@ -75,6 +83,16 @@ function fitCols(cols: NumCol[], max: number, droppable: string[] = []): NumCol[
   // A gap separates two blocks of figures; one left with no figures after it would print a detached stub (spec 4.1 [F]).
   out = out.filter((c, j) => c.kind !== "gap" || (out[j - 1]?.kind === "num" && out[j + 1]?.kind === "num"));
   if (widthOf(out) > max + 0.005) throw new Error(`Table does not fit ${max.toFixed(2)} in: ${widthOf(out).toFixed(2)} in`);
+  const short = () => r3(max - TABLE_CLEARANCE - widthOf(out));
+  const text = out.find((c) => c.kind === "text");
+  if (short() > 0 && text) text.w = r3(text.w + short());
+  const label = out.find((c) => c.kind === "label");
+  if (short() > 0 && label && label.w < LABEL_MAX) label.w = r3(Math.min(LABEL_MAX, label.w + short()));
+  const nums = out.filter((c) => c.kind === "num");
+  if (short() > 0 && nums.length) {
+    const each = Math.floor((short() / nums.length) * 1000) / 1000;
+    for (const c of nums) c.w = r3(c.w + each);
+  }
   return out;
 }
 
@@ -319,7 +337,7 @@ export function termRows(ctx: CimContext, full: boolean): TextCell[][] {
     const renewal = loc.renewalOptions ? `${full ? " with " : ", "}${loc.renewalOptions.charAt(0).toLowerCase()}${loc.renewalOptions.slice(1)}` : "";
     rows.push([
       "Real estate",
-      `${loc.sizeSqFt ? `${fmtCount(loc.sizeSqFt)} sq ft ` : ""}${what}${lease ? `, leased${loc.landlordRelatedParty === false ? " from an unrelated landlord" : ""}${loc.leaseExpiry ? ` ${full ? "through" : "to"} ${loc.leaseExpiry}` : ""}${renewal}` : ", owned by the Seller; terms are provided separately"}.`,
+      `${loc.sizeSqFt ? `${fmtCount(loc.sizeSqFt)} sq ft ` : ""}${what}${lease ? `, leased${loc.landlordRelatedParty === false ? " from an unrelated landlord" : ""}${loc.leaseExpiry ? ` ${full ? "through" : "to"} ${loc.leaseExpiry}` : ""}${renewal}` : ", owned by the Seller; terms are provided separately"} (1).`,
     ]);
   }
   if (full && i?.transaction.sellerFinancing) rows.push(["Seller financing", i.transaction.sellerFinancing]);
@@ -341,29 +359,6 @@ export function transactionSummary(ctx: CimContext, w: number): Block {
   const rows = termRows(ctx, false);
   const spec: TextTableSpec = { colW: [1.15, r3(w - 1.15)], head: ["Term", "Detail"], rows, fontSize: 8 };
   return { kind: "textTable", header: { title: "Transaction summary" }, spec };
-}
-
-/** Key figures with the page that proves each one: the S1.2 rail's reference table. `nonGaapMark` is the page's footnote marker for the non-GAAP measures ("(2)"). */
-export function keyFigures(ctx: CimContext, w: number, nonGaapMark = ""): Block {
-  const b = ctx.brief;
-  const L = ctx.latest.label;
-  const mark = nonGaapMark ? ` ${nonGaapMark}` : "";
-  const rows: TextCell[][] = [
-    [`Revenue, ${L}`, k(b.value("rev.latest") ?? 0, { dollar: true }), pageNo("S6.1")],
-    [`Gross margin, ${L}`, b.t("gm.latest"), pageNo("S6.1")],
-    [`Adj. EBITDA, ${L}${mark}`, k(b.value("adjEbitda.latest") ?? 0, { dollar: true }), pageNo("S7.1")],
-  ];
-  if (ctx.mainStreet) rows.push([`SDE, ${L}${mark}`, k(b.value("sde.latest") ?? 0, { dollar: true }), pageNo("S7.1")]);
-  if (b.has("cust.top10Share")) rows.push(["Top-10 customer share", b.t("cust.top10Share"), pageNo("S4.1")]);
-  if (b.has("cust.gdr.latest")) rows.push(["Gross dollar retention", b.t("cust.gdr.latest"), pageNo("S4.2")]);
-  if (b.has("hc.total")) rows.push(["Employees, excluding the owner", b.t("hc.total"), pageNo("S5.1")]);
-  if (b.has("fcfConversion." + ctx.fy[ctx.fy.length - 1]!.key)) rows.push([`Free cash flow ÷ Reported EBITDA`, b.t("fcfConversion." + ctx.fy[ctx.fy.length - 1]!.key), pageNo("S8.1")]);
-  return {
-    kind: "textTable",
-    // Money in a table is in thousands like every other exhibit (spec 4.1), not the prose "$3.04M".
-    header: { title: "Key figures", units: `(${L}; $000s unless noted)` },
-    spec: { colW: [r3(w - 1.25), 0.75, 0.5], head: ["Measure", "Value", "Page"], rows, aligns: ["left", "right", "right"], fontSize: 8 },
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -390,25 +385,27 @@ function opexLines(ctx: CimContext, budget: number): OpexLine[] {
       .sort((a, b) => (latest.accountLines[b] ?? 0) - (latest.accountLines[a] ?? 0));
   type Cat = { key: string; label: string; get: (p: PeriodValues) => number; accounts: string[]; split: string[] };
   // The owner's employer payroll taxes move from payroll to owner compensation, so payroll excludes him on the register's
-  // basis; the payroll accounts then no longer add to the line, so it is not split into them.
+  // basis; a payroll line split into its accounts shows them leaving as a line of their own.
   const taxes = ctx.out.columns.some((c) => ctx.out.periods[c.key]?.ownerPayrollTaxes);
   const all: Cat[] = [
     { key: "is.ownerComp", label: ownerCompLabel(ctx), get: ownerCompTotal, accounts: accountsOf("owner_comp"), split: [] },
-    { key: "is.payroll", label: "Payroll, excluding the owner", get: staffPayroll, accounts: taxes ? [] : accountsOf("payroll"), split: [] },
+    { key: "is.payroll", label: "Payroll, excluding the owner", get: staffPayroll, accounts: accountsOf("payroll"), split: [] },
     { key: "is.rent", label: "Rent", get: (p) => p.pnl.rent, accounts: accountsOf("rent"), split: [] },
     { key: "is.marketing", label: "Advertising and marketing", get: (p) => p.pnl.marketing, accounts: accountsOf("marketing"), split: [] },
     { key: "is.otherOpex", label: "Other operating expenses", get: (p) => p.pnl.otherOpex, accounts: accountsOf("other_opex"), split: [] },
   ];
   const cats = all.filter((c) => c.get(latest) !== 0 || c.key === "is.ownerComp");
   let rows = cats.length;
+  // The first split turns one line into two; later splits add one; the last account left replaces its remainder. Splitting
+  // payroll also brings the owner's payroll taxes out as a line of their own.
+  const cost = (c: Cat) => (c.accounts.length - c.split.length - 1 === 1 ? (c.split.length === 0 ? 1 : 0) : 1) + (c.key === "is.payroll" && taxes && !c.split.length ? 1 : 0);
   while (rows < budget) {
     const remaining = (c: Cat) => c.get(latest) - c.split.reduce((s, a) => s + (latest.accountLines[a] ?? 0), 0);
-    const candidates = cats.filter((c) => c.accounts.length - c.split.length >= 2).sort((a, b) => remaining(b) - remaining(a));
+    const candidates = cats.filter((c) => c.accounts.length - c.split.length >= 2 && rows + cost(c) <= budget).sort((a, b) => remaining(b) - remaining(a));
     const c = candidates[0];
     if (!c) break;
+    rows += cost(c);
     c.split.push(c.accounts[c.split.length]!);
-    // The first split turns one line into two; later splits add one; the last account left replaces its remainder.
-    rows += c.accounts.length - c.split.length === 1 ? (c.split.length === 1 ? 1 : 0) : 1;
   }
   const out: OpexLine[] = [];
   for (const c of cats) {
@@ -418,26 +415,39 @@ function opexLines(ctx: CimContext, budget: number): OpexLine[] {
     }
     for (const a of c.split) out.push({ label: accountLabel(a), key: `is.acct.${a}`, get: (p) => p.accountLines[a] ?? 0 });
     const rest = c.accounts.slice(c.split.length);
+    // The accounts add to the P&L line; payroll's owner taxes leave it as their own line below them.
+    const whole = c.key === "is.payroll" ? (p: PeriodValues) => p.pnl.payroll : c.get;
     if (rest.length === 1) out.push({ label: accountLabel(rest[0]!), key: `is.acct.${rest[0]}`, get: (p) => p.accountLines[rest[0]!] ?? 0 });
     else if (rest.length > 1) {
       // A remainder never borrows its category's label, which elsewhere in the deck means the whole category.
       const label = c.key === "is.payroll" ? "Other payroll costs" : c.key === "is.otherOpex" ? "All other operating accounts" : `Other ${c.label.charAt(0).toLowerCase()}${c.label.slice(1)}`;
-      out.push({ label, key: `${c.key}.other`, get: (p) => c.get(p) - c.split.reduce((s, a) => s + (p.accountLines[a] ?? 0), 0) });
+      out.push({ label, key: `${c.key}.other`, get: (p) => whole(p) - c.split.reduce((s, a) => s + (p.accountLines[a] ?? 0), 0) });
     }
+    if (c.key === "is.payroll" && taxes) out.push({ label: "Less: owner's payroll taxes", key: "is.ownerTaxes", get: (p) => -(p.ownerPayrollTaxes ?? 0) });
   }
   return out;
 }
 
-/** Growth cells for a row: y/y on the latest pair, CAGR over the fiscal years, as the table's analytic columns declare. */
+/** Below this, or below 1% of the period's revenue, a line's growth rate says nothing (a $1K line growing to $3K is not "60.7% CAGR"). */
+const GROWTH_FLOOR = 10_000;
+
+/**
+ * Growth cells for a row: y/y on the latest pair, CAGR over the fiscal years,
+ * as the table's analytic columns declare; n.m. when either end is
+ * immaterial, as the ladder does for its small rows (QA round 2 F35).
+ */
 function growthCells(ctx: CimContext, cols: NumCol[], get: (p: PeriodValues) => number): string[] {
   const out: string[] = [];
   const last = at(ctx, ctx.latest);
   const prior = ctx.prior ? at(ctx, ctx.prior) : undefined;
   const span = ctx.fy.length - 1;
+  const material = (...ps: PeriodValues[]) => ps.every((p) => Math.abs(get(p)) >= Math.max(GROWTH_FLOOR, 0.01 * p.pnl.revenue));
   for (const c of cols) {
     if (c.kind !== "num" || c.group !== "Growth") continue;
-    if (c.head === "CAGR") out.push(span >= 2 ? pc(cagr(get(at(ctx, ctx.fy[0]!)), get(at(ctx, ctx.fy[span]!)), span)) : "n.m.");
-    else out.push(prior ? fmtGrowth(get(prior), get(last)) : "n.m.");
+    if (c.head === "CAGR") {
+      const [a, b] = [at(ctx, ctx.fy[0]!), at(ctx, ctx.fy[span]!)];
+      out.push(span >= 2 && material(a, b) ? pc(cagr(get(a), get(b), span)) : "n.m.");
+    } else out.push(prior && material(prior, last) ? fmtGrowth(get(prior), get(last)) : "n.m.");
   }
   return out;
 }
@@ -528,7 +538,7 @@ export function summaryIncomeStatement(ctx: CimContext, w: number): Block {
 }
 
 /** Revenue and Adj. EBITDA as twin single-series panels (spec 5), with both CAGRs as the one annotation. */
-export function revenueAdjPanels(ctx: CimContext, narrow = false, measure: "adj" | "reported" = "adj"): Block {
+export function revenueAdjPanels(ctx: CimContext, narrow = false, measure: "adj" | "reported" = "adj", mark = ""): Block {
   const periods = headlineCols(ctx);
   const labels = periods.map((c) => c.label);
   const b = ctx.brief;
@@ -539,7 +549,7 @@ export function revenueAdjPanels(ctx: CimContext, narrow = false, measure: "adj"
   const annotation = !cagrs ? undefined : narrow ? `CAGR ${b.t("rev.cagr")} and ${b.t(key)}` : `CAGR: revenue ${b.t("rev.cagr")}, ${name} ${b.t(key)}`;
   return {
     kind: "chart",
-    header: { title: `Revenue and ${name}`, units: "($000s)", annotation },
+    header: { title: `Revenue and ${name}`, units: `($000s)${mark ? ` ${mark}` : ""}`, annotation },
     spec: {
       type: "twinPanels",
       panels: [
@@ -640,6 +650,14 @@ export function milestones(ctx: CimContext, w: number): Block | undefined {
   return { kind: "textTable", header: { title: "History and milestones", units: "(per management)" }, spec: { colW, head: hasEffect ? ["Year", "Event", "Effect"] : ["Year", "Event"], rows, fontSize: 8.5 } };
 }
 
+/** The milestones as one run-in paragraph, for a page whose exhibits are already three (spec 7.3; QA round 2 F39). */
+export function milestoneProse(ctx: CimContext): Block | undefined {
+  const ms = [...(ctx.intake?.milestones ?? [])].sort((a, b) => a.year - b.year);
+  if (!ms.length) return undefined;
+  const events = ms.map((m, i) => `${i ? m.event.charAt(0).toLowerCase() + m.event.slice(1) : m.event} in ${m.year}${m.effect ? ` (${m.effect.charAt(0).toLowerCase()}${m.effect.slice(1)})` : ""}`);
+  return { kind: "prose", paragraphs: [{ lead: "History.", body: `${events.join("; ")} (1).` }] };
+}
+
 /**
  * Cost structure as % of revenue (S6.3, spec "Operating cost ratios"): cost
  * of revenue and payroll by account with subtotals, owner compensation, then
@@ -652,8 +670,10 @@ export function costStructure(ctx: CimContext, w: number, maxRows = 22): Block {
   const first = ps[0]!;
   const last = ps[ps.length - 1]!;
   const short = (c: PeriodColumn) => c.label.replace("FY20", "FY");
+  // The change column's span goes in the units, so its header fits one line (QA round 2 F36).
+  const span = `${short(periods[0]!)}${EN_DASH}${short(periods[periods.length - 1]!)}`;
   const cols = fitCols(
-    [{ w: 2.35, kind: "label" }, ...periods.map((c): NumCol => ({ w: 0.62, kind: "num", head: c.label })), { w: GAP, kind: "gap" }, { w: 0.75, kind: "num", head: `Δ bps ${short(periods[0]!)}–${short(periods[periods.length - 1]!)}` }, { w: 1.9, kind: "text", head: "Basis" }, { w: 0.36, kind: "obs", head: "Obs." }],
+    [{ w: 2.35, kind: "label" }, ...periods.map((c): NumCol => ({ w: 0.62, kind: "num", head: c.label })), { w: GAP, kind: "gap" }, { w: 0.62, kind: "num", head: "Δ bps" }, { w: 1.6, kind: "text", head: "Basis" }, { w: 0.36, kind: "obs", head: "Obs." }],
     w,
   );
   const latest = at(ctx, ctx.latest);
@@ -665,28 +685,36 @@ export function costStructure(ctx: CimContext, w: number, maxRows = 22): Block {
     const ratioOf = (p: PeriodValues) => get(p) / p.pnl.revenue;
     return { type, label, key, vals: [...ps.map((p) => pc(ratioOf(p))), fmtBps(ratioOf(first), ratioOf(last)).replace(" bps", "")], text: basis };
   };
+  // An account an accepted adjustment is taken out of says so where the reader sees its ratio move (the legal fee spike, [N2]).
+  const adjustedIn = (account: string) => {
+    const refs = ctx.out.adjustments.filter((a) => a.row.status === "accepted" && a.row.tier !== "definitional" && a.row.accounts?.includes(account)).map((a) => `[${a.row.ref}]`);
+    return refs.length ? `Adjusted in ${refs.join(", ")} (${pageRef("S7.1")})` : "";
+  };
+  const acct = (a: string) => r("line", accountLabel(a), `cost.${a}`, (p) => p.accountLines[a] ?? 0, adjustedIn(a));
   const cogs = acctOf("cogs");
   const payroll = acctOf("payroll");
   const other = acctOf("other_opex");
   const head: NumRow[] = [];
-  for (const a of cogs.length <= 3 ? cogs : []) head.push(r("line", accountLabel(a), `cost.${a}`, (p) => p.accountLines[a] ?? 0));
+  for (const a of cogs.length <= 3 ? cogs : []) head.push(acct(a));
   head.push(r("subtotal", "Cost of revenue", "cost.cogs", (p) => p.pnl.cogs));
   const listed = payroll.length <= 5 ? payroll : [];
-  for (const a of listed) head.push(r("line", accountLabel(a), `cost.${a}`, (p) => p.accountLines[a] ?? 0));
+  for (const a of listed) head.push(acct(a));
   // The accounts carry the owner's employer payroll taxes; they leave payroll for owner compensation, on the register's basis.
   if (listed.length && ps.some((p) => p.ownerPayrollTaxes)) head.push(r("line", "Less: owner's payroll taxes", "cost.ownerTaxes", (p) => -(p.ownerPayrollTaxes ?? 0), "Moved to owner compensation"));
   head.push(r("subtotal", "Payroll, excluding the owner", "cost.payroll", staffPayroll, ctx.out.headcount ? `${fmtCount(ctx.out.headcount.latestHeadcount)} employees at ${monthLabel(ctx.latest.end)}` : ""));
-  head.push(r("line", ownerCompLabel(ctx), "cost.owner", ownerCompTotal, `Restated in ${ownerCompRung(ctx).refs} and [S2] (${pageRef("S7.1")})`));
-  const tail: NumRow[] = [];
-  if (latest.pnl.rent) tail.push(r("line", "Rent", "cost.rent", (p) => p.pnl.rent, ctx.intake?.locations[0]?.leaseExpiry ? `Lease through ${ctx.intake.locations[0].leaseExpiry}` : ""));
-  if (latest.pnl.marketing) tail.push(r("line", "Advertising and marketing", "cost.marketing", (p) => p.pnl.marketing));
-  const budget = Math.max(0, maxRows - head.length - tail.length - 2);
+  head.push(r("line", ownerCompLabel(ctx), "cost.owner", ownerCompTotal, `Restated in ${[...ownerCompRung(ctx).refs.split(" ").filter(Boolean), "[S2]"].join(", ")}`));
+  // Rent, marketing and the other accounts are one list in order of their latest share, the remainder last (QA round 2 F34).
+  const lines: { row: NumRow; share: number }[] = [];
+  if (latest.pnl.rent) lines.push({ row: r("line", "Rent", "cost.rent", (p) => p.pnl.rent, ctx.intake?.locations[0]?.leaseExpiry ? `Lease through ${ctx.intake.locations[0].leaseExpiry}` : ""), share: latest.pnl.rent });
+  if (latest.pnl.marketing) lines.push({ row: r("line", "Advertising and marketing", "cost.marketing", (p) => p.pnl.marketing), share: latest.pnl.marketing });
+  const budget = Math.max(0, maxRows - head.length - lines.length - 2);
   const shown = other.length - 1 <= budget ? other : other.slice(0, budget);
-  const middle = shown.map((a) => r("line", accountLabel(a), `cost.${a}`, (p) => p.accountLines[a] ?? 0));
+  for (const a of shown) lines.push({ row: acct(a), share: latest.accountLines[a] ?? 0 });
+  const middle = lines.sort((a, b) => b.share - a.share).map((l) => l.row);
   if (shown.length < other.length) middle.push(r("line", "All other operating accounts", "cost.other", (p) => p.pnl.otherOpex - shown.reduce((s, a) => s + (p.accountLines[a] ?? 0), 0), `${other.length - shown.length} smaller accounts`));
   // Total operating expenses carries the page title's claim (opex as % of revenue), so the table shows the figure the title quotes.
-  const rows = [...head, ...middle, ...tail, r("subtotal", "Total operating expenses", "cost.opex", (p) => p.pnl.totalOpex), r("key", "Reported EBITDA margin", "cost.margin", (p) => p.pnl.ebitda)];
-  return { kind: "numTable", header: { title: "Cost structure", units: "(% of revenue)" }, spec: { name: "Cost line", cols, rows } };
+  const rows = [...head, ...middle, r("subtotal", "Total operating expenses", "cost.opex", (p) => p.pnl.totalOpex), r("key", "Reported EBITDA margin", "cost.margin", (p) => p.pnl.ebitda)];
+  return { kind: "numTable", header: { title: "Cost structure", units: `(% of revenue; Δ ${span})` }, spec: { name: "Cost line", cols, rows } };
 }
 
 /**
@@ -697,8 +725,8 @@ export function costStructure(ctx: CimContext, w: number, maxRows = 22): Block {
  */
 export function costShiftChart(table: Block, max = 6): Block | undefined {
   if (table.kind !== "numTable") return undefined;
-  const nums = table.spec.cols.filter((c) => c.kind === "num");
-  const head = nums[nums.length - 1]?.head ?? "";
+  // The table's units carry the span its change column covers: "(% of revenue; Δ FY23–FY25)".
+  const span = /Δ ([^)]+)\)/.exec(table.header?.units ?? "")?.[1];
   const moves = table.spec.rows
     .filter((r) => r.type === "line" && r.vals)
     .map((r) => ({ label: r.label, bps: Number(r.vals![r.vals!.length - 1]!.replace(EN_DASH, "-").replace(/[^0-9.+-]/g, "")) }))
@@ -708,7 +736,7 @@ export function costShiftChart(table: Block, max = 6): Block | undefined {
   if (moves.length < 2) return undefined;
   return {
     kind: "chart",
-    header: { title: "Largest changes in cost ratios", units: `(${head.replace(/^Δ bps /, "bps, ")})` },
+    header: { title: "Largest changes in cost ratios", units: span ? `(bps, ${span})` : "(bps)" },
     spec: { type: "hbar", labels: moves.map((m) => m.label), values: moves.map((m) => m.bps), format: `#,##0;"${EN_DASH}"#,##0` },
   };
 }
@@ -741,7 +769,7 @@ function ownerCompLabel(ctx: CimContext): string {
 
 export function ownerCompRung(ctx: CimContext): { label: string; refs: string } {
   const rows = tierRows(ctx, "owner_compensation").filter((a) => a.row.category === "owner_compensation");
-  return { label: rows.length > 1 ? "Owner compensation, salary and payroll taxes" : "Owner compensation, as paid", refs: rows.map((a) => `[${a.row.ref}]`).join(" ") };
+  return { label: rows.length > 1 ? "Owner salary and payroll taxes" : "Owner compensation, as paid", refs: rows.map((a) => `[${a.row.ref}]`).join(" ") };
 }
 
 /**
@@ -1009,7 +1037,7 @@ export function customerMix(ctx: CimContext, w: number): Block | undefined {
   const { shown, other } = mixGroups(ctx);
   const residual = cu.mixByType.filter((m) => m.count === 0);
   const rows: NumRow[] = shown.map((m, i) => ({ type: "line", label: m.type, key: `mix.${m.type}`, vals: [fmtCount(m.count), k(m.revenue, { dollar: i === 0 }), pc(m.revenuePct), k(m.avgRevenue)] }));
-  if (other) rows.push({ type: "line", label: `Other types (${other.types})`, key: "mix.other", vals: [fmtCount(other.count), k(other.revenue), pc(other.revenue / cu.concentration.total), k(other.revenue / other.count)] });
+  if (other) rows.push({ type: "line", label: `Other (${other.types} types)`, key: "mix.other", vals: [fmtCount(other.count), k(other.revenue), pc(other.revenue / cu.concentration.total), k(other.revenue / other.count)] });
   const coded = cu.mixByType.filter((m) => m.count > 0);
   const codedRev = coded.reduce((s, m) => s + m.revenue, 0);
   const codedCount = coded.reduce((s, m) => s + m.count, 0);
@@ -1339,13 +1367,19 @@ export function capacityFacts(ctx: CimContext, w: number): Block | undefined {
   }
   const offer = kpiOf(ctx, "agreement_offer_rate");
   if (offer) rows.push({ type: "line", key: "cap.offer", label: "Service calls offered an agreement", vals: [fmtKpi(offer, latestKpi(offer)!)], text: "Per management (1)" });
+  const renewal = kpiOf(ctx, "renewal_rate");
+  if (renewal) rows.push({ type: "line", key: "cap.renewal", label: "Agreement renewal rate", vals: [fmtKpi(renewal, latestKpi(renewal)!)], text: "Per management (1)" });
+  // The owner's own week is capacity the business must replace (guide S5.4).
+  const ownerHours = kpiOf(ctx, "owner_hours");
+  if (ownerHours) rows.push({ type: "line", key: "cap.ownerHours", label: "Owner hours a week (#)", vals: [fmtKpi(ownerHours, latestKpi(ownerHours)!)], text: "Per management (1)" });
   const fleet = fleetCount(ctx);
   if (fleet) {
     rows.push({ type: "line", key: "cap.revVehicle", label: "Revenue per vehicle", vals: [fmtMoney(latest.pnl.revenue / fleet.count)], text: `${ctx.latest.label} revenue ÷ ${fleet.count} vehicles` });
     if (hc) rows.push({ type: "line", key: "cap.vehiclesField", label: "Vehicles per field employee", vals: [(fleet.count / hc.latestFieldHeadcount).toFixed(1)], text: `${fleet.count} vehicles ÷ ${hc.latestFieldHeadcount} field employees` });
   }
   if (rows.length < 2) return undefined;
-  const cols = fitCols([{ w: 2.3, kind: "label" }, { w: 0.62, kind: "num", head: "Value" }, { w: 3.7, kind: "text", head: "Basis" }, { w: 0.36, kind: "obs", head: "Obs." }], w);
+  // The Value column holds a unit with its figure ("$200 a year"), so it is wider than a figure column.
+  const cols = fitCols([{ w: 2.3, kind: "label" }, { w: 0.85, kind: "num", head: "Value" }, { w: 3.47, kind: "text", head: "Basis" }, { w: 0.36, kind: "obs", head: "Obs." }], w);
   // Each figure keeps its own date: the financials run to the as-of month, management's counts to the day they were given (guide 4.6).
   const kpiDate = [members, offer].flatMap((x) => (x ? Object.keys(x.values).flatMap((key) => (/^AT(\d{4}-\d{2})-\d{2}$/.exec(key)?.[1] ? [key.slice(2)] : [])) : [])).sort().at(-1);
   const units = kpiDate ? `($ as shown; ${ctx.latest.label} financials; counts per management at ${monthLabel(kpiDate.slice(0, 7))} (1))` : `($ as shown; at ${monthLabel(ctx.latest.end)})`;

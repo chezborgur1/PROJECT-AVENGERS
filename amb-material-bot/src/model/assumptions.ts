@@ -61,7 +61,7 @@ function premisesFrom(ds: FinancialDataset): DealAssumptions["premisesArrangemen
 }
 
 /** Pro forma methods a Main Street scenario applies per expense line (guide 5.5 scenario block). */
-export type ScenarioMethod = "3-year average" | "Latest year" | "% of sales, 3-year blended" | "Contracted" | "Input";
+export type ScenarioMethod = "3-year average" | "Latest year" | "% of sales, latest year" | "% of sales, 3-year blended" | "Contracted" | "Input";
 
 /** One column of the Low / Mid / High block (guide 5.2A, 5.5). Mid is the base case. */
 export interface ScenarioDrivers {
@@ -234,7 +234,7 @@ export function defaultAssumptions(ds: FinancialDataset, row: RequestRow): Assum
     replacementSalary: Object.fromEntries([...years, ...projectionYears].map((y) => [y, replacement])),
     sdeMultiples: [2.5, 3.0, 3.5],
     ebitdaMultiples: [4.0, 5.0, 6.0],
-    multiplesSource: "AMB placeholder range for Main Street services businesses; replace with the licensed comps source before relying on it (Q15).",
+    multiplesSource: "AMB placeholder range for Main Street services businesses; replace with the licensed comps source before relying on it.",
     notes: {
       ...notes,
       cogsPct: avgNote,
@@ -250,7 +250,7 @@ export function defaultAssumptions(ds: FinancialDataset, row: RequestRow): Assum
         : "C-Corp: 21% federal plus an estimated state rate.",
       debtRepayment: debt > 0 ? `FY${last} debt of $${Math.round(debt).toLocaleString("en-US")} repaid straight-line over ${PROJECTION_YEARS} years. Replace with the amortisation schedule.` : "No debt on the balance sheet.",
       distributionsPct: "Owner distributions as % of net income. 0% lets cash build (deals are cash-free, debt-free).",
-      replacementSalary: row.owner_replacement_salary ? "Request list owner_replacement_salary." : `AMB default $${DEFAULT_REPLACEMENT_SALARY.toLocaleString("en-US")}; confirm (Q8).`,
+      replacementSalary: row.owner_replacement_salary ? "Request list owner_replacement_salary." : `AMB default $${DEFAULT_REPLACEMENT_SALARY.toLocaleString("en-US")}; confirm with the Seller.`,
       multiples: "AMB placeholder range; replace with the licensed comps source before relying on it.",
     },
 
@@ -264,16 +264,16 @@ export function defaultAssumptions(ds: FinancialDataset, row: RequestRow): Assum
     customerTerm: ds.customers?.term ?? "Customer",
     recast: {
       replacementSalary: replacement,
-      replacementSalarySource: recastInputs?.replacementSalarySource ?? (row.owner_replacement_salary ? "Request list owner_replacement_salary" : "AMB default; confirm (Q8)"),
+      replacementSalarySource: recastInputs?.replacementSalarySource ?? (row.owner_replacement_salary ? "Request list owner_replacement_salary" : "AMB default; confirm with the Seller"),
       burdenPct: burden,
-      burdenSource: recastInputs?.burdenSource ?? "AMB default 15% payroll taxes and benefits; confirm (Q8)",
+      burdenSource: recastInputs?.burdenSource ?? "AMB default 15% payroll taxes and benefits; confirm with the Seller",
       capitalReserve,
       capitalReserveBasis,
       capitalReserveSource,
       mainStreetMode,
       mainStreetSource: ds.mode
-        ? `${ds.mode.overridden ? "Advisor override" : "Rule"}: PF Adj. EBITDA before the capital reserve $${Math.round(ds.mode.measure).toLocaleString("en-US")} (${ds.mode.measureLabel}) ${ds.mode.measure < ds.mode.threshold ? "<" : ">="} $${ds.mode.threshold.toLocaleString("en-US")} (Q7)`
-        : "Rule: PF Adj. EBITDA before the capital reserve vs $1,000,000 (Q7)",
+        ? `${ds.mode.overridden ? "Advisor override" : "Rule"}: PF Adj. EBITDA before the capital reserve $${Math.round(ds.mode.measure).toLocaleString("en-US")} (${ds.mode.measureLabel}) ${ds.mode.measure < ds.mode.threshold ? "<" : ">="} $${ds.mode.threshold.toLocaleString("en-US")} (AMB threshold)`
+        : "Rule: PF Adj. EBITDA before the capital reserve vs the AMB threshold of $1,000,000",
       dealForm,
       dealFormSource: ds.dealForm?.basis ?? "Default from mode (Main Street: asset purchase; LMM: equity purchase)",
     },
@@ -308,12 +308,13 @@ export function defaultAssumptions(ds: FinancialDataset, row: RequestRow): Assum
     },
     scenarios: {
       // Mid is the base window as reported (every line at the latest year, no growth), so the Mid valuation rests on trailing
-      // SDE, as an SBA lender underwrites it, not on a forecast. Low shrinks revenue with every variable cost scaling at its
-      // 3-year blended ratio; High grows it with cost of revenue scaling and payroll held (operating leverage). Low and High
-      // each differ from Mid on growth and an operating driver (C29), and Low <= Mid <= High on EBITDA.
-      low: { revenueGrowth: -0.03, methods: { cogs: "% of sales, 3-year blended", payroll: "% of sales, 3-year blended", rent: "Latest year", marketing: "Latest year", otherOpex: "Latest year" } },
+      // SDE, as an SBA lender underwrites it, not on a forecast. Low and High move revenue with cost of revenue at the latest
+      // year's ratio and payroll held: Low loses the gross profit on the lost sales without the cushion of a payroll that
+      // shrinks with them, High gains it with the operating leverage of a held payroll, and neither borrows an older, worse
+      // cost ratio (QA round 2 F14). Each differs from Mid on growth and an operating driver (C29), and Low <= Mid <= High.
+      low: { revenueGrowth: -0.03, methods: { cogs: "% of sales, latest year", payroll: "Latest year", rent: "Latest year", marketing: "Latest year", otherOpex: "Latest year" } },
       mid: { revenueGrowth: 0, methods: { cogs: "Latest year", payroll: "Latest year", rent: "Latest year", marketing: "Latest year", otherOpex: "Latest year" } },
-      high: { revenueGrowth: 0.03, methods: { cogs: "% of sales, 3-year blended", payroll: "Latest year", rent: "Latest year", marketing: "Latest year", otherOpex: "Latest year" } },
+      high: { revenueGrowth: 0.03, methods: { cogs: "% of sales, latest year", payroll: "Latest year", rent: "Latest year", marketing: "Latest year", otherOpex: "Latest year" } },
     },
   };
 }

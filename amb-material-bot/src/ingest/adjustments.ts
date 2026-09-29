@@ -612,7 +612,7 @@ export function buildSchedule(ctx: ScheduleContext): ScheduleResult {
         s1TaxesOverride?.basis ??
         (fromRegister
           ? `Adds back the employer taxes and benefits on ${ownerLabel}'s pay that the payroll register records, ${money(ownerTaxesByYear[latest] ?? 0)} in FY${latest}; the P&L carries them in the payroll line.`
-          : `Adds back employer payroll taxes on ${ownerLabel}'s salary, ${money(ownerTaxesByYear[latest] ?? 0)} in FY${latest}, at statutory rates (Social Security 6.2% to the $${wageBase.toLocaleString("en-US")} wage base, Medicare 1.45%, federal unemployment on $7,000); the P&L carries them in the payroll line. State unemployment and owner benefits are not included.`),
+          : `Adds back employer payroll taxes on ${ownerLabel}'s salary at statutory rates, ${money(ownerTaxesByYear[latest] ?? 0)} in FY${latest} (Social Security to the $${wageBase.toLocaleString("en-US")} wage base, Medicare, federal unemployment); the P&L carries them in payroll. Owner benefits and state unemployment are not included.`),
       sourceDocument: s1TaxesOverride?.sourceDocument ?? (fromRegister ? `Payroll register (${ctx.ownerEmployerCosts!.file})` : `Statutory rates on the P&L ${accountName("owner_comp")} account; payroll register employer detail to be requested`),
       evidence: s1TaxesOverride?.evidence ?? (fromRegister ? "documented" : "pending"),
       status: s1TaxesOverride?.status ?? (s1Evidence === "documented" ? "accepted" : "proposed"),
@@ -622,6 +622,7 @@ export function buildSchedule(ctx: ScheduleContext): ScheduleResult {
         : {}),
       origin: "suggested",
       sourceFile: s1TaxesOverride?.sourceFile ?? pnlFile,
+      ...(s1TaxesOverride || fromRegister ? {} : { statutoryTaxesOn: "S1" }),
     };
   }
 

@@ -488,6 +488,12 @@ export function findColumn(out: ModelOutput, kind: PeriodRef["kind"], opts: { pr
   );
 }
 
+/** Days after the as-of date past which the financials read as stale to a buyer, who asks first for the current year to date (PE reader). */
+export const STALE_DAYS = 120;
+
+/** Days from the model's as-of date to `now`. */
+export const dataAgeDays = (asOfDate: string, now: Date): number => (now.getTime() - Date.parse(`${asOfDate}T00:00:00Z`)) / 86_400_000;
+
 /** The latest full window: LTM CY when monthly, otherwise the latest fiscal year. */
 export function latestColumn(out: ModelOutput): PeriodColumn {
   const ltm = findColumn(out, "ltm");

@@ -8,7 +8,7 @@ import { FMT, WIDTH } from "../styles.ts";
 import type { CheckResult, ModelOutput } from "../types.ts";
 import { A, type TabContext } from "./assumptionsTab.ts";
 import { chartCheckCols } from "./chartTabs.ts";
-import { bsDates } from "./balance.ts";
+import { bsDates, nwcLayout } from "./balance.ts";
 import { databookTieCols, MONTH_START } from "./data.ts";
 import { periodLayout, S, SHEET, type SheetKey } from "./layout.ts";
 
@@ -34,6 +34,8 @@ export function planChecks(ctx: TabContext, built: Set<SheetKey>, formulas: Reco
   let r = 8;
   b.row("first", r);
   for (const c of model.checks) {
+    // Tabs that flag against a check's tolerance read it here, so the threshold is one input (Proof of Cash and C14).
+    b.row(`check_${c.id}`, r);
     b.text(r, 2, c.id, { align: { horizontal: "center" } });
     b.text(r, 3, c.check);
     b.text(r, 4, c.tab);
@@ -129,7 +131,13 @@ export function checkFormulas(model: ModelOutput, plans: Partial<Record<SheetKey
   if (has("monthly") && has("pnl")) {
     out.C16 = { f: `IF(AND(${l.cols.map(({ col }) => `${S("pnl")}${colLetter(col)}6=${S("monthly")}${colLetter(col)}6`).join(",")}),0,1)` };
   }
-  if (has("debtLike")) out.C19 = { f: `IF(${A("deferredRevenueTreatment")}="Debt-like",0,COUNTIFS(${S("debtLike")}$B:$B,"*eposit*",${S("debtLike")}$D:$D,"Debt-like")+COUNTIFS(${S("debtLike")}$B:$B,"*eferred*",${S("debtLike")}$D:$D,"Debt-like"))` };
+  if (has("debtLike") && has("nwc") && has("bs")) {
+    // Debt-like items at the latest date less what NWC removes there (its adjustments, with the related-party receivable added back).
+    const nwcAt = colLetter(nwcLayout(model).latestCol);
+    const bsAt = colLetter(3 + bsDates(model).length - 1);
+    const receivable = `${S("bs")}$${bsAt}$${rowOf("bs", "detail_related_party_receivable")}`;
+    out.C19 = { f: `ABS(${S("debtLike")}$C$${rowOf("debtLike", "debtLike")}-(${S("nwc")}$${nwcAt}$${rowOf("nwc", "adjustments")}+IF(ISNUMBER(${receivable}),${receivable},0)))` };
+  }
   if (has("valuation") && has("deal")) out.C28 = { f: `MIN(0,${S("valuation")}$C$${rowOf("valuation", "loanPrincipal")}:$E$${rowOf("valuation", "loanPrincipal")},${S("deal")}$C$${rowOf("deal", "seniorLoan")})` };
   if (model.scenarios && has("assumptions")) {
     const g = (c: string) => `${S("assumptions")}$${c}$${rowOf("assumptions", "scenarioGrowth")}`;

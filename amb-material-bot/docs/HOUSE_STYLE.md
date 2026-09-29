@@ -855,10 +855,10 @@ One row per adjustment. Every ladder row on `Adj. EBITDA` sums from here; nothin
 | B | Ref | Formula-numbered by tier: `="["&CHOOSE(MATCH(D8,{"Definitional","Normalization","Owner compensation","Pro forma","Memo"},0),"D","N","S","PF","M")&COUNTIF($D$8:D8,D8)&"]"` (or an equivalent that `verifyWorkbook` can evaluate). Inserting a row renumbers every ref (Keep: CPM hidden-counter bracket numbering) |
 | C | Adjustment | Client-grade label without sign prefix ("Owner vehicle and phone") |
 | D | Tier | `Definitional` / `Normalization` / `Owner compensation` / `Pro forma` / `Memo` |
-| E | Category | `Interest`, `Taxes`, `D&A`, `Personal / discretionary`, `Non-recurring`, `Non-operating`, `Accounting (cash to accrual, out of period)`, `Related-party (rent to market)`, `Owner compensation`, `Replacement cost`, `Run-rate`, `Other consideration` |
+| E | Category | `Interest`, `Taxes`, `D&A`, `Personal / discretionary`, `Non-recurring`, `Non-operating`, `Accounting (cash to accrual, out of period)`, `Related-party (rent to market)`, `Owner compensation`, `Replacement cost`, `Capital reserve` (Main Street `[S3]`), `Run-rate`, `Other consideration` |
 | F | Basis | One sentence: mechanism → quantum → source ("Removes the owner's personal vehicle lease and fuel, $18K in FY2025, per general ledger detail.") (Keep: TPL definitions panel style) |
 | G | Source document | "GL detail, account 6420"; "Seller add-back list"; "Lease agreement" |
-| H | Evidence | `Documented` / `Management representation` |
+| H | Evidence | `Documented` / `Management representation` / `To be requested` (only for a row computed from documented figures whose own document is still to come, such as `[S4]` at statutory rates, or a bot-flagged row at zero; it is footnoted in the CIM and listed in `open-questions.md`) |
 | I | Status | `Proposed` / `Supported` / `Accepted` / `Excluded` |
 | J | In CIM | `=I="Accepted"` |
 | K | P&L line | For pro forma rows: the P&L line the adjustment adjusts (feeds the PF column) |
@@ -872,6 +872,7 @@ One row per adjustment. Every ladder row on `Adj. EBITDA` sums from here; nothin
 | Source | Tier / category | Status on creation |
 |---|---|---|
 | Interest, taxes, D&A from the P&L | Definitional | Accepted |
+| Interest income read off the P&L | Normalization / Non-operating | Accepted, Evidence `Documented`: the amount is the P&L account itself, as for the definitional rows (QA round 2 F15) |
 | `addbacks.csv` `type = owner` | Owner compensation | Proposed |
 | `addbacks.csv` `type = discretionary` | Normalization / Personal / discretionary | Proposed |
 | `addbacks.csv` `type = non_recurring` | Normalization / Non-recurring | Proposed |
@@ -879,6 +880,8 @@ One row per adjustment. Every ladder row on `Adj. EBITDA` sums from here; nothin
 | Bot-flagged likely add-backs (`merge.ts` suggestions) | Normalization | Proposed, amount 0 until an advisor enters it |
 | `owner_comp` category, all periods | Owner compensation `[S1]` (add back) | Accepted |
 | `owner_replacement_salary` (REQ, default $85,000) × (1 + burden, default 15%) | Owner compensation `[S2]` (deduct) | Accepted |
+| Capital reserve, Main Street mode (Form 4562, else the three-year average of D&A as a proxy) | Owner compensation `[S3]` / Capital reserve (deduct) | Accepted |
+| Employer payroll taxes on `[S1]`: the payroll register's employer costs, else federal statutory rates on the `[S1]` salary (a formula on `[S1]` and the rates on `Assumptions`) | Owner compensation `[S4]`, summed into the `[S1]` rung | Accepted when `[S1]` is documented, else Proposed |
 | Run-rate items (price increase, contracted wins or losses, roster changes, market rent) | Pro forma | Proposed |
 
 The 15% burden default follows TPL's "payroll taxes and benefits of 15%". Both it and the $85,000 are blue inputs on `Assumptions` with source "AMB default; confirm" (Q8).
@@ -1169,7 +1172,7 @@ Zero is always an en dash. Negatives are always parentheses, never red. `n.m.`, 
 **Print setup, every output tab**
 
 - Print area `B2:<last column><last row>` (multi-range where one tab holds several exhibits, Keep: CORAL).
-- Landscape when the tab has more than 8 value columns, otherwise portrait. Fit to 1 page wide, as many tall as needed (`fitToHeight = 0`). Exceptions: `Monthly P&L` fits 1 tall × N wide with column breaks every 12 months (5.2); chart tabs are always landscape, two exhibits per page (5.12); `Offer Comparison` and `Sensitivities` obey their scale floors (5.5).
+- Landscape when the tab has more than 8 value columns, otherwise portrait. Fit to 1 page wide, as many tall as needed (`fitToHeight = 0`). Exceptions: `Monthly P&L` fits 1 tall × N wide with column breaks every 12 months (5.2); chart tabs are always landscape, two exhibits per page (5.12); `Offer Comparison` and `Sensitivities` obey their scale floors (5.5). Tabs whose width is text rather than value columns (`Debt-Like Items`, `Deal Structure`, `Checks`: a Source, Note or Check column of 30 to 80 characters) print landscape, since portrait would scale their text under the 7 pt floor that C37 enforces (QA round 2 F16).
 - Print titles: rows 5:6 on period tabs; **rows 2:6** on tabs that carry LTM strips or several print ranges, so each page opens with the title, subtitle and both header tiers (Keep: V51 `Expense Analysis` repeats $2:$6 across two print ranges; `Client Retention` repeats $2:$4 because each block carries its own header row; no AMB tab repeats rows 5:6 alone); rows 5:6 **and column B** on `Monthly P&L` (New: no AMB tab repeats a column); rows 2:3 on chart tabs (5.12); rows 2:4 on `Sensitivities` (Keep: V51).
 - Margins (in): left and right 0.50, top 0.60, bottom 0.70, header and footer 0.30. Centre horizontally.
 - Footer: left `AMB Advisory Services | Strictly confidential`, centre `&A`, right `Page &P of &N`. Header: right `<code_name> | As of <mm/dd/yy>` written as static text by the bot (New: no AMB or TCC tab has headers or footers: R-MOD §6.5, R-TPL §7.8).

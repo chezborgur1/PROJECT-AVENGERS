@@ -152,11 +152,14 @@ export function planPnlSummary(ctx: TabContext): SheetBuilder {
       b.formula(checkRow, col, `${addr(b.r("net_income"), col)}-${S("monthly")}${colLetter(col)}${rowOf("monthly", "net_income")}`, { style: "check", fmt: FMT.check, expect: 0, tol: 1e-6, label: "C04" });
     }
     b.checkCf(checkRow, l.firstCol, l.lastValueCol);
-    // C03: every dollar line against the grid's own period block, which is the SUMIFS of the months for the same window.
-    b.text(linesCheckRow, 2, "Check: every line less Monthly P&L", { style: "check" });
+    // C03: every dollar line against the grid recomputed another way, a SUMPRODUCT of the months inside the window, so a
+    // wrong window, row or criterion in the SUMIFS shows (the grid's own period block is the same SUMIFS and could not fail).
+    b.text(linesCheckRow, 2, "Check: every line less the grid's months in its window", { style: "check" });
     const dollarRows = rows.filter((x) => !["section", "spacer", "margin", "ratio"].includes(x.kind));
     for (const { col } of l.cols) {
-      const terms = dollarRows.map((x) => `ABS(${addr(b.r(x.key), col)}-${S("monthly")}${colLetter(col)}${rowOf("monthly", x.key)})`);
+      const inWindow = `--(${monthlyHeader}>=${addr(helpers.start, col, { row: true })}),--(${monthlyHeader}<=${addr(helpers.end, col, { row: true })})`;
+      const gridKey = (x: (typeof rows)[number]) => (x.account ? `rev:${x.account}` : x.contra ? "rev_contra" : x.key);
+      const terms = dollarRows.map((x) => `ABS(${addr(b.r(x.key), col)}-SUMPRODUCT(${inWindow},${monthlyRow(gridKey(x))}))`);
       b.formula(linesCheckRow, col, terms.join("+"), { style: "check", fmt: FMT.check, expect: 0, tol: 1e-6, label: "C03" });
     }
     b.checkCf(linesCheckRow, l.firstCol, l.lastValueCol);
@@ -186,7 +189,7 @@ export function planPnlSummary(ctx: TabContext): SheetBuilder {
 }
 
 /** Width of a Basis column printed as its own range (the ladder, the P&L Summary): the page holds it beside the labels at full scale. */
-const BASIS_APART = 80;
+const BASIS_APART = 85;
 
 /**
  * The Basis cell of a P&L Summary line: the source accounts it sums (from the
@@ -347,7 +350,7 @@ function writeScenarioCells(b: SheetBuilder, r: number, spec: ReturnType<typeof 
     const mk = spec.category ? methodKey[spec.category] : undefined;
     if (mk) {
       const method = `${S("assumptions")}$${colLetter(3 + i)}$${rowOf("assumptions", mk)}`;
-      const f = `IF(${method}="Latest year",${latest},IF(${method}="3-year average",AVERAGE(${fyRange(spec.key)}),IF(${method}="% of sales, 3-year blended",SUM(${fyRange(spec.key)})/SUM(${fyRange("revenue")})*${at("revenue")},${latest})))`;
+      const f = `IF(${method}="Latest year",${latest},IF(${method}="3-year average",AVERAGE(${fyRange(spec.key)}),IF(${method}="% of sales, 3-year blended",SUM(${fyRange(spec.key)})/SUM(${fyRange("revenue")})*${at("revenue")},IF(${method}="% of sales, latest year",${latest}/${addr(b.r("revenue"), latestCol)}*${at("revenue")},${latest}))))`;
       b.formula(r, col, f, { style: vs.style, fmt: vs.fmt, expect: spec.value!(values) / K, label: `${spec.key} ${sc.name}` });
       // The notes column carries the Mid case's method (guide 5.2A column K).
       const midMethod = sc.name === "Mid" ? sc.methods[spec.category as string] : undefined;
@@ -772,6 +775,15 @@ export function planAdjustments(ctx: TabContext): SheetBuilder {
   const series = model.monthly?.series;
   const latestFy = fyCols[fyCols.length - 1]?.column.fiscalYear;
 
+  // A fiscal year of employer payroll taxes at statutory rates, on the salary row's same fiscal year: Social Security to the
+  // year's wage base, Medicare on all of it, FUTA on the first $7,000, in whole dollars as the engine rounds them.
+  const statutoryTaxes = (row: Adjustment, fy: number, col: number): string | undefined => {
+    const salary = row.statutoryTaxesOn ? adj.findIndex((y) => y.row.ref === row.statutoryTaxesOn) : -1;
+    if (salary < 0) return undefined;
+    const pay = `${addr(first + salary, col)}*${K}`;
+    return `ROUND(MIN(${pay},${A(`taxSsBase_${fy}`)})*${A("taxSocialSecurity")}+${pay}*${A("taxMedicare")}+MIN(${pay},${A("taxFutaBase")})*${A("taxFuta")},0)/${K}`;
+  };
+
   adj.forEach((x, idx) => {
     const r = first + idx;
     const row = x.row;
@@ -823,6 +835,11 @@ export function planAdjustments(ctx: TabContext): SheetBuilder {
       const engine = (x.byColumn[key] ?? 0) / K;
       if (isPf && !isPfColumn) {
         b.na(r, col, "n.a.", { style: "line" });
+        continue;
+      }
+      const taxes = column.ref.kind === "fiscal_year" ? statutoryTaxes(row, column.fiscalYear!, col) : undefined;
+      if (taxes && (allocation || !hasMonths)) {
+        b.formula(r, col, taxes, { fmt: FMT.body, expect: engine, label: `${row.ref} ${column.label} (statutory)` });
         continue;
       }
       if (allocation && (column.ref.kind === "fiscal_year" || (column.ref.kind === "ytd" && !column.priorYear && row.stub === "amount"))) {

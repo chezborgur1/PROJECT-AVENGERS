@@ -8,14 +8,18 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildContext, standardNote } from "../src/cim/context.ts";
 import { lintCopy } from "../src/cim/copy.ts";
-import { notesLineCount } from "../src/cim/design.ts";
-import { labelConflicts, mixedUnits, planDeck, type PlannedPage } from "../src/cim/planner.ts";
+import { commentaryDensity, exhibitCounts, labelConflicts, mixedUnits, narrowTables, planDeck, STANDARD_FILL, type PlannedPage } from "../src/cim/planner.ts";
 import { fitNotes } from "../src/cim/sections/common.ts";
 import type { CustomerRecord } from "../src/domain/financials.ts";
 import { partialYearNote } from "../src/ingest/quickbooksExport.ts";
 import { countRollForward, customerAnalytics, customerActiveAt } from "../src/model/analytics.ts";
 import { defaultAssumptions } from "../src/model/assumptions.ts";
-import { costStructure } from "../src/cim/exhibits.ts";
+import { costShiftChart, costStructure, incomeStatement } from "../src/cim/exhibits.ts";
+import { accountLabel } from "../src/cim/brief.ts";
+import { keepMarker, notesLineCount, type Block } from "../src/cim/design.ts";
+import { S11 as appendix } from "../src/cim/sections/appendix.ts";
+import { bsDetailLine, debtLikeTreatment } from "../src/domain/chartOfAccounts.ts";
+import { nwcLines } from "../src/model/nwc.ts";
 import { formationOf, formationText } from "../src/model/exportTotals.ts";
 import { runModel } from "../src/model/engine.ts";
 import { planWorkbook } from "../src/model/workbook.ts";
@@ -233,5 +237,226 @@ describe("units in a fact table (F24)", () => {
     const copy = JSON.parse(fs.readFileSync(path.join(REPO, "samples/project-ridgeline/cim-copy.fixture.json"), "utf8")).copy;
     const ctx = buildContext({ row, ds, out, copy, firm: { name: "AMB", contact: "", email: "", phone: "" }, date: new Date("2026-09-29") });
     expect(mixedUnits(planDeck(ctx).pages)).toEqual([]);
+  });
+});
+
+describe("the Ridgeline deck's exhibits (F23, F25, F27, F29)", () => {
+  const planned = () => {
+    const { ds, out } = model();
+    const copy = JSON.parse(fs.readFileSync(path.join(REPO, "samples/project-ridgeline/cim-copy.fixture.json"), "utf8")).copy;
+    const ctx = buildContext({ row, ds, out, copy, firm: { name: "AMB", contact: "", email: "", phone: "" }, date: new Date("2026-09-29") });
+    return { ctx, plan: planDeck(ctx) };
+  };
+  const blocksOf = (p: PlannedPage) => (p.layout?.placed ?? []).map((x) => x.block);
+
+  it("calls the depreciation-proxy reserve an AMB estimate, with its footnote on the ladder and the support page", () => {
+    const { plan } = planned();
+    const page = (id: string) => plan.pages.find((p) => p.draft.id === id)!;
+    const support = blocksOf(page("S7.2")).find((b) => b.kind === "textTable" && b.header?.title === "Adjustment support") as { spec: { rows: unknown[][] } };
+    const s3 = support.spec.rows.find((r) => r[0] === "[S3]")!;
+    expect(s3.at(-1)).toBe("AMB estimate (proxy: three-year average depreciation; Form 4562 requested) (2)");
+    expect(page("S7.2").layout!.spec.notes.footnotes).toContain("[S3] is an AMB estimate (three-year average depreciation) until Form 4562 is provided.");
+    expect(page("S7.1").layout!.spec.notes.footnotes).toContain("[S3] is an AMB estimate (three-year average depreciation) until Form 4562 is provided.");
+  });
+
+  it("builds no column from placeholders alone, and lists each column left out as a question", () => {
+    const { ctx, plan } = planned();
+    const tables = plan.pages.flatMap(blocksOf).filter((b) => b.kind === "textTable") as { header?: { title: string }; spec: { head?: string[]; rows: unknown[][] } }[];
+    for (const t of tables) {
+      // A headerless table (the contact block) is checked column by column all the same.
+      (t.spec.head ?? t.spec.rows[0]!.map((_, i) => `column ${i + 1}`)).forEach((h, i) => {
+        const cells = t.spec.rows.map((r) => String(r[i] ?? ""));
+        expect(cells.every((c) => /^\[Confirm:/.test(c)), `${t.header?.title}: ${h}`).toBe(false);
+      });
+    }
+    const service = tables.find((t) => t.header?.title === "Service lines")!;
+    expect(service.spec.head).not.toContain("Pricing basis");
+    expect(ctx.openQuestions.some((q) => /pricing basis of each service line/.test(q))).toBe(true);
+    const owner = tables.find((t) => t.header?.title === "Owner responsibilities and transition")!;
+    expect(owner.spec.head).toEqual(["Responsibility", "Transition support", "Obs."]);
+    expect(ctx.openQuestions.some((q) => /Who assumes each of the owner's duties/.test(q))).toBe(true);
+  });
+
+  it("fills every body page to the 80% floor, which the plan reports when a page falls short (F26)", () => {
+    const { plan } = planned();
+    const body = plan.pages.filter((p) => /^S[2-9]\./.test(p.draft.id));
+    expect(body.length).toBeGreaterThan(10);
+    for (const p of body) expect(p.layout!.fill, p.draft.id).toBeGreaterThanOrEqual(STANDARD_FILL);
+    expect(commentaryDensity(plan.pages).filter((w) => /floor for a body page/.test(w))).toEqual([]);
+    const thin = { ...body[0]!, layout: { ...body[0]!.layout!, fill: 0.6 } } as PlannedPage;
+    expect(commentaryDensity([thin]).some((w) => /fill 60% is below the 80% floor/.test(w))).toBe(true);
+  });
+
+  it("leads the people page with run-in paragraphs built from the notes' facts, the tables beside them (F28)", () => {
+    const { ctx, plan } = planned();
+    const page = plan.pages.find((p) => p.draft.id === "S5.1")!;
+    const prose = blocksOf(page).find((b) => b.kind === "prose") as { paragraphs: { lead?: string; body: string }[] };
+    expect(prose.paragraphs.map((p) => p.lead)).toEqual(["Staffing.", "The owner’s role.", "Fleet and systems.", "Suppliers and reputation.", "Customers."]);
+    const text = prose.paragraphs.map((p) => p.body).join(" ");
+    const words = text.split(/\s+/).length;
+    expect(words).toBeGreaterThan(130);
+    // Every fact is the notes' own, with its casing: no invented cause, no mangled acronym.
+    expect(text).toContain("CSR / dispatch 3");
+    expect(text).toContain("Carrier (local distributor) for HVAC equipment");
+    expect(text).toContain("its Google rating is 4.8 from 900+ reviews");
+    expect(text).toContain(`${ctx.intake!.owner.name} will support the transition for up to 12 months after closing (1)`);
+    expect(blocksOf(page).map((b) => ("header" in b && b.kind !== "observations" ? b.header?.title : b.kind))).toEqual(["prose", "Organization and tenure", "Compensation by department", "Headcount roll-forward", "observations"]);
+  });
+
+  it("keeps every content page to three exhibits, the milestones read as a paragraph where a fourth table would sit (F39)", () => {
+    const { ctx, plan } = planned();
+    expect(exhibitCounts(plan.pages)).toEqual([]);
+    const s22 = plan.pages.find((p) => p.draft.id === "S2.2")!;
+    const history = blocksOf(s22).find((b) => b.kind === "prose") as { paragraphs: { lead?: string; body: string }[] };
+    expect(history.paragraphs[0]).toEqual({ lead: "History.", body: "Founded by Mark Delaney in 2009; became a Carrier Factory Authorized Dealer in 2015; added plumbing service in 2019 (1)." });
+    // A suppliers table, where one prints, is titled by what it holds; the missing contractor license is asked for.
+    expect(ctx.openQuestions.some((q) => /^Contractor licenses/.test(q))).toBe(true);
+  });
+
+  it("lays out the process with its own Target timing column, the contact block headerless, the no-contact line verbatim (F40)", () => {
+    const { plan } = planned();
+    const page = plan.pages.find((p) => p.draft.id === "S10.1")!;
+    const tables = blocksOf(page).filter((b) => b.kind === "textTable") as { header?: { title: string }; spec: { head?: string[]; rows: string[][] } }[];
+    const process = tables.find((t) => t.header?.title === "Process and next steps")!;
+    expect(process.spec.head).toEqual(["#", "Stage", "What happens", "Target timing"]);
+    expect(process.spec.rows.find((r) => r[1] === "Due Diligence")![3]).toBe("LOI + 9–11 weeks");
+    for (const r of process.spec.rows) expect(r[2]).not.toMatch(/Target:/);
+    const contact = tables.find((t) => t.header?.title === "Contact")!;
+    expect(contact.spec.head).toBeUndefined();
+    expect(contact.spec.rows[0]).toEqual(["Firm", "AMB Advisory Services LLC"]);
+    const prose = blocksOf(page).find((b) => b.kind === "prose") as { paragraphs: { body: string }[] };
+    expect(prose.paragraphs.map((p) => p.body).join(" ")).toContain("All inquiries should be directed to AMB Advisory. Do not contact the Seller or its employees directly.");
+  });
+
+  it("footnotes the intake-sourced real estate row like every other term (F42)", () => {
+    const { plan } = planned();
+    const rows = plan.pages.flatMap((p) => blocksOf(p)).flatMap((b) => (b.kind === "textTable" ? (b.spec.rows as unknown[][]) : []));
+    const realEstate = rows.find((r) => r[0] === "Real estate")!;
+    expect(String(realEstate[1])).toMatch(/\(1\)\.$/);
+  });
+
+  it("sets every table to its block and every chart at 2.60 in or taller", () => {
+    const { plan } = planned();
+    expect(narrowTables(plan.pages)).toEqual([]);
+    // The chart's own height (a chart left at the default is 2.60 in); the placed box adds its header.
+    for (const p of plan.pages) for (const x of p.layout?.placed ?? []) if (x.block.kind === "chart") expect(x.block.h ?? 2.6, `${p.draft.id} ${x.block.header?.title}`).toBeGreaterThanOrEqual(2.6);
+  });
+});
+
+describe("cost table order, labels and small-line growth (F34, F35, F36)", () => {
+  const ctxOf = () => {
+    const { ds, out } = model();
+    return buildContext({ row, ds, out, copy: { open_questions: [] }, firm: { name: "AMB", contact: "", email: "", phone: "" }, date: new Date("2026-09-29") });
+  };
+  type Table = Extract<Block, { kind: "numTable" }>;
+
+  it("names a generic sub-account by its parent: payroll taxes never read as income tax", () => {
+    expect(accountLabel("Payroll Expenses : Taxes")).toBe("Payroll taxes");
+    expect(accountLabel("Payroll Expenses : Technician Wages")).toBe("Technician wages");
+    expect(accountLabel("Taxes")).toBe("Taxes");
+  });
+
+  it("lists the operating lines by latest share with the remainder last, and names the adjustment an account carries", () => {
+    // Ingest records the account the settlement came out of, as it does from the sample folder's adjustments.csv.
+    const ds = ridgelineDataset();
+    ds.adjustments = ds.adjustments!.map((a) => (a.description.startsWith("Legal fees") ? { ...a, accounts: ["Legal & Professional Fees"] } : a));
+    const out = runModel(ds, defaultAssumptions(ds, row));
+    const ctx = buildContext({ row, ds, out, copy: { open_questions: [] }, firm: { name: "AMB", contact: "", email: "", phone: "" }, date: new Date("2026-09-29") });
+    const table = costStructure(ctx, 7) as Table;
+    const rows = table.spec.rows;
+    const lines = rows.slice(rows.findIndex((r) => r.key === "cost.owner") + 1, rows.findIndex((r) => r.key === "cost.opex"));
+    const ranked = lines.filter((r) => r.key !== "cost.other");
+    const latest = (r: (typeof rows)[number]) => Number(r.vals![2]!.replace("%", ""));
+    expect(ranked.length).toBeGreaterThan(4);
+    expect(ranked.map(latest)).toEqual([...ranked.map(latest)].sort((a, b) => b - a));
+    if (lines.some((r) => r.key === "cost.other")) expect(lines.at(-1)!.key).toBe("cost.other");
+    expect(rows.map((r) => r.label)).toContain("Payroll taxes");
+    expect(rows.find((r) => r.label === "Legal and professional fees")?.text).toBe("Adjusted in [N2] ({{page:S7.1}})");
+  });
+
+  it("heads the change column in one line and carries its span in the units, which the chart beside it reads", () => {
+    const table = costStructure(ctxOf(), 7) as Table;
+    expect(table.spec.cols.filter((c) => c.kind === "num").at(-1)!.head).toBe("Δ bps");
+    expect(table.header!.units).toBe("(% of revenue; Δ FY23–FY25)");
+    const chart = costShiftChart(table) as Extract<Block, { kind: "chart" }>;
+    expect(chart.header!.units).toBe("(bps, FY23–FY25)");
+  });
+
+  it("prints n.m. for the growth of an immaterial line, as the ladder does", () => {
+    const table = incomeStatement(ctxOf(), 7) as Table;
+    const other = table.spec.rows.find((r) => r.key === "is.other")!;
+    // $1.2K to $3.1K of interest income less interest expense is no growth rate, whatever its sign.
+    expect(other.vals!.slice(-2)).toEqual(["n.m.", "n.m."]);
+    const revenue = table.spec.rows.find((r) => r.key === "rev.total" || r.label === "Total revenue")!;
+    expect(revenue.vals!.slice(-2).every((v) => /%$/.test(v))).toBe(true);
+  });
+
+  it("ties a trailing footnote marker to the word before it, so a wrap never strands it", () => {
+    expect(keepMarker("(–) Market replacement compensation (2)")).toBe("(–) Market replacement compensation (2)");
+    expect(keepMarker("Adj. EBITDA")).toBe("Adj. EBITDA");
+  });
+});
+
+describe("basis of preparation (F42, F43)", () => {
+  const ctxAt = (date: string) => {
+    const { ds, out } = model();
+    return buildContext({ row, ds, out, copy: { open_questions: [] }, firm: { name: "AMB", contact: "", email: "", phone: "" }, date: new Date(date) });
+  };
+  const noteOf = (date: string) => appendix.pages.find((p) => p.id === "S11.1")!.build(ctxAt(date))[0]!.spec!.notes.note ?? "";
+
+  it("says the months after the latest figures are not included when the deck is dated long after them", () => {
+    expect(noteOf("2026-09-29")).toContain("Results after Dec-25, including 2026 year to date, are not included and have been requested from the Seller.");
+    expect(noteOf("2026-02-15")).not.toContain("Results after");
+  });
+
+  it("names every source period as the tables do", () => {
+    const page = appendix.pages.find((p) => p.id === "S11.1")!.build(ctxAt("2026-09-29"))[0]!;
+    const sources = page.spec!.rows.flatMap((r) => r.columns.flatMap((c) => c.blocks)).find((b) => b.kind === "textTable" && b.header?.title === "Sources") as { spec: { rows: string[][] } };
+    const period = (name: string) => sources.spec.rows.find((r) => r[0] === name)![1];
+    expect(period("Balance sheets")).toBe("Dec-23, Dec-24, Dec-25");
+    expect(period("Bank statements")).toMatch(/^[A-Z][a-z]{2}-\d{2} to [A-Z][a-z]{2}-\d{2}$/);
+  });
+});
+
+describe("debt-like balances leave NWC by the same list (F54)", () => {
+  const OCL = "Liabilities and Equity > Liabilities > Current Liabilities > Other Current Liabilities";
+
+  it("classes an accrued bonus or payroll tax payable as debt-like, and NWC removes it", () => {
+    for (const name of ["Payroll Taxes Payable", "Accrued Bonus"]) {
+      expect(bsDetailLine(name, OCL, "other_current_liabilities")).toBe("accrued_bonus_payroll_tax");
+      expect(debtLikeTreatment(name, "other_current_liabilities", OCL)?.treatment).toBe("debt_like");
+    }
+    expect(debtLikeTreatment("Accrued Payroll", "other_current_liabilities", OCL)?.treatment).toBe("nwc");
+    const { ds } = model();
+    const p = ds.balanceSheets!.at(-1)!;
+    const base = nwcLines(p, undefined).lines;
+    const withBonus = nwcLines({ ...p, detail: { ...p.detail, accrued_bonus_payroll_tax: 10_000 } }, undefined).lines;
+    expect(withBonus.adjustments - base.adjustments).toBe(10_000);
+  });
+
+  it("fails C19 when a debt-like balance is deducted while NWC still carries it", () => {
+    const { ds } = model();
+    const asOf = ds.balanceSheets!.at(-1)!.asOf;
+    const bonus = { item: "Accrued bonus", balance: 10_000, asOf, treatment: "debt_like" as const, accounts: ["Accrued Bonus"], source: "bs.csv", status: "confirmed" as const };
+    const twice = { ...ds, debtLikeItems: [...ds.debtLikeItems!, bonus] };
+    expect(runModel(twice, defaultAssumptions(twice, row)).checks.find((c) => c.id === "C19")).toMatchObject({ status: "CHECK", difference: 10_000 });
+    const sheets = ds.balanceSheets!.map((b, i, all) => (i === all.length - 1 ? { ...b, detail: { ...b.detail, accrued_bonus_payroll_tax: 10_000 } } : b));
+    const once = { ...twice, balanceSheets: sheets };
+    expect(runModel(once, defaultAssumptions(once, row)).checks.find((c) => c.id === "C19")!.status).toBe("OK");
+  });
+});
+
+describe("the Databook's Personal? and ref columns (F15)", () => {
+  it("writes every ref an account feeds, the definitional rows included, and flags only personal or discretionary accounts", () => {
+    const { out } = model();
+    const row = (account: string) => out.databook!.pnl.find((r) => r.account === account)!;
+    expect(row("Depreciation Expense").adjustmentRef).toBe("D3, S3");
+    expect(row("Interest Expense").adjustmentRef).toBe("D1");
+    expect(row("Interest Income").adjustmentRef).toBe("N5");
+    expect(row("Legal & Professional Fees").adjustmentRef).toMatch(/^N2\b/);
+    // A one-time legal fee is non-recurring, not personal; meals and the vehicle are the owner-personal flags.
+    expect(row("Legal & Professional Fees").personal).toBe(false);
+    expect(row("Meals & Entertainment").personal).toBe(true);
+    expect(row("Vehicle Expenses").personal).toBe(true);
   });
 });

@@ -499,7 +499,7 @@ function buildAdjustments(accountMonthly: Map<string, Record<MonthKey, number>>)
       tier: "owner_compensation",
       description: "Payroll taxes and benefits on owner compensation",
       category: "owner_compensation",
-      basis: "Adds back employer payroll taxes on Mark Delaney's salary, $13.9K in FY2025, at statutory rates (Social Security 6.2% to the $176,100 wage base, Medicare 1.45%, federal unemployment on $7,000); the P&L carries them in the payroll line. State unemployment and owner benefits are not included.",
+      basis: "Adds back employer payroll taxes on Mark Delaney's salary at statutory rates, $13.9K in FY2025 (Social Security to the $176,100 wage base, Medicare, federal unemployment); the P&L carries them in payroll. Owner benefits and state unemployment are not included.",
       sourceDocument: "Statutory rates on the P&L Payroll Expenses : Officer Compensation account; payroll register employer detail to be requested",
       evidence: "pending",
       status: "accepted",
@@ -508,6 +508,8 @@ function buildAdjustments(accountMonthly: Map<string, Record<MonthKey, number>>)
       accounts: ["Payroll Expenses : Officer Compensation"],
       origin: "suggested",
       sourceFile: PNL_FILE,
+      // Computed at statutory rates on [S1], so the workbook writes it as a formula on [S1] (QA round 2 F12).
+      statutoryTaxesOn: "S1",
     },
     {
       tier: "memo",
@@ -1173,7 +1175,7 @@ export function ridgelineDataset(): FinancialDataset {
       replacementSalary: REPLACEMENT_SALARY,
       replacementSalarySource: "Request list owner_replacement_salary; intake notes: market salary for a general manager roughly $95,000",
       burdenPct: BURDEN_PCT,
-      burdenSource: "AMB default 15% (guide 5.3, Q8); confirm",
+      burdenSource: "AMB default 15% for payroll taxes and benefits; confirm with the Seller",
       capitalReserve: { amount: CAPITAL_RESERVE, basis: "da_proxy", source: "Three-year average of depreciation expense FY2023–FY2025; proxy because no Form 4562 is in the sources" },
       owners: [{ name: "Mark Delaney", role: "Owner / general manager", compensationByFiscalYear: byYear([180_000, 190_000, 200_000]) }],
     },

@@ -462,6 +462,8 @@ export const BS_DETAIL_LINES = [
   "related_party_balances",
   "accrued_interest",
   "income_tax_payable",
+  /** Accrued bonuses and unpaid payroll taxes, inside other current liabilities: debt-like, so removed from NWC (QA round 2 F54). */
+  "accrued_bonus_payroll_tax",
   /** Due from a shareholder or related party, inside other current assets (removed from NWC, which lowers it). */
   "related_party_receivable",
 ] as const;
@@ -552,6 +554,7 @@ export const PF_METHODS = [
   "Market rate",
   "3-year average",
   "Latest year",
+  "% of sales, latest year",
   "% of sales, 3-year blended",
 ] as const;
 export type PfMethod = (typeof PF_METHODS)[number];
@@ -590,6 +593,13 @@ export interface Adjustment {
   origin: AdjustmentOrigin;
   /** File the row was built from, when there is one. */
   sourceFile?: string;
+  /**
+   * The ref of the salary row ("S1") whose employer payroll taxes at federal
+   * statutory rates this row is, so the workbook writes each fiscal year as a
+   * formula on that row and the Assumptions rates. Absent when the amounts
+   * come from a payroll register or the advisor's file.
+   */
+  statutoryTaxesOn?: string;
   /** P&L accounts (as exported) whose months the row's `byMonth` follows, so the workbook can write each month as a proportion of them. */
   accounts?: string[];
   /**

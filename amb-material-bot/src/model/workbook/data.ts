@@ -396,6 +396,9 @@ export function writeDeltas(b: SheetBuilder, r: number, l: PeriodLayout, kind: P
 
 // --- Databook -----------------------------------------------------------------------------------
 
+/** The schedule refs an account feeds, each bracketed: "D3, S3" prints "[D3] [S3]". */
+const refsText = (refs: string | undefined): string => (refs ? refs.split(", ").map((r) => `[${r}]`).join(" ") : "");
+
 /**
  * Databook columns other tabs read. The mapping columns are guide 5.2's
  * (Account | Source | AMB Category | Summary Line | Personal? | Adjustment
@@ -494,7 +497,7 @@ export function planDatabook(ctx: TabContext): SheetBuilder {
   const latestOf = (byPeriod: Record<string, number>) => (n ? latestMonths.reduce((s, { m }) => s + (byPeriod[m] ?? 0), 0) : (byPeriod[String(latestFy)] ?? 0));
   rows.forEach((row, i) => {
     const r = firstRow + i;
-    [row.account, SOURCE_LABELS[row.source], row.category, row.summaryLine, row.personal ? "Personal?" : "", row.adjustmentRef ? `[${row.adjustmentRef}]` : ""].forEach((v, k) => b.text(r, 2 + k, v));
+    [row.account, SOURCE_LABELS[row.source], row.category, row.summaryLine, row.personal ? "Personal?" : "", refsText(row.adjustmentRef)].forEach((v, k) => b.text(r, 2 + k, v));
     if (n) months.forEach((m, k) => b.num(r, MONTH_START + k, cents(row.byMonth?.[m] ?? 0), { fmt: FMT.body }));
     else fyCols.forEach(({ c, col }) => b.num(r, col, cents(row.byFiscalYear[c.fiscalYear!] ?? 0), { fmt: FMT.body }));
     pnlTie(r, 4 + i, latestOfRow(row), row.account);
@@ -718,7 +721,7 @@ export function planMapping(ctx: TabContext): SheetBuilder {
   };
   for (const row of model.databook?.pnl ?? []) {
     groupRow("P&L", row.source, row.file);
-    put([row.account, row.section ?? "", IS_LABELS[row.category], row.summaryLine, row.personal ? "Personal?" : "", row.adjustmentRef ? `[${row.adjustmentRef}]` : "", row.mappedBy === "override" ? "Override" : row.mappedBy]);
+    put([row.account, row.section ?? "", IS_LABELS[row.category], row.summaryLine, row.personal ? "Personal?" : "", refsText(row.adjustmentRef), row.mappedBy === "override" ? "Override" : row.mappedBy]);
     if (row.mappedBy === "default") b.cell(r, mappedByCol, { fill: COLOR.section });
     r++;
   }
