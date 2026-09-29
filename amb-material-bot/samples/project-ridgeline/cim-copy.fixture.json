@@ -4,7 +4,7 @@
   "copy": {
     "s1_1": {
       "title": "FY2025 Adj. EBITDA was {{adjEbitda.latest}}, a {{adjMargin.latest}} margin on {{rev.latest}} of revenue, after a {{s3.latest}} capital reserve",
-      "overview": "Ridgeline Comfort Services LLC (\"Ridgeline\" or the \"Company\") provides residential and light-commercial HVAC service, replacement and maintenance, plus plumbing service since 2019, from Columbus, Ohio, across Franklin, Delaware and Licking counties. Mark Delaney founded the Company in {{company.founded}} and owns it. It employs {{hc.total}} people besides the owner, {{hc.field}} in the field, and has {{kpi.maintenance_members}} maintenance-agreement members (1). FY2025 revenue of {{rev.latest}} was {{line.residential.share0.FY2025}} residential, {{line.commercial.share0.FY2025}} commercial and {{line.maintenance.share0.FY2025}} maintenance agreements; the {{cust.count}} listed commercial accounts were {{cust.codedShare}} of it, the largest {{cust.largestShare}}. The owner is selling to retire at {{owner.age}} and will stay up to {{owner.transitionMonths}} months after closing (1).",
+      "overview": "Ridgeline Comfort Services LLC (\"Ridgeline\" or the \"Company\") provides residential and light-commercial HVAC service, replacement and maintenance, plus plumbing service since 2019, from Columbus, Ohio, across Franklin, Delaware and Licking counties. Mark Delaney founded the Company in {{company.founded}} and owns it. It employs {{hc.total}} people besides the owner, {{hc.field}} in the field, and has {{kpi.maintenance_members}} maintenance-agreement members {{fn.mgmt}}. Before discounts, FY2025 revenue of {{rev.latest}} was {{line.residential.share0.FY2025}} residential, {{line.commercial.share0.FY2025}} commercial and {{line.maintenance.share0.FY2025}} maintenance agreements; the {{cust.billedCount}} listed commercial accounts billed in FY2025 were {{cust.codedShare}} of it, the largest {{cust.largestShare}}. The owner is selling to retire at {{owner.age}} and will stay up to {{owner.transitionMonths}} months after closing {{fn.mgmt}}.",
       "observations": [
         {
           "row": "qs.revenue",
@@ -19,7 +19,7 @@
         {
           "row": "qs.adj",
           "lead": "Adj. EBITDA margin moved {{adjMargin.delta}} to {{adjMargin.latest}}",
-          "body": "since FY2023 because operating expenses grew {{opex.cagr}} a year against revenue growth of {{rev.cagr}} a year."
+          "body": "since FY2023 because total operating expenses grew {{opex.cagr}} a year against revenue growth of {{rev.cagr}} a year."
         }
       ]
     },
@@ -33,7 +33,7 @@
         },
         {
           "lead": "Adj. EBITDA doubled in two years to {{adjEbitda.latest}}, a {{adjMargin.latest}} margin.",
-          "evidence": "Operating expenses grew {{opex.cagr}} a year against revenue at {{rev.cagr}}, and gross margin moved {{gm.delta}}. Adjustments from Reported EBITDA total {{adjTotal.latest}}, each itemized with its evidence.",
+          "evidence": "Total operating expenses grew {{opex.cagr}} a year against revenue at {{rev.cagr}}, and gross margin moved {{gm.delta}}. Adjustments from Reported EBITDA total {{adjTotal.latest}}, each itemized with its evidence.",
           "page": "S7.1"
         },
         {
@@ -47,13 +47,13 @@
           "page": "S4.1"
         },
         {
-          "lead": "{{kpi.maintenance_members}} maintenance-agreement members produce {{line.maintenance.latest}} of recurring revenue (1).",
-          "evidence": "Members renew at about {{kpi.renewal_rate}} and pay about {{agreement.revenuePerMember}} a year for two tune-ups, priority scheduling and a repair discount; agreements are offered on only {{kpi.agreement_offer_rate}} of service calls (1).",
+          "lead": "{{kpi.maintenance_members}} maintenance-agreement members produce {{line.maintenance.latest}} of recurring revenue {{fn.mgmt}}.",
+          "evidence": "Members renew at about {{kpi.renewal_rate}} and pay about {{agreement.revenuePerMember}} a year for two tune-ups, priority scheduling and a repair discount; agreements are offered on only {{kpi.agreement_offer_rate}} of service calls {{fn.mgmt}}.",
           "page": "S2.3"
         },
         {
-          "lead": "An operations manager of {{mgmt.lisa.tenure}} runs dispatch and scheduling and is expected to stay (1).",
-          "evidence": "The field team of {{hc.field}} is paid hourly plus spiff commissions on maintenance agreements, with no union (1); revenue per field employee rose from {{hc.revPerField.FY2023}} to {{hc.revPerField.FY2025}}.",
+          "lead": "An operations manager of {{mgmt.lisa.tenure}} runs dispatch and scheduling and is expected to stay {{fn.mgmt}}.",
+          "evidence": "The field team of {{hc.field}} is paid hourly plus spiff commissions on maintenance agreements, with no union {{fn.mgmt}}; revenue per field employee rose from {{hc.revPerField.FY2023}} to {{hc.revPerField.FY2025}}.",
           "page": "S5.1"
         },
         {
@@ -69,7 +69,7 @@
         {
           "row": "snap.gp",
           "lead": "Gross profit of {{gp.latest}}",
-          "body": "grew {{gp.cagr}} a year since FY2023, ahead of revenue at {{rev.cagr}}, as equipment and materials took a smaller share of sales."
+          "body": "grew {{gp.cagr}} a year since FY2023, ahead of revenue at {{rev.cagr}}, as equipment and materials took a smaller share of revenue."
         },
         {
           "row": "snap.opex",
@@ -96,7 +96,7 @@
         {
           "row": "cl.adj",
           "lead": "Adj. EBITDA of {{adjEbitda.latest}}",
-          "body": "deducts a {{replacementCost}} general manager and a {{s3.latest}} capital reserve, the measure for a buyer who hires a manager."
+          "body": "deducts {{replacementCost}} for a general manager and a {{s3.latest}} capital reserve, the measure for a buyer who hires a manager."
         }
       ]
     },
@@ -105,8 +105,8 @@
       "rows": [
         {
           "consideration": "Owner involvement",
-          "shows": "The owner works about {{owner.hours}} hours a week on estimating large replacements, commercial relationships, vendor terms and hiring (1). Dispatch and day-to-day scheduling already sit with the operations manager.",
-          "addressed": "The owner will stay up to {{owner.transitionMonths}} months after closing and introduce the commercial accounts (1). Adj. EBITDA already deducts a {{replacementCost}} general manager, so the earnings shown pay for his replacement."
+          "shows": "The owner works about {{owner.hours}} hours a week on estimating large replacements, commercial relationships, vendor terms and hiring {{fn.mgmt}}. Dispatch and day-to-day scheduling already sit with the operations manager.",
+          "addressed": "The owner will stay up to {{owner.transitionMonths}} months after closing and introduce the commercial accounts {{fn.mgmt}}. Adj. EBITDA already deducts {{replacementCost}} for a general manager, so the earnings shown pay for his replacement."
         },
         {
           "consideration": "Customer concentration",
@@ -115,8 +115,8 @@
         },
         {
           "consideration": "Technician labor",
-          "shows": "Field employees are {{hc.field}} of {{hc.total}}, paid hourly plus spiff commissions on maintenance agreements, with no union (1). Payroll excluding the owner was {{payrollPct.latest}} of revenue.",
-          "addressed": "Hires matched departures in FY2025 at {{hc.hires.FY2025}} each, and field technicians average {{hc.dept.field.tenure}} of tenure. The operations manager, with the Company {{mgmt.lisa.tenure}}, runs dispatch (1)."
+          "shows": "Field employees are {{hc.field}} of {{hc.total}}, paid hourly plus spiff commissions on maintenance agreements, with no union {{fn.mgmt}}. Payroll excluding the owner was {{payrollPct.latest}} of revenue.",
+          "addressed": "Hires matched departures in FY2025 at {{hc.hires.FY2025}} each, and field technicians average {{hc.group.field.tenure}} of tenure. The operations manager, with the Company {{mgmt.lisa.tenure}}, runs dispatch {{fn.mgmt}}."
         },
         {
           "consideration": "Add-back quality",
@@ -127,18 +127,18 @@
       "observations": [
         {
           "row": "owner.total",
-          "lead": "About {{owner.hours}} hours a week (1)",
-          "body": "cover estimating, commercial relationships, vendor terms and hiring; each needs a named successor before closing."
+          "lead": "About {{owner.hours}} hours a week {{fn.mgmt}}",
+          "body": "cover estimating, commercial relationships, vendor terms and hiring; who takes each after closing is [Confirm: successor for each owner duty]."
         },
         {
           "row": "owner.Commercial relationships",
           "lead": "Commercial service, {{line.commercial.share0.FY2025}} of revenue,",
-          "body": "rests on the owner's relationships; he will introduce these accounts during a transition of up to {{owner.transitionMonths}} months (1)."
+          "body": "rests on the owner's relationships; he will introduce these accounts during a transition of up to {{owner.transitionMonths}} months {{fn.mgmt}}."
         }
       ]
     },
     "s2_2": {
-      "title": "Over FY2023–FY2025 commercial service grew at a {{line.commercial.cagr}} CAGR and agreements at {{line.maintenance.cagr}}, residential at {{line.residential.cagr}}",
+      "title": "Commercial service grew at a {{line.commercial.cagr}} CAGR over FY2023–FY2025, agreements at {{line.maintenance.cagr}} and residential at {{line.residential.cagr}}",
       "observations": [
         {
           "row": "rev.line.Service Revenue - Residential",
@@ -148,12 +148,12 @@
         {
           "row": "rev.line.Service Revenue - Commercial",
           "lead": "Commercial service grew {{line.commercial.change}} in FY2025",
-          "body": "to {{line.commercial.latest}}, from property managers, office buildings and four restaurant groups; two property managers have asked for quotes on more buildings (1)."
+          "body": "to {{line.commercial.latest}}, from property managers, office buildings and four restaurant groups; two property managers have asked for quotes on more buildings {{fn.mgmt}}."
         },
         {
           "row": "rev.line.Maintenance Agreements",
           "lead": "Maintenance agreements of {{line.maintenance.latest}}",
-          "body": "come from {{kpi.maintenance_members}} members paying about {{agreement.revenuePerMember}} a year for two tune-ups, priority scheduling and a 15% repair discount (1)."
+          "body": "come from {{kpi.maintenance_members}} members paying about {{agreement.revenuePerMember}} a year for two tune-ups, priority scheduling and a 15% repair discount {{fn.mgmt}}."
         },
         {
           "row": "rev.line.Discounts Given",
@@ -173,22 +173,22 @@
         {
           "row": "ue.labor",
           "lead": "Payroll at {{hc.laborPct.FY2025}} of revenue",
-          "body": "excludes the owner; technician wages held at {{acct.technician.pct.FY2025}} of revenue in both FY2023 and FY2025."
+          "body": "excludes the owner; technician wages held at {{acct.technician.pct.FY2025}} of revenue in both FY2023 and FY2025, while office wages fell from {{acct.office.pct.FY2023}} to {{acct.office.pct.FY2025}}."
         },
         {
           "row": "cap.membersPerTech",
-          "lead": "{{agreement.membersPerTech}} members per service technician",
-          "body": "means about {{agreement.visitsPerYear}} tune-up visits a year across the team; agreements are offered on {{kpi.agreement_offer_rate}} of service calls (1)."
+          "lead": "Each service technician serves {{agreement.membersPerTech}} members,",
+          "body": "about {{agreement.visitsPerTech}} tune-up visits a year each and {{agreement.visitsPerYear}} across the team; agreements are offered on {{kpi.agreement_offer_rate}} of service calls {{fn.mgmt}}."
         },
         {
           "row": "cap.revVehicle",
           "lead": "Revenue per vehicle of {{fleet.revenuePerVehicle}}",
-          "body": "across {{fleet.count}} owned vans and trucks, financed with vehicle loans (1); the fleet already covers all {{hc.field}} field employees."
+          "body": "across {{fleet.count}} owned vans and trucks, financed with vehicle loans {{fn.mgmt}}; at {{fleet.perField}} vehicles per field employee, the fleet already covers all {{hc.field}} of them."
         },
         {
           "row": "cap.perMember",
           "lead": "Agreement revenue of {{agreement.revenuePerMember}} per member a year",
-          "body": "comes from {{kpi.maintenance_members}} members who renew at {{kpi.renewal_rate}} (1); agreements were {{recurringShare.FY2025}} of revenue in FY2025, up from {{recurringShare.FY2023}} in FY2023."
+          "body": "comes from {{kpi.maintenance_members}} members who renew at {{kpi.renewal_rate}} {{fn.mgmt}}; agreements were {{recurringShare.FY2025}} of revenue in FY2025, up from {{recurringShare.FY2023}} in FY2023."
         }
       ]
     },
@@ -208,7 +208,7 @@
         {
           "row": "mix.Property manager",
           "lead": "Property managers, {{cust.type.property.share}} of revenue,",
-          "body": "are {{cust.type.property.count}} accounts averaging {{cust.type.property.avg}}, against {{cust.type.restaurant.avg}} for restaurant groups and {{cust.type.office.avg}} for office buildings; two property managers have asked for quotes on more buildings (1)."
+          "body": "are {{cust.type.property.count}} accounts averaging {{cust.type.property.avg}}, against {{cust.type.restaurant.avg}} for restaurant groups and {{cust.type.office.avg}} for office buildings; two property managers have asked for quotes on more buildings {{fn.mgmt}}."
         }
       ]
     },
@@ -236,30 +236,30 @@
           "body": "so the {{cust.lost.FY2025}} accounts lost in FY2025 had started before 2021."
         }
       ],
-      "takeaway": "These figures cover the listed commercial accounts, {{cust.codedShare}} of revenue. The other {{cust.residualShare}} comes from households and maintenance-agreement members, not listed individually; the {{kpi.maintenance_members}} members renew at about {{kpi.renewal_rate}} a year (1) and paid {{line.maintenance.latest}} for their agreements in FY2025, {{line.maintenance.share0.FY2025}} of revenue."
+      "takeaway": "These figures cover the listed commercial accounts, {{cust.codedShare}} of revenue. The other {{cust.residualShare}} comes from households and maintenance-agreement members, not listed individually; agreements alone were {{recurringShare.FY2025}} of revenue in FY2025, and member economics are on {{page:S2.3}}."
     },
     "s5_1": {
-      "title": "{{hc.total}} employees besides the owner at Dec-25, {{hc.field}} in the field, with dispatch run by a manager of {{mgmt.lisa.tenure}}",
+      "title": "The Company employs {{hc.total}} people besides the owner, {{hc.field}} in the field, with dispatch run by a manager of {{mgmt.lisa.tenure}}",
       "observations": [
         {
           "row": "org.Operations manager",
           "lead": "Lisa Tran, with the Company since {{mgmt.lisa.since}},",
-          "body": "runs dispatch and day-to-day scheduling and is expected to stay after closing (1)."
+          "body": "runs dispatch and day-to-day scheduling and is expected to stay after closing {{fn.mgmt}}."
         },
         {
-          "row": "dept.Field service",
-          "lead": "Field service, {{hc.dept.field.count}} technicians,",
-          "body": "average {{hc.dept.field.tenure}} of tenure and are paid hourly plus spiff commissions on maintenance agreements; there is no union (1)."
+          "row": "dept.field",
+          "lead": "The {{hc.group.field.count}} service and installation technicians",
+          "body": "average {{hc.group.field.tenure}} of tenure and are paid hourly plus spiff commissions on maintenance agreements; there is no union {{fn.mgmt}}."
         },
         {
           "row": "hr.departures",
-          "lead": "{{hc.departures.FY2025}} departures in FY2025",
+          "lead": "Departures in FY2025, at {{hc.departures.FY2025}},",
           "body": "were matched by {{hc.hires.FY2025}} hires; {{hc.departedOver2Years}} of the {{hc.departedTotal}} departures in the register came after more than two years of tenure."
         }
       ]
     },
     "s6_1": {
-      "title": "Opex grew {{opex.cagr}} a year against revenue at {{rev.cagr}} over FY2023–FY2025, and Reported EBITDA doubled to {{repEbitda.latest}}",
+      "title": "Reported EBITDA doubled to {{repEbitda.latest}} by FY2025 as total operating expenses grew {{opex.cagr}} a year, revenue {{rev.cagr}}",
       "observations": [
         {
           "row": "is.revenue",
@@ -284,12 +284,12 @@
         {
           "row": "is.ebitda",
           "lead": "Reported EBITDA of {{repEbitda.latest}}",
-          "body": "was a {{repMargin.latest}} margin, {{repMargin.delta}} since FY2023, because operating expenses fell from {{opexPct.FY2023}} to {{opexPct.latest}} of revenue."
+          "body": "was a {{repMargin.latest}} margin, {{repMargin.delta}} since FY2023, because total operating expenses fell from {{opexPct.FY2023}} to {{opexPct.latest}} of revenue."
         }
       ]
     },
     "s6_3": {
-      "title": "Opex fell from {{opexPct.FY2023}} of revenue in FY2023 to {{opexPct.latest}} in FY2025 as owner pay, office wages and rent lagged sales",
+      "title": "Total operating expenses fell to {{opexPct.latest}} of FY2025 revenue from {{opexPct.FY2023}} as owner pay, office wages and rent lagged",
       "observations": [
         {
           "row": "cost.payroll",
@@ -304,7 +304,7 @@
         {
           "row": "cost.rent",
           "lead": "Rent of {{rent.latest}}",
-          "body": "rose {{rent.cagr}} a year under the Maple Ave lease, which runs through 2029 with a five-year renewal option (1)."
+          "body": "rose {{rent.cagr}} a year under the Maple Ave lease, which runs through 2029 with a five-year renewal option {{fn.mgmt}}."
         },
         {
           "row": "cost.opex",
@@ -322,7 +322,7 @@
           "body": "was {{q3.share.FY2025}} of FY2025 against {{q1.share.FY2025}} in the first quarter; the FY2023 split was {{q3.share.FY2023}} and {{q1.share.FY2023}}."
         },
         {
-          "row": "",
+          "row": "q.total",
           "lead": "Adj. EBITDA was positive in all 12 months of FY2025,",
           "body": "including the {{month.trough.FY2025}} revenue low, as the monthly detail on {{page:S11.2}} shows; the Adj. EBITDA margin moved {{adjMargin.delta}} since FY2023."
         }
@@ -350,12 +350,12 @@
       "takeaway": "An owner-operator who takes Mark Delaney's place underwrites SDE of {{sde.latest}}; a buyer who hires a general manager underwrites Adj. EBITDA of {{adjEbitda.latest}}. Nothing pro forma is included; the figures assume no change in pricing, headcount or the maintenance-agreement program after closing."
     },
     "s7_2": {
-      "title": "Owner pay was {{ownerAboveMarket.latest}} above a {{replacementCost}} market cost in FY2025; {{adj.repOnly.latest}} of add-backs rest on management's word",
+      "title": "FY2025 owner pay was {{ownerAboveMarket.latest}} above a {{replacementCost}} market cost; {{adj.repOnly.latest}} of add-backs are management representations",
       "observations": [
         {
           "row": "oc.replacement",
           "lead": "Replacement cost of {{replacementCost}}",
-          "body": "is a {{replacementSalary}} general-manager salary, the owner's estimate of the market (1), plus {{burdenPct}} for payroll taxes and benefits, deducted in every year shown."
+          "body": "is a {{replacementSalary}} general-manager salary, the owner's estimate of the market {{fn.mgmt}}, plus {{burdenPct}} for payroll taxes and benefits, deducted in every year shown."
         },
         {
           "row": "oc.above",
@@ -390,17 +390,17 @@
         {
           "row": "lever.Raise maintenance-agreement penetration",
           "lead": "Agreements offered on {{kpi.agreement_offer_rate}} of calls",
-          "body": "leave room to add members at about {{agreement.revenuePerMember}} a year each to the {{kpi.maintenance_members}} today; renewal runs near {{kpi.renewal_rate}} (1)."
+          "body": "leave room to add members at about {{agreement.revenuePerMember}} a year each to the {{kpi.maintenance_members}} today; renewal runs near {{kpi.renewal_rate}} {{fn.mgmt}}."
         },
         {
           "row": "lever.Expand commercial preventive-maintenance contracts",
           "lead": "Property managers, {{cust.type.property.count}} accounts,",
-          "body": "are {{cust.type.property.share}} of revenue, and two have asked for quotes on additional buildings (1)."
+          "body": "are {{cust.type.property.share}} of revenue, and two have asked for quotes on additional buildings {{fn.mgmt}}."
         },
         {
           "row": "base.marketing",
           "lead": "Marketing of {{marketing.latest}}, {{marketingPct.latest}} of revenue,",
-          "body": "buys little paid digital advertising; most leads come from referrals and {{kpi.google_reviews}}-plus Google reviews rated {{kpi.google_rating}} (1)."
+          "body": "buys little paid digital advertising; most leads come from referrals and {{kpi.google_reviews}}-plus Google reviews rated {{kpi.google_rating}} {{fn.mgmt}}."
         },
         {
           "row": "base.commercial",
@@ -411,9 +411,9 @@
     },
     "s10_1": {
       "title": "The owner targets a closing within 12 months and will stay up to {{owner.transitionMonths}} months after it",
-      "transaction": "Mark Delaney, the founder and owner, is offering the operating assets of Ridgeline Comfort Services LLC; he prefers an asset sale (1). He is retiring at {{owner.age}} and wants a clean exit within 12 months. He is open to a buyer keeping the Ridgeline name and all {{hc.total}} employees. Offers should assume an asset purchase in which the Seller keeps cash, receivables and payables.",
-      "transition": "The owner will stay up to {{owner.transitionMonths}} months after closing and introduce the commercial accounts (1). Lisa Tran, operations manager and with the Company {{mgmt.lisa.tenure}}, runs dispatch and day-to-day scheduling and is expected to stay. The {{hc.field}} field employees are paid hourly plus spiff commissions on maintenance agreements, with no union.",
-      "premises": "The Company leases an {{kpi.shop_size}} shop and office on Maple Ave from an unrelated landlord; the lease runs through 2029 with a five-year renewal option (1). The fleet is {{kpi.fleet_service_vans}} service vans and {{kpi.fleet_install_trucks}} install trucks, owned and financed with vehicle loans. ServiceTitan runs dispatch, invoicing and memberships, and QuickBooks Online the books.",
+      "transaction": "Mark Delaney, the founder and owner, is offering the operating assets of Ridgeline Comfort Services LLC; he prefers an asset sale {{fn.mgmt}}. He is retiring at {{owner.age}} and wants a clean exit within 12 months. He is open to a buyer keeping the Ridgeline name and all {{hc.total}} employees. Offers should assume an asset purchase in which the Seller keeps cash, receivables and payables.",
+      "transition": "The owner will stay up to {{owner.transitionMonths}} months after closing and introduce the commercial accounts {{fn.mgmt}}. Lisa Tran, operations manager and with the Company {{mgmt.lisa.tenure}}, runs dispatch and day-to-day scheduling and is expected to stay. The {{hc.field}} field employees are paid hourly plus spiff commissions on maintenance agreements, with no union.",
+      "premises": "The Company leases an {{kpi.shop_size}} shop and office on Maple Ave from an unrelated landlord; the lease runs through 2029 with a five-year renewal option {{fn.mgmt}}. The fleet is {{kpi.fleet_service_vans}} service vans and {{kpi.fleet_install_trucks}} install trucks, owned and financed with vehicle loans. ServiceTitan runs dispatch, invoicing and memberships, and QuickBooks Online the books.",
       "process": "We will invite qualified buyers who have signed a confidentiality agreement to an introductory call and then a management meeting, on the timetable set out on {{page:S10.2}}. All inquiries should be directed to AMB Advisory. Do not contact the Seller or its employees directly."
     },
     "open_questions": [

@@ -315,7 +315,7 @@ All in dollars. The fixture test asserts these; the engine and workbook must rep
 | **Reported EBITDA** | | **319,515** |
 | (+) Owner's personal vehicle | N1 | 18,000 |
 | (+) Legal fees: settled customer dispute | N2 | – |
-| (+) Owner family cell phones and personal meals | N3 | 6,000 |
+| (+) Owner family phones and meals | N3 | 6,000 |
 | (+) Charitable contributions | N4 | 7,500 |
 | (–) Interest income (non-operating) | N5 | (3,100) |
 | Total normalization adjustments | | 28,400 |

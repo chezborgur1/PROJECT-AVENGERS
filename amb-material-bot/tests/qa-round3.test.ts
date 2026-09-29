@@ -8,19 +8,21 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { PptxGenJS } from "../src/cim/design.ts";
+import { notesLineCount, obsKeyMismatch, PptxGenJS, withoutObsLetter, type Block, type PageSpec } from "../src/cim/design.ts";
+import { fitNotes, numberFootnotes } from "../src/cim/sections/common.ts";
 import { CONVERSION_ATTEMPTS, chartFrames, emptyChartFrames, renderOutputs, type ChartFrame } from "../src/cim/render.ts";
 import { IntakeWireSchema, loadIntakeFile, stripNulls } from "../src/ingest/intake.ts";
-import { Brief, latestKpi } from "../src/cim/brief.ts";
-import { buildContext } from "../src/cim/context.ts";
-import { quickStatsOperating } from "../src/cim/exhibits.ts";
+import { Brief, latestKpi, payGroups } from "../src/cim/brief.ts";
+import { at, buildContext, nonGaap, PER_MANAGEMENT, standardNote } from "../src/cim/context.ts";
+import { fieldWagesTie, headcountByDepartment, quickStatsOperating } from "../src/cim/exhibits.ts";
 import type { KpiSeries } from "../src/domain/financials.ts";
 import { defaultAssumptions } from "../src/model/assumptions.ts";
 import { realEstateReason } from "../src/model/checks.ts";
-import { depreciationProxySource } from "../src/ingest/adjustments.ts";
+import { depreciationProxySource, excessOverRunRate, splitByWeights } from "../src/ingest/adjustments.ts";
 import { runModel } from "../src/model/engine.ts";
 import { ridgelineDataset } from "./fixtures/sampleDataset.ts";
-import { lintText } from "../src/cim/copy.ts";
+import { lintCopy, lintText } from "../src/cim/copy.ts";
+import { chartXml, type ChartPlacement } from "../src/model/charts.ts";
 import { indefinite } from "../src/util/format.ts";
 import { sampleRow, tmpDir } from "./helpers.ts";
 
@@ -227,5 +229,178 @@ describe("Debt-Like Items standard list (F13)", () => {
     expect(model.debtLike!.checklist!.find((x) => x.item === "Personal guarantees")).toEqual({ item: "Personal guarantees", memo: true });
     // Open items never move a balance.
     expect(model.debtLike!.debtLike).toBe(0);
+  });
+});
+
+describe("MC-R2 stacks to total revenue (F22)", () => {
+  it("draws every revenue line and the discounts, so each month's segments add to total revenue", () => {
+    const model = runModel(ridgelineDataset(), defaultAssumptions(ridgelineDataset(), row));
+    const mix = model.charts!.find((c) => c.id === "MC-R2")!;
+    const drawn = mix.series.filter((s) => s.plotted !== false);
+    const total = mix.series.find((s) => s.key === "revenue")!;
+    expect(drawn.map((s) => s.name)).toContain("Discounts and refunds");
+    total.values.forEach((v, i) => expect(drawn.reduce((s, x) => s + x.values[i]!, 0)).toBeCloseTo(v, 6));
+    expect(mix.note).not.toMatch(/not drawn/);
+  });
+
+  it("parts a mix's segments with a hairline but gives a diverging stack none, so an empty month draws nothing on the axis", () => {
+    const placement = (separators: boolean): ChartPlacement => ({
+      id: "t",
+      fromRow: 1,
+      toRow: 10,
+      heightPt: 100,
+      kind: "bar",
+      grouping: "stacked",
+      separators,
+      categories: { ref: "'T'!$A$1:$B$1", labels: ["Jan-25", "Feb-25"] },
+      series: [{ name: "Losses", nameRef: "'T'!$A$2", ref: "'T'!$B$2:$C$2", values: [0, -1], color: "5E5552" }],
+      valueAxis: { visible: true, format: "0" },
+      categoryAxis: true,
+      legend: false,
+    });
+    const ser = (xml: string) => /<c:ser>[\s\S]*?<\/c:ser>/.exec(xml)![0];
+    expect(ser(chartXml(placement(true)))).toMatch(/<a:ln w="\d+"><a:solidFill>/);
+    expect(ser(chartXml(placement(false)))).toContain("<a:ln><a:noFill/></a:ln>");
+  });
+});
+
+describe("one-time add-backs by month (F23)", () => {
+  it("puts a non-recurring amount in the months its account ran above its median, not across the year", () => {
+    const months = Array.from({ length: 12 }, (_, i) => ({ key: `2024-${String(i + 1).padStart(2, "0")}`, fiscalYear: 2024 }));
+    // Legal fees run at $1K a month, $13K in June and July: the $24K settlement is the excess, $12K in each.
+    const shape = Object.fromEntries(months.map((m) => [m.key, m.key === "2024-06" || m.key === "2024-07" ? 13_000 : 1_000]));
+    const weights = excessOverRunRate({ months } as unknown as Parameters<typeof excessOverRunRate>[0], [2024], shape);
+    const split = splitByWeights(24_000, weights);
+    expect(split["2024-06"]).toBeCloseTo(12_000, 6);
+    expect(split["2024-07"]).toBeCloseTo(12_000, 6);
+    expect(split["2024-01"]).toBe(0);
+    // A flat account keeps its own shape.
+    const flat = excessOverRunRate({ months } as unknown as Parameters<typeof excessOverRunRate>[0], [2024], Object.fromEntries(months.map((m) => [m.key, 1_000])));
+    expect(splitByWeights(12_000, flat)["2024-03"]).toBeCloseTo(1_000, 6);
+  });
+});
+
+describe("observation letters agree with the tables (F27)", () => {
+  const page = (obs: string[], keyed: (string | undefined)[]): PageSpec => ({
+    id: "S5.1",
+    section: "Operations",
+    title: "t",
+    notes: { source: "Source: x" },
+    rows: [
+      {
+        columns: [
+          {
+            span: [1, 6],
+            blocks: [
+              {
+                kind: "numTable",
+                header: { title: "Compensation", units: "($000s)" },
+                spec: { name: "c", cols: [{ w: 2, kind: "label" }, { w: 0.6, kind: "num", head: "FY25" }, { w: 0.36, kind: "obs", head: "Obs." }], rows: keyed.map((k, i) => ({ type: "line" as const, label: `Row ${i}`, key: `r${i}`, vals: ["1"], obs: k })) },
+              },
+            ],
+          },
+          { span: [7, 12], blocks: [{ kind: "observations", header: { title: "Observations", units: "" }, items: obs.map((key) => ({ key, lead: "Lead", body: "body." })) }] },
+        ],
+      },
+    ],
+  });
+
+  it("finds a table letter no observation is listed for, and a listed observation keyed to no row", () => {
+    expect(obsKeyMismatch(page(["A", "B", "C"], ["A", "B", "C"]))).toBeUndefined();
+    expect(obsKeyMismatch(page(["A", "B"], ["A", "B", "C"]))).toBe("keyed in a table but not listed: C");
+    expect(obsKeyMismatch(page(["A", "B"], ["A", undefined, undefined]))).toBe("listed but keyed to no row: B");
+    // Two observations about one row share its cell.
+    expect(obsKeyMismatch(page(["A", "B"], ["A,B"]))).toBeUndefined();
+  });
+
+  it("takes a dropped observation's letter out of the tables with it", () => {
+    const fixed = withoutObsLetter(page(["A", "B"], ["A", "B", "C"]), "C");
+    expect(obsKeyMismatch(fixed)).toBeUndefined();
+    const shared = withoutObsLetter(page(["A"], ["A,B"]), "B");
+    expect(obsKeyMismatch(shared)).toBeUndefined();
+  });
+});
+
+describe("compensation reconciles to the P&L wage lines (F31)", () => {
+  const firm = { name: "AMB", contact: "A", email: "a@b.c", phone: "1" };
+  const context = (ds = ridgelineDataset()) => {
+    const row = sampleRow();
+    return buildContext({ row, ds, out: runModel(ds, defaultAssumptions(ds, row)), copy: { open_questions: [] }, firm, date: new Date("2026-09-29T12:00:00Z") });
+  };
+
+  it("groups field departments against office and management, as the P&L books their wages", () => {
+    const ctx = context();
+    const groups = payGroups(ctx.out.headcount!.byDepartment);
+    expect(groups.map((g) => [g.key, g.department])).toEqual([
+      ["field", "Field service and installation"],
+      ["office", "Office and management"],
+    ]);
+    // Register wages of the field row are the P&L technician wages: service $513.3K plus install $135.6K.
+    const technician = Object.entries(at(ctx, ctx.fy.at(-1)!).accountLines).find(([a]) => /technician wages/i.test(a))!;
+    expect(groups[0]!.wages).toBeCloseTo(technician[1], 0);
+    const block = headcountByDepartment(ctx, 5)!;
+    expect(block.kind === "numTable" && block.spec.rows.map((r) => r.key)).toEqual(["dept.field", "dept.office", "dept.total"]);
+    expect(fieldWagesTie(ctx)).toBe("Field service and installation wages of $648.9K in FY2025 are the P&L technician wages; the table adds employer taxes and benefits.");
+    // The brief quotes pay only by those rows, so prose and table cannot disagree.
+    expect(ctx.brief.has("hc.group.field.pctRevenue")).toBe(true);
+    expect(ctx.brief.list().some((f) => /^hc\.dept\..*\.(avgComp|pctRevenue)$/.test(f.key))).toBe(false);
+  });
+
+  it("states the bridge only when the register ties to the wage account", () => {
+    const ds = ridgelineDataset();
+    for (const e of ds.payroll!.employees) if (e.department === "Installation") for (const y of Object.keys(e.wagesByFiscalYear)) e.wagesByFiscalYear[Number(y)] = e.wagesByFiscalYear[Number(y)]! * 1.5;
+    expect(fieldWagesTie(context(ds))).toBeUndefined();
+  });
+
+  it("keeps a register's own departments when none is a field department, merging any under three people", () => {
+    const d = (department: string, count: number) => ({ department, count, avgFte: count, totalComp: count * 50_000, avgComp: 50_000, pctRevenue: count / 100, avgTenureYears: 2, wages: count * 45_000 });
+    const groups = payGroups([d("Sales", 6), d("Operations", 4), d("Finance", 1)]);
+    expect(groups.map((g) => [g.key, g.department, g.count])).toEqual([
+      ["Sales", "Sales", 6],
+      ["Operations", "Operations and finance", 5],
+    ]);
+  });
+});
+
+describe("named footnote markers (F33)", () => {
+  const obs = (body: string): Block => ({ kind: "observations", header: { title: "Observations", units: "" }, items: [{ key: "A", lead: "Two property managers", body }] });
+
+  it("numbers {{fn.mgmt}} against the page's own footnotes, adding the per-management note when missing", () => {
+    const page = [obs("have asked for quotes on more buildings {{fn.mgmt}}.")];
+    const footnotes = numberFootnotes(page, ["Residential households are not listed individually.", "Listed customers billed at any time in FY2025."]);
+    expect(footnotes).toEqual(["Residential households are not listed individually.", "Listed customers billed at any time in FY2025.", PER_MANAGEMENT]);
+    expect(page[0]!.kind === "observations" && page[0]!.items[0]!.body).toBe("have asked for quotes on more buildings (3).");
+    const first = [obs("renew at about 82% a year {{fn.mgmt}}.")];
+    expect(numberFootnotes(first, [PER_MANAGEMENT])).toEqual([PER_MANAGEMENT]);
+    expect(first[0]!.kind === "observations" && first[0]!.items[0]!.body).toBe("renew at about 82% a year (1).");
+  });
+
+  it("lints a typed footnote number or an unknown marker in the copy", () => {
+    const copy = { s6_1: { observations: [{ row: "is.revenue", lead: "Two managers", body: "asked for quotes (1)." }, { row: "is.gp", lead: "Members", body: "renew {{fn.owner}}." }] }, open_questions: [] };
+    const issues = lintCopy(copy as never).map((i) => i.issue);
+    expect(issues.some((i) => i.startsWith('footnote marker "(1)" typed as a number'))).toBe(true);
+    expect(issues.some((i) => i.startsWith("unknown footnote marker {{fn.owner}}"))).toBe(true);
+    const fixture = JSON.parse(fs.readFileSync(path.join(process.cwd(), "samples/project-ridgeline/cim-copy.fixture.json"), "utf8")).copy;
+    expect(lintCopy(fixture).filter((i) => i.issue.includes("footnote marker"))).toEqual([]);
+  });
+});
+
+describe("notes band keeps the unaudited basis and periods longest (F36)", () => {
+  it("names only the measures the deck shows, in the Note line, and cuts it after the source periods", () => {
+    const ds = ridgelineDataset();
+    const ctx = buildContext({ row, ds, out: runModel(ds, defaultAssumptions(ds, row)), copy: { open_questions: [] }, firm, date: new Date("2026-09-29T12:00:00Z") });
+    expect(ctx.pf).toBeUndefined();
+    expect(nonGaap(ctx)).toMatch(/^Adj\. EBITDA and SDE are non-GAAP measures; see \{\{page:S7\.1\}\} for the reconciliation to net income\./);
+    const notes = {
+      source: "Company financial statements (QuickBooks Online), FY2023–FY2025; Company customer list; Payroll register; Management; AMB Advisory analysis.",
+      note: standardNote(ctx, `Employee counts are at fiscal year-end and exclude the owner. ${nonGaap(ctx)}`),
+      footnotes: [PER_MANAGEMENT],
+    };
+    const fitted = fitNotes(ctx, "S1.1", notes);
+    expect(notesLineCount(fitted)).toBeLessThanOrEqual(3);
+    // The optional sentences go first; the unaudited basis, the non-GAAP statement and the period range stay.
+    expect(fitted.note).toContain("have not been independently audited.");
+    expect(fitted.note).toContain("are non-GAAP measures");
+    expect(fitted.source).toContain("FY2023–FY2025");
   });
 });

@@ -11,7 +11,7 @@ import type { CimContext } from "./context.ts";
 import { resolvePageRefs } from "./context.ts";
 import { smartQuotes } from "../util/format.ts";
 import type { Block, LaidOutPage, PageSpec, SectionEntry } from "./design.ts";
-import { drawDivider, dropEmptyObs, layoutPage, MAX_EXHIBITS, noteRounding } from "./design.ts";
+import { drawDivider, dropEmptyObs, layoutPage, mapBlockText, MAX_EXHIBITS, noteRounding, ruleWidth } from "./design.ts";
 import { fitNotes, markersIn } from "./sections/common.ts";
 import { LIBRARY } from "./sections/index.ts";
 import type { PageDraft, PageModule, SectionModule, Toc } from "./sections/types.ts";
@@ -311,7 +311,8 @@ export function narrowTables(pages: PlannedPage[]): string[] {
       const b = placed.block;
       if (b.kind !== "numTable" && b.kind !== "textTable") continue;
       const w = b.kind === "numTable" ? b.spec.cols.reduce((s, c) => s + c.w, 0) : b.spec.colW.reduce((s, c) => s + c, 0);
-      if (placed.w - w > TABLE_SHORT) out.push(`${p.draft.id}: "${b.header?.title ?? "table"}" ends ${(placed.w - w).toFixed(2)} in short of its block`);
+      const rule = ruleWidth(b, placed.w);
+      if (rule - w > TABLE_SHORT) out.push(`${p.draft.id}: "${b.header?.title ?? "table"}" ends ${(rule - w).toFixed(2)} in short of its exhibit rule`);
     }
   }
   return out;
@@ -381,32 +382,7 @@ function resolveRefs(spec: PageSpec, pageOf: (id: string) => number | undefined,
   const r = (t: string) => smartQuotes(resolvePageRefs(t, pageOf, here));
   spec.title = r(spec.title);
   spec.notes = { source: spec.notes.source && r(spec.notes.source), note: spec.notes.note && r(spec.notes.note), footnotes: spec.notes.footnotes?.map(r) };
-  const fix = (b: Block): void => {
-    if ("header" in b && b.header) b.header = { ...b.header, title: r(b.header.title), annotation: b.header.annotation && r(b.header.annotation) };
-    switch (b.kind) {
-      case "numTable":
-        for (const row of b.spec.rows) {
-          row.label = r(row.label);
-          if (row.text) row.text = r(row.text);
-          if (row.vals) row.vals = row.vals.map(r);
-        }
-        break;
-      case "textTable":
-        b.spec.rows = b.spec.rows.map((row) => row.map((c) => (typeof c === "string" ? r(c) : { lead: r(c.lead), body: r(c.body) })));
-        break;
-      case "observations":
-        b.items = b.items.map((it) => ({ ...it, lead: r(it.lead), body: r(it.body) }));
-        break;
-      case "prose":
-        b.paragraphs = b.paragraphs.map((p) => ({ lead: p.lead && r(p.lead), body: r(p.body) }));
-        break;
-      case "callout":
-        b.body = r(b.body);
-        break;
-      default:
-        break;
-    }
-  };
+  const fix = (b: Block): void => mapBlockText(b, r);
   for (const row of spec.rows) {
     for (const c of row.columns) c.blocks.forEach(fix);
     row.floating?.forEach(fix);

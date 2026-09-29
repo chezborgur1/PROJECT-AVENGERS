@@ -398,7 +398,7 @@ function buildAdjustments(accountMonthly: Map<string, Record<MonthKey, number>>)
     },
     {
       tier: "normalization",
-      description: "Owner family cell phones and personal meals",
+      description: "Owner family phones and meals",
       category: "personal_discretionary",
       basis: "Removes family phone lines and personal meals expensed through the Company, $6.0K in FY2025, per the seller's add-back list.",
       sourceDocument: "Seller add-back list (addbacks.csv)",
@@ -960,7 +960,7 @@ function buildIntake(): IntakeFacts {
     suppliers: [
       { name: "Ferguson", supplies: "Main supplier", source: mgmt("## Operations") },
       { name: "Johnstone Supply", supplies: "Main supplier", source: mgmt("## Operations") },
-      { name: "Carrier (local distributor)", supplies: "HVAC equipment", source: mgmt("## Operations") },
+      { name: "Carrier", supplies: "Equipment through the local distributor", source: mgmt("## Operations") },
     ],
     fleetAndEquipment: [
       { item: "Service vans", count: 18, ownership: "Owned, financed with vehicle loans", source: mgmt("## Operations") },

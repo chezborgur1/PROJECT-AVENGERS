@@ -416,6 +416,17 @@ export function writeDeltas(b: SheetBuilder, r: number, l: PeriodLayout, kind: P
 const refsText = (refs: string | undefined): string => (refs ? refs.split(", ").map((r) => `[${r}]`).join(" ") : "");
 
 /**
+ * The Personal? tag (guide 5.2 mapping columns, "(+) Owner vehicle"): the
+ * add-back the account would carry, from its own name; the schedule ref sits
+ * in the Adjustment Ref column beside it.
+ */
+export function personalTag(row: Pick<DatabookRow, "account" | "personal">): string {
+  if (!row.personal) return "";
+  const leaf = row.account.split(":").pop()!.trim();
+  return `(+) ${leaf.charAt(0).toUpperCase()}${leaf.slice(1).toLowerCase()}`;
+}
+
+/**
  * Databook columns other tabs read. The mapping columns are guide 5.2's
  * (Account | Source | AMB Category | Summary Line | Personal? | Adjustment
  * Ref); period columns start at I and months at MONTH_START, the letters the
@@ -450,7 +461,8 @@ export function planDatabook(ctx: TabContext): SheetBuilder {
 
   const headers = ["Account (as exported)", "Source", "AMB Category", "Summary Line", "Personal?", "Adjustment Ref"];
   b.width(1, WIDTH.gutter);
-  [40, 18, 22, 30, 9, 13].forEach((w, i) => b.width(2 + i, w));
+  // Personal? holds the tag ("(+) Charitable contributions"), not a bare flag.
+  [40, 18, 22, 30, 22, 13].forEach((w, i) => b.width(2 + i, w));
   b.spacerCol(8);
   b.outlineCols(3, 7, 1);
   b.widths(periodStart, lastPeriodCol, WIDTH.value);
@@ -518,7 +530,7 @@ export function planDatabook(ctx: TabContext): SheetBuilder {
   const latestOf = (byPeriod: Record<string, number>) => (n ? latestMonths.reduce((s, { m }) => s + (byPeriod[m] ?? 0), 0) : (byPeriod[String(latestFy)] ?? 0));
   rows.forEach((row, i) => {
     const r = firstRow + i;
-    [row.account, SOURCE_LABELS[row.source], row.category, row.summaryLine, row.personal ? "Personal?" : "", refsText(row.adjustmentRef)].forEach((v, k) => b.text(r, 2 + k, v));
+    [row.account, SOURCE_LABELS[row.source], row.category, row.summaryLine, personalTag(row), refsText(row.adjustmentRef)].forEach((v, k) => b.text(r, 2 + k, v));
     if (n && !row.annualOnly) months.forEach((m, k) => b.num(r, MONTH_START + k, cents(row.byMonth?.[m] ?? 0), { fmt: FMT.body }));
     else if (!n) fyCols.forEach(({ c, col }) => b.num(r, col, cents(row.byFiscalYear[c.fiscalYear!] ?? 0), { fmt: FMT.body }));
     // A fiscal year off the grid is typed as the annual source exports it; the tie rows below prove it against that export.
@@ -662,16 +674,20 @@ export function planDatabook(ctx: TabContext): SheetBuilder {
   if (n) {
     const helpers = writePeriodHelpers(b, { ...periodLayout(model, periodStart), cols: hist.map((c, i) => ({ column: c, col: periodStart + i })) } as PeriodLayout, model, lastPrinted + 2);
     const monthHeaderRow = `$${colLetter(MONTH_START)}$6:$${colLetter(MONTH_START + n - 1)}$6`;
-    rows.forEach((row, i) => {
-      const r = firstRow + i;
+    // Account rows and the export's total rows alike carry every period (QA round 3 F20).
+    const periodRows = [
+      ...rows.map((row, i) => ({ r: firstRow + i, label: row.account, month: (m: MonthKey) => cents(row.byMonth?.[m] ?? 0) })),
+      ...pnlTotals.map((t, i) => ({ r: b.r("pnlTotalsFirst") + i, label: t.label, month: (m: MonthKey) => t.databook[m] ?? 0 })),
+    ];
+    for (const { r, label, month } of periodRows) {
       hist.forEach((c, k) => {
         if (offGrid(model, c)) return;
         const col = periodStart + k;
         const f = sumifsFormula({ valuesRow: `$${colLetter(MONTH_START)}${r}:$${colLetter(MONTH_START + n - 1)}${r}`, monthsRow: monthHeaderRow, startCell: addr(helpers.start, col, { row: true }), endCell: addr(helpers.end, col, { row: true }) });
-        const expect = monthRange(c.start, c.end).reduce((s, m) => s + cents(row.byMonth?.[m] ?? 0), 0);
-        b.formula(r, col, f, { fmt: FMT.body, expect, label: `${row.account} ${c.label}` });
+        const expect = monthRange(c.start, c.end).reduce((s, m) => s + month(m), 0);
+        b.formula(r, col, f, { fmt: FMT.body, expect, label: `${label} ${c.label}` });
       });
-    });
+    }
   }
   b.cf({ ref: range(firstRow, tie.diff, lastPrinted, tie.diff), formula: `ROUND(${addr(firstRow, tie.diff)},3)<>0`, font: { color: COLOR.pending } });
   b.cf({ ref: range(firstRow, tie.status, lastPrinted, tie.status), formula: `${addr(firstRow, tie.status)}="CHECK"`, font: { color: COLOR.pending, bold: true } });
@@ -745,7 +761,7 @@ export function planMapping(ctx: TabContext): SheetBuilder {
   // Statement, source and file are the same for every account an export holds: each group of rows sits under a
   // section row naming them, so the table fits one page wide at full scale and every row stays one line tall.
   const headers = ["Account (as exported)", "Section", "AMB Category", "Summary Line", "Personal?", "Adj. Ref", "Mapped by"];
-  const widths = [36, 30, 32, 32, 9, 8, 10];
+  const widths = [36, 30, 32, 32, 22, 8, 10];
   b.width(1, WIDTH.gutter);
   widths.forEach((w, i) => b.width(2 + i, w));
   const lastCol = 1 + headers.length;
@@ -770,7 +786,7 @@ export function planMapping(ctx: TabContext): SheetBuilder {
   };
   for (const row of model.databook?.pnl ?? []) {
     groupRow("P&L", row.source, row.file);
-    put([row.account, row.section ?? "", IS_LABELS[row.category], row.summaryLine, row.personal ? "Personal?" : "", refsText(row.adjustmentRef), row.mappedBy === "override" ? "Override" : row.mappedBy]);
+    put([row.account, row.section ?? "", IS_LABELS[row.category], row.summaryLine, personalTag(row), refsText(row.adjustmentRef), row.mappedBy === "override" ? "Override" : row.mappedBy]);
     if (row.mappedBy === "default") b.cell(r, mappedByCol, { fill: COLOR.section });
     r++;
   }

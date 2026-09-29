@@ -298,10 +298,13 @@ describe("the Ridgeline deck's exhibits (F23, F25, F27, F29)", () => {
     const words = text.split(/\s+/).length;
     expect(words).toBeGreaterThan(130);
     // Every fact is the notes' own, with its casing: no invented cause, no mangled acronym.
-    expect(text).toContain("CSR / dispatch 3");
-    expect(text).toContain("Carrier (local distributor) for HVAC equipment");
+    // Staffing reads as a sentence, the fleet as one clause, the suppliers as the notes put them (QA round 3 F30).
+    expect(text).toContain("Of the 23 employees besides the owner, 14 are service technicians, 4 install crew, one operations manager, 3 CSR / dispatch staff and one bookkeeper (1).");
+    expect(text).toContain("The fleet is 18 service vans and 2 install trucks, all owned, financed with vehicle loans (1).");
+    expect(text).toContain("Ferguson and Johnstone Supply are the main suppliers; Carrier equipment comes through the local distributor (1).");
     expect(text).toContain("its Google rating is 4.8 from 900+ reviews");
-    expect(text).toContain(`${ctx.intake!.owner.name} will support the transition for up to 12 months after closing (1)`);
+    expect(text).toContain("The owner will support the transition for up to 12 months after closing (1)");
+    expect(text).not.toMatch(/by role:|\(owned, financed with vehicle loans\) and/);
     expect(blocksOf(page).map((b) => ("header" in b && b.kind !== "observations" ? b.header?.title : b.kind))).toEqual(["prose", "Organization and tenure", "Compensation by department", "Headcount roll-forward", "observations"]);
   });
 
@@ -339,9 +342,13 @@ describe("the Ridgeline deck's exhibits (F23, F25, F27, F29)", () => {
     expect(String(realEstate[1])).toMatch(/\(1\)\.$/);
   });
 
-  it("sets every table to its block and every chart at 2.60 in or taller", () => {
+  it("ends every table at its exhibit rule and sets every chart at 2.60 in or taller", () => {
     const { plan } = planned();
+    // A table at the spec's column widths sits at the left of its block and its rule stops with it (QA round 3 F35).
     expect(narrowTables(plan.pages)).toEqual([]);
+    for (const p of plan.pages)
+      for (const x of p.layout?.placed ?? [])
+        if (x.block.kind === "numTable") for (const c of x.block.spec.cols) if (c.kind === "num" && /^(FY\d{4}|LTM|PF)/.test(c.head ?? "")) expect(c.w, `${p.draft.id} ${x.block.header?.title} ${c.head}`).toBeLessThanOrEqual(0.8);
     // The chart's own height (a chart left at the default is 2.60 in); the placed box adds its header.
     for (const p of plan.pages) for (const x of p.layout?.placed ?? []) if (x.block.kind === "chart") expect(x.block.h ?? 2.6, `${p.draft.id} ${x.block.header?.title}`).toBeGreaterThanOrEqual(2.6);
   });

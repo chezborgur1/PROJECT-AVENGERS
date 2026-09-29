@@ -82,6 +82,21 @@ describe("copy lint", () => {
     expect(found).toContain("unknown figure token {{rev.nope}}");
   });
 
+  it("flags a clause that pairs customer figures of different populations (QA round 3 F32)", () => {
+    const { ds, out } = ridgeline();
+    const ctx = buildContext({ row: sampleRow(), ds, out, copy: { open_questions: [] }, firm, date: new Date() });
+    const b = ctx.brief;
+    // 52 were active at Dec-25; 56 were billed in FY2025, and they are the 26.7%.
+    expect(b.t("cust.count")).toBe("52");
+    expect(b.t("cust.billedCount")).toBe("56");
+    const lint = (text: string) => lintCopy(CimCopySchema.parse({ s6_1: { observations: [{ row: "is.revenue", lead: "Listed accounts", body: text }] }, open_questions: [] }), b).filter((i) => i.issue.includes("different populations"));
+    expect(lint("The {{cust.count}} listed accounts were {{cust.codedShare}} of revenue.")).toHaveLength(1);
+    expect(lint("The {{cust.billedCount}} listed accounts billed in FY2025 were {{cust.codedShare}} of revenue; {{cust.count}} were active at Dec-25.")).toEqual([]);
+    // The reviewed fixture holds every clause to one population.
+    const fixture = CimCopySchema.parse(JSON.parse(fs.readFileSync(path.join(REPO, "samples/project-ridgeline", COPY_FIXTURE), "utf8")).copy);
+    expect(lintCopy(fixture, b).filter((i) => i.issue.includes("different populations"))).toEqual([]);
+  });
+
   it("collects [Confirm: ...] placeholders in order", () => {
     expect(placeholdersIn({ a: "x [Confirm: date] y", b: ["[Confirm: owner] and [Confirm: date]"] })).toEqual(["[Confirm: date]", "[Confirm: owner]"]);
   });
@@ -145,6 +160,8 @@ describe("formats", () => {
     // Changes are taken between the levels as printed: 61.0% to 61.9% is 90 bps, not the 89 of the unrounded ratios.
     expect(describeDelta(0.61, 0.6189)).toBe("up 90 bps");
     expect(fmtBps(0.2131, 0.2134)).toBe("–");
+    // A decline takes the minus sign, never the en dash that marks zero (QA round 3 F40).
+    expect(fmtBps(0.62, 0.6120)).toBe("\u221280 bps");
     expect(fmtMoney(3_100)).toBe("$3.1K");
     expect(describeDelta(0.076, 0.1223)).toBe("up 4.6 pts");
     expect(describeDelta(0.026, 0.02601)).toBe("flat");

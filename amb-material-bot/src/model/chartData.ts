@@ -66,15 +66,14 @@ export function chartExhibits(ds: FinancialDataset, out: Pick<ModelOutput, "mont
       const ltm = (key: string) => pick(key).slice(-12).reduce((s, v) => s + v, 0);
       const top = [...service].sort((a, b) => ltm(`rev:${b.account}`) - ltm(`rev:${a.account}`)).slice(0, 3);
       const series: ChartSeriesData[] = top.map((l, i) => ({ key: `line${i}`, name: l.label, values: pick(`rev:${l.account}`).map((v) => v / m.scale), color: CHART_COLOR.mix[i]!, source: { kind: "monthly", rowKey: `rev:${l.account}` } }));
-      // Discounts and refunds are negative; they stay in the data block (so the rows still sum to total revenue, C21) but out of the stack.
-      const discounts = contra.length ? window.map((_, i) => contra.reduce((s, l) => s + pick(`rev:${l.account}`)[i]!, 0)) : undefined;
-      const feeds: ChartSeriesData[] = discounts ? [{ key: "discounts", name: "Less: discounts and refunds", values: discounts.map((v) => v / m.scale), color: CHART_COLOR.mix[3]!, source: { kind: "monthly", rowKey: "rev_contra" }, plotted: false }] : [];
-      if (service.length > top.length) {
-        // "Other" is total revenue less the lines shown and the discounts, so every row adds back to total revenue.
-        const values = revenue.map((v, i) => (v - top.reduce((s, l) => s + pick(`rev:${l.account}`)[i]!, 0) - (discounts?.[i] ?? 0)) / m.scale);
-        series.push({ key: "other", name: "Other", values, color: CHART_COLOR.mix[3]!, source: { kind: "remainder", total: "revenue", less: [...series.map((s) => s.key), ...feeds.map((f) => f.key)] } });
+      // The last segment is total revenue less the lines shown, so every bar stacks to total revenue (C21): the smaller lines
+      // and the discounts and refunds netted together, or the discounts alone, drawn below the axis, when every line is shown.
+      const more = service.length > top.length;
+      if (more || contra.length) {
+        const values = revenue.map((v, i) => (v - top.reduce((s, l) => s + pick(`rev:${l.account}`)[i]!, 0)) / m.scale);
+        const name = more ? (contra.length ? "Other / discounts" : "Other") : "Discounts and refunds";
+        series.push({ key: "other", name, values, color: CHART_COLOR.mix[3]!, source: { kind: "remainder", total: "revenue", less: series.map((s) => s.key) } });
       }
-      const discountShare = discounts ? -discounts.slice(-12).reduce((s, v) => s + v, 0) / ltm("revenue") : 0;
       add({
         id: "MC-R2",
         tab: "revenueCharts",
@@ -83,8 +82,8 @@ export function chartExhibits(ds: FinancialDataset, out: Pick<ModelOutput, "mont
         form: "stacked",
         categories: window,
         monthly: true,
-        series: [...series, ...feeds, revenueRow(m.scale)],
-        note: `The ${service.length > top.length ? "three largest lines and Other" : "revenue lines"} before discounts and refunds${discounts ? ` (${(discountShare * 100).toFixed(1)}% of revenue over the last twelve months, not drawn)` : ""}. Source: Monthly P&L.`,
+        series: [...series, revenueRow(m.scale)],
+        note: `${more ? "The three largest lines and the rest" : "Each revenue line"}${contra.length ? (more ? ", discounts and refunds netted into the last segment" : ", discounts and refunds below the axis") : ""}; each bar stacks to total revenue. Source: Monthly P&L.`,
       });
     }
   }

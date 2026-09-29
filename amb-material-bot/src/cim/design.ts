@@ -357,6 +357,8 @@ export type ChartSpec =
       labels: string[];
       values: number[];
       format?: string;
+      /** S6.4's trailing-12-month average on the same axis, null until the 12th bar (guide 2.6). */
+      trailing?: (number | null)[];
     }
   | { type: "diverging"; labels: string[]; wins: number[]; losses: number[]; format?: string }
   /** Bridge from one total to another: totals in maroon, increases B5727A, decreases 5E5552 (guide 2.6). */
@@ -378,6 +380,35 @@ export type Block =
   | { kind: "callout"; lead: string; body: string }
   | { kind: "orgChart"; header?: ExhibitHeader; root: OrgNode; h?: number }
   | { kind: "spacer"; h: number };
+
+/** Apply `f` to every string a block prints: header, labels and cells, observations, prose and callout text. */
+export function mapBlockText(b: Block, f: (t: string) => string): void {
+  if ("header" in b && b.header) b.header = { ...b.header, title: f(b.header.title), ...(b.header.units ? { units: f(b.header.units) } : {}), ...(b.header.annotation ? { annotation: f(b.header.annotation) } : {}) };
+  switch (b.kind) {
+    case "numTable":
+      for (const row of b.spec.rows) {
+        row.label = f(row.label);
+        if (row.text) row.text = f(row.text);
+        if (row.vals) row.vals = row.vals.map(f);
+      }
+      break;
+    case "textTable":
+      b.spec.rows = b.spec.rows.map((row) => row.map((c) => (typeof c === "string" ? f(c) : { ...c, lead: f(c.lead), body: f(c.body) })));
+      break;
+    case "observations":
+      b.items = b.items.map((it) => ({ ...it, lead: f(it.lead), body: f(it.body) }));
+      break;
+    case "prose":
+      b.paragraphs = b.paragraphs.map((p) => ({ ...p, lead: p.lead && f(p.lead), body: f(p.body) }));
+      break;
+    case "callout":
+      b.lead = f(b.lead);
+      b.body = f(b.body);
+      break;
+    default:
+      break;
+  }
+}
 
 export interface Column {
   span: [number, number];
@@ -440,6 +471,26 @@ const DEFAULT_CHART_H = 2.6;
  * wrapped height, so what is measured is what renders and nothing below the
  * table is overlapped.
  */
+const labelIndent = (r: NumRow): number => (r.type === "section" || r.type === "key" || r.type === "subtotal" ? 0.05 : r.type === "sub" ? 0.29 : 0.17);
+const labelBold = (r: NumRow): boolean => r.type === "key" || r.type === "subtotal" || r.type === "section";
+/** What the cell margins (0.05 in a side) take from a ref cell's width. */
+const REF_MARGIN = 0.1;
+
+/**
+ * Whether a row's footnote marker goes after its ref instead of its label:
+ * when the marker alone would wrap the label onto a second line and the ref
+ * cell holds both on one, so the row keeps the table's rhythm (spec 4.1).
+ */
+function noteOnRef(spec: NumTableSpec, r: NumRow): boolean {
+  const label = spec.cols.find((c) => c.kind === "label");
+  const ref = spec.cols.find((c) => c.kind === "ref");
+  if (!r.note || !label || !ref) return false;
+  const pt = spec.fontSize ?? 8.5;
+  const w = label.w - labelIndent(r) + 0.05;
+  const wraps = linesFor(`${keepMarker(r.label)}\u00a0(${r.note})`, w, pt, labelBold(r)) > linesFor(keepMarker(r.label), w, pt, labelBold(r));
+  return wraps && linesFor(`${r.ref ?? ""}\u00a0(${r.note})`, ref.w - REF_MARGIN, 8) === 1;
+}
+
 export function numTableRowHeights(spec: NumTableSpec): { head: number[]; rows: number[] } {
   const pt = spec.fontSize ?? 8.5;
   const base = spec.rowH ?? (spec.rows.length >= 12 ? 0.19 : 0.195);
@@ -454,10 +505,10 @@ export function numTableRowHeights(spec: NumTableSpec): { head: number[]; rows: 
     let lines = 1;
     let v = 0;
     spec.cols.forEach((c) => {
-      if (c.kind === "label") {
-        const indent = r.type === "section" || r.type === "key" || r.type === "subtotal" ? 0.05 : r.type === "sub" ? 0.29 : 0.17;
-        lines = Math.max(lines, linesFor(`${keepMarker(r.label)}${r.note ? `\u00a0(${r.note})` : ""}`, c.w - indent + 0.05, pt, r.type === "key" || r.type === "subtotal" || r.type === "section"));
-      } else if (c.kind === "text" && r.type !== "section") lines = Math.max(lines, linesFor(r.text ?? "", c.w - 0.03, 8));
+      const onRef = noteOnRef(spec, r);
+      if (c.kind === "label") lines = Math.max(lines, linesFor(`${keepMarker(r.label)}${r.note && !onRef ? `\u00a0(${r.note})` : ""}`, c.w - labelIndent(r) + 0.05, pt, labelBold(r)));
+      else if (c.kind === "ref" && r.type !== "section") lines = Math.max(lines, linesFor(`${r.ref ?? ""}${onRef ? `\u00a0(${r.note})` : ""}`, c.w - REF_MARGIN, 8));
+      else if (c.kind === "text" && r.type !== "section") lines = Math.max(lines, linesFor(r.text ?? "", c.w - 0.03, 8));
       else if (c.kind === "num") {
         if (c.left && r.type !== "section") lines = Math.max(lines, linesFor(r.vals?.[v] ?? "", c.w, pt));
         v += 1;
@@ -673,8 +724,11 @@ export function noteRounding(spec: PageSpec): void {
 export function layoutPage(spec: PageSpec): LaidOutPage {
   const warnings: string[] = [];
   let uneven: Uneven | undefined;
+  // Empty space under the last row's columns: a region wider than two grid columns and deeper than 1.5 in breaks spec 1.
+  let empty: { cols: string; depth: number }[] = [];
   const attempt = (page: PageSpec): LaidOutPage => {
     uneven = undefined;
+    empty = [];
     const placed: PlacedBlock[] = [];
     const hairlines: LaidOutPage["hairlines"] = [];
     let y = BAND.top;
@@ -710,6 +764,13 @@ export function layoutPage(spec: PageSpec): LaidOutPage {
           hairlines.push({ x: hairlineX(cols[i]!.span[1]), y0: tops, y1: isLast ? BAND.bottom : r3(rowBottom) });
         }
       }
+      if (ri === page.rows.length - 1) {
+        for (const c of cols) {
+          const last = placed.filter((p) => p.x === c.x && p.y >= tops).at(-1);
+          const depth = r3(BAND.bottom - (last ? last.y + last.h : tops));
+          if (c.w > spanW(1, 2) + 0.01 && depth >= EMPTY_DEPTH) empty.push({ cols: `${c.span[0]}-${c.span[1]}`, depth });
+        }
+      }
       y = r3(rowBottom + SPACE.row);
     });
     const bottom = r3(y - SPACE.row);
@@ -736,6 +797,9 @@ export function layoutPage(spec: PageSpec): LaidOutPage {
         continue;
       }
       if (uneven) warnings.push(`${spec.id}: columns end ${uneven.gap.toFixed(2)} in apart`);
+      for (const e of empty) warnings.push(`${spec.id}: ${e.depth.toFixed(2)} in empty under columns ${e.cols} (spec 1: no empty region wider than two columns and deeper than ${EMPTY_DEPTH} in)`);
+      const keys = obsKeyMismatch(page);
+      if (keys) warnings.push(`${spec.id}: observation letters disagree with the tables (${keys})`);
       return out;
     }
     const fitted = fitOverflow(page, out);
@@ -748,6 +812,8 @@ export function layoutPage(spec: PageSpec): LaidOutPage {
 
 /** Spec 1: the columns of a row end within 0.50 in of each other. */
 const BALANCE = 0.5;
+/** Spec 1: no empty region larger than two columns by this depth. */
+const EMPTY_DEPTH = 1.5;
 /** Chart heights the balancing step may set: never under the spec's 2.60 in minimum (spec 5, spec 14), never past the band. */
 const CHART_H = { min: 2.6, max: 4.3 };
 
@@ -809,13 +875,63 @@ function fitOverflow(page: PageSpec, out: LaidOutPage): { page: PageSpec; note: 
     }));
     return done ? { ...page, rows } : undefined;
   };
-  const dropObservation = (b: Block): Block | undefined => (b.kind === "observations" && b.items.length > 2 ? { ...b, items: b.items.slice(0, -1) } : undefined);
+  // The last observation goes: the unkeyed ones are lettered after the keyed ones, so it is an unkeyed one when there is
+  // any. A keyed one takes its letter out of the tables with it, so no Obs. cell points at an observation not listed.
+  let dropped: string | undefined;
+  const dropObservation = (b: Block): Block | undefined => {
+    if (b.kind !== "observations" || b.items.length <= 2) return undefined;
+    dropped = b.items[b.items.length - 1]!.key;
+    return { ...b, items: b.items.slice(0, -1) };
+  };
+  const unkey = (p: PageSpec): PageSpec => (dropped ? withoutObsLetter(p, dropped) : p);
   const local = replace((b) => (inOverflow.has(b) ? dropObservation(b) : undefined));
-  if (local) return { page: local, note: "dropped an observation" };
+  if (local) return { page: unkey(local), note: "dropped an observation" };
   const tightened = replace((b) => (inOverflow.has(b) && b.kind === "numTable" && (b.spec.fontSize ?? 8.5) > TABLE_FLOOR_PT ? { ...b, spec: { ...b.spec, fontSize: TABLE_FLOOR_PT } } : undefined));
   if (tightened) return { page: tightened, note: `set a table at ${TABLE_FLOOR_PT} pt` };
   const anywhere = replace(dropObservation);
-  return anywhere ? { page: anywhere, note: "dropped an observation" } : undefined;
+  return anywhere ? { page: unkey(anywhere), note: "dropped an observation" } : undefined;
+}
+
+const pageBlocks = (p: PageSpec): Block[] => p.rows.flatMap((r) => [...r.columns.flatMap((c) => c.blocks), ...(r.floating ?? [])]);
+
+/** The letters an Obs. cell holds ("A", or "A,B" when two observations share the row). */
+const obsLetters = (cell: string | undefined): string[] => (cell ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+
+/** The page with one observation letter taken out of every table's Obs. column. */
+export function withoutObsLetter(p: PageSpec, letter: string): PageSpec {
+  const less = (cell: string | undefined) => obsLetters(cell).filter((x) => x !== letter).join(",");
+  const strip = (b: Block): Block => {
+    if (b.kind === "numTable") return { ...b, spec: { ...b.spec, rows: b.spec.rows.map((r) => (r.obs ? { ...r, obs: less(r.obs) || undefined } : r)) } };
+    if (b.kind === "textTable" && b.spec.obsCol !== undefined) {
+      const i = b.spec.obsCol;
+      return { ...b, spec: { ...b.spec, rows: b.spec.rows.map((r) => r.map((c, j) => (j === i ? less(cellText(c ?? "")) : c))) } };
+    }
+    return b;
+  };
+  return { ...p, rows: p.rows.map((r) => ({ ...r, columns: r.columns.map((c) => ({ ...c, blocks: c.blocks.map(strip) })), floating: r.floating?.map(strip) })) };
+}
+
+/**
+ * Observation letters listed on a page against the letters its tables key
+ * (spec 4.4): undefined when they agree, else what differs. A page with no
+ * Obs. column keys nothing and is not checked.
+ */
+export function obsKeyMismatch(p: PageSpec): string | undefined {
+  const blocks = pageBlocks(p);
+  const listed = new Set(blocks.flatMap((b) => (b.kind === "observations" ? b.items.map((i) => i.key) : [])));
+  const hasObsCol = blocks.some((b) => (b.kind === "numTable" && b.spec.cols.some((c) => c.kind === "obs")) || (b.kind === "textTable" && b.spec.obsCol !== undefined));
+  if (!listed.size || !hasObsCol) return undefined;
+  const keyed = new Set(
+    blocks.flatMap((b) => {
+      if (b.kind === "numTable") return b.spec.rows.flatMap((r) => obsLetters(r.obs));
+      if (b.kind === "textTable" && b.spec.obsCol !== undefined) return b.spec.rows.flatMap((r) => obsLetters(cellText(r[b.spec.obsCol!] ?? "")));
+      return [];
+    }),
+  );
+  const unlisted = [...keyed].filter((k) => !listed.has(k));
+  const unkeyed = [...listed].filter((k) => !keyed.has(k));
+  if (!unlisted.length && !unkeyed.length) return undefined;
+  return [unlisted.length ? `keyed in a table but not listed: ${unlisted.join(", ")}` : "", unkeyed.length ? `listed but keyed to no row: ${unkeyed.join(", ")}` : ""].filter(Boolean).join("; ");
 }
 
 // ---------------------------------------------------------------------------
@@ -833,6 +949,12 @@ interface SeriesPatch {
   whiteOutline?: boolean;
   /** No fill, no outline, no labels: the base series under a waterfall. */
   invisible?: boolean;
+  /** A line series marked and labelled on its last point only (the S6.4 trailing line). */
+  lastPoint?: { idx: number; color: string; format: string };
+  /** Points whose own label is removed (a waterfall bar too thin to hold it). */
+  hidePoints?: number[];
+  /** Labels set at the base of these points with fixed text: the carrier series that lifts a thin bar's figure above it. */
+  textPoints?: { idx: number; text: string; color: string }[];
 }
 
 /** Layout the XML pass writes into one chart file: a top-left legend of a known height and the plot area beneath it. */
@@ -916,8 +1038,18 @@ export class Deck {
   }
 }
 
+/** A data label on one point: fixed text (a quoted number format) at the base of the point, or none. */
+function pointLabel(idx: number, text?: string, color: string = C.ink): string {
+  if (text === undefined) return `<c:dLbl><c:idx val="${idx}"/><c:delete val="1"/></c:dLbl>`;
+  const format = `"${text}"`.replace(/"/g, "&quot;");
+  return `<c:dLbl><c:idx val="${idx}"/><c:numFmt formatCode="${format}" sourceLinked="0"/><c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="800"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill><a:latin typeface="${SANS}"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr><c:dLblPos val="inBase"/><c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbl>`;
+}
+
 function patchSeries(ser: string, patch: SeriesPatch): string {
   let out = ser;
+  // Point labels come first inside the series' dLbls, ahead of the series-wide settings (CT_DLbls order).
+  const points = [...(patch.hidePoints ?? []).map((i) => pointLabel(i)), ...(patch.textPoints ?? []).map((t) => pointLabel(t.idx, t.text, t.color))].join("");
+  if (points) out = out.replace(/<c:dLbls>/, `<c:dLbls>${points}`);
   if (patch.invisible) {
     out = out.replace(/<c:spPr>[\s\S]*?<\/c:spPr>/, "<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>");
     out = out.replace(/(<c:dLbls>[\s\S]*?)<c:showVal val="1"\/>/, '$1<c:showVal val="0"/>');
@@ -925,6 +1057,14 @@ function patchSeries(ser: string, patch: SeriesPatch): string {
   }
   if (patch.labelColor) out = out.replace(/(<c:dLbls>[\s\S]*?<a:srgbClr val=")[0-9A-Fa-f]{6}("\/>)/, `$1${patch.labelColor}$2`);
   if (patch.labelFormat) out = out.replace(/(<c:dLbls>\s*<c:numFmt formatCode=")[^"]*(")/, `$1${patch.labelFormat.replace(/"/g, "&quot;")}$2`);
+  if (patch.lastPoint) {
+    const { idx, color, format } = patch.lastPoint;
+    const marker = `<c:marker><c:symbol val="circle"/><c:size val="5"/><c:spPr><a:solidFill><a:srgbClr val="${color}"/></a:solidFill><a:ln><a:noFill/></a:ln></c:spPr></c:marker>`;
+    const dPt = `<c:dPt><c:idx val="${idx}"/>${marker}<c:bubble3D val="0"/></c:dPt>`;
+    const label = `<c:dLbls><c:dLbl><c:idx val="${idx}"/><c:numFmt formatCode="${format.replace(/"/g, "&quot;")}" sourceLinked="0"/><c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="800" b="1"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill><a:latin typeface="${SANS}"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr><c:dLblPos val="t"/><c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbl><c:showLegendKey val="0"/><c:showVal val="0"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbls>`;
+    out = out.replace(/<c:marker>[\s\S]*?<\/c:marker>/, (m) => `${m}${dPt}`);
+    out = /<c:dLbls>[\s\S]*?<\/c:dLbls>/.test(out) ? out.replace(/<c:dLbls>[\s\S]*?<\/c:dLbls>/, label) : out.replace(/(<c:cat>)/, `${label}$1`);
+  }
   if (patch.whiteOutline) out = out.replace(/(<c:spPr>\s*<a:solidFill>\s*<a:srgbClr val="[0-9A-Fa-f]{6}"\/>\s*<\/a:solidFill>)/, `$1<a:ln w="9525"><a:solidFill><a:srgbClr val="${C.white}"/></a:solidFill></a:ln>`);
   return out;
 }
@@ -1078,15 +1218,18 @@ export function numTable(slide: Slide, x: number, y: number, spec: NumTableSpec)
         o.italic = true;
         o.color = C.pending;
       }
+      const onRef = noteOnRef(spec, r);
       if (c.kind === "label") {
-        const indent = isSection || isKey || isSubtotal ? 0.05 : r.type === "sub" ? 0.29 : 0.17;
-        o.margin = [0, 0.05, 0, indent];
+        o.margin = [0, 0.05, 0, labelIndent(r)];
         o.align = "left";
         if (isSection) o.bold = true;
-        const label = r.note ? [cellRun(keepMarker(r.label), { fontSize, bold: o.bold, italic: o.italic, color: o.color ?? C.ink }), cellRun(`\u00a0(${r.note})`, { fontSize: 7, color: C.muted })] : keepMarker(r.label);
+        const label = r.note && !onRef ? [cellRun(keepMarker(r.label), { fontSize, bold: o.bold, italic: o.italic, color: o.color ?? C.ink }), cellRun(`\u00a0(${r.note})`, { fontSize: 7, color: C.muted })] : keepMarker(r.label);
         return cell(label, o);
       }
-      if (c.kind === "ref") return cell(isSection ? "" : (r.ref ?? ""), { ...o, align: "left", color: C.muted, bold: false, italic: false, fontSize: 8 });
+      if (c.kind === "ref") {
+        const ref = isSection ? "" : onRef ? [cellRun(r.ref ?? "", { fontSize: 8, color: C.muted }), cellRun(`\u00a0(${r.note})`, { fontSize: 7, color: C.muted })] : (r.ref ?? "");
+        return cell(ref, { ...o, align: "left", color: C.muted, bold: false, italic: false, fontSize: 8 });
+      }
       if (c.kind === "obs") return cell(isSection ? "" : (r.obs ?? ""), { ...o, align: "center", color: C.maroon, bold: true, italic: false });
       if (c.kind === "text") return cell(isSection ? "" : (r.text ?? ""), { ...o, align: "left", color: C.muted, fontSize: 8, bold: false, italic: false, margin: [0, 0.05, 0, 0.08] });
       const val = isSection ? "" : (r.vals?.[v] ?? "");
@@ -1263,6 +1406,9 @@ const labelOn = (fill: string): string => (DARK_FILLS.has(fill) ? C.white : C.in
 const maxOf = (vals: number[]): number => Math.max(0, ...vals.filter((v) => Number.isFinite(v)));
 
 /** Waterfall as stacked bars over an invisible base: one series each for totals, increases and decreases. */
+/** A waterfall step under this share of the axis is too thin to hold its figure inside the bar. */
+const WATERFALL_THIN = 0.06;
+
 export function waterfallSeries(steps: { value: number; total?: boolean }[]): { base: number[]; total: number[]; up: number[]; down: number[] } {
   const base: number[] = [];
   const total: number[] = [];
@@ -1366,17 +1512,23 @@ export function chart(deck: Deck, slide: Slide, x: number, y: number, w: number,
       // starts are labelled; the other categories print blank, which every renderer honours, where LibreOffice ignores a skip interval.
       const quarterly = spec.labels.length > 16;
       const labels = nb(spec.labels.map((l) => (!quarterly || /^(Jan|Apr|Jul|Oct)-/.test(l) ? l : "")));
-      deck.noteChart({ noWrap: quarterly });
-      slide.addChart("bar", [{ name: "Monthly", labels, values: spec.values }], {
-        ...chartBase,
-        x, y, w, h,
-        chartColors: [C.maroon],
-        dataLabelPosition: "outEnd",
-        dataLabelFormatCode: fmt,
-        showLegend: false,
-        valAxisMaxVal: Math.ceil(maxOf(spec.values) * 1.18),
-        valAxisMinVal: 0,
-      });
+      const trailing = spec.trailing?.some((v) => v !== null) ? spec.trailing : undefined;
+      const lastIdx = trailing ? trailing.length - 1 : -1;
+      deck.noteChart({ noWrap: quarterly, ...(trailing ? { series: [{}, { lastPoint: { idx: lastIdx, color: C.maroon, format: fmt } }] } : {}) });
+      const bars = { name: "Monthly", labels, values: spec.values };
+      const opts = { ...chartBase, x, y, w, h, showLegend: false, valAxisMaxVal: Math.ceil(maxOf(spec.values) * 1.18), valAxisMinVal: 0 };
+      if (!trailing) {
+        slide.addChart("bar", [bars], { ...opts, chartColors: [C.maroon], dataLabelPosition: "outEnd", dataLabelFormatCode: fmt });
+        return r3(y + h);
+      }
+      // The trailing line (1.75 pt 7B0000, marker and label on its last point) starts at the 12th bar, on the bars' axis.
+      slide.addChart(
+        [
+          { type: "bar", data: [bars], options: { chartColors: [C.maroon], barGapWidthPct: 60, dataLabelPosition: "outEnd", dataLabelFormatCode: fmt, showValue: true } },
+          { type: "line", data: [{ name: "Trailing 12-month average", labels, values: trailing as number[] }], options: { chartColors: [C.maroon], lineSize: 1.75, lineDataSymbol: "none", showValue: false } },
+        ] as unknown as Parameters<Slide["addChart"]>[0],
+        opts as unknown as Parameters<Slide["addChart"]>[1],
+      );
       return r3(y + h);
     }
     case "diverging": {
@@ -1404,15 +1556,20 @@ export function chart(deck: Deck, slide: Slide, x: number, y: number, w: number,
     case "waterfall": {
       const s = waterfallSeries(spec.steps);
       const labels = nb(spec.labels);
+      const top = Math.ceil(maxOf(s.base.map((b, i) => b + s.total[i]! + s.up[i]! + s.down[i]!)) * 1.08);
+      // A step too thin to hold its figure has it lifted above the bar by an invisible carrier series stacked on top, since
+      // a stacked bar has no outside-end label position (spec 5).
+      const thin = spec.steps.map((st, i) => (!st.total && Math.abs(st.value) < top * WATERFALL_THIN ? i : -1)).filter((i) => i >= 0);
+      const figure = (v: number) => (v < 0 ? `(${Math.abs(v).toLocaleString("en-US")})` : v.toLocaleString("en-US"));
       deck.noteChart({
         series: [
           { invisible: true },
           { labelColor: C.white },
-          { labelColor: C.ink },
-          { labelColor: C.white, labelFormat: `(${fmt});(${fmt});""` },
+          { labelColor: C.ink, hidePoints: thin.filter((i) => spec.steps[i]!.value >= 0) },
+          { labelColor: C.white, labelFormat: `(${fmt});(${fmt});""`, hidePoints: thin.filter((i) => spec.steps[i]!.value < 0) },
+          { invisible: true, textPoints: thin.map((i) => ({ idx: i, text: figure(spec.steps[i]!.value), color: C.ink })) },
         ],
       });
-      const top = Math.ceil(maxOf(s.base.map((b, i) => b + s.total[i]! + s.up[i]! + s.down[i]!)) * 1.08);
       slide.addChart(
         "bar",
         [
@@ -1420,12 +1577,14 @@ export function chart(deck: Deck, slide: Slide, x: number, y: number, w: number,
           { name: "Total", labels, values: s.total },
           { name: "Increase", labels, values: s.up },
           { name: "Decrease", labels, values: s.down },
+          { name: "Label", labels, values: spec.steps.map((_, i) => (thin.includes(i) ? r3(top * WATERFALL_THIN) : 0)) },
         ],
         {
           ...chartBase,
           x, y, w, h,
           barGrouping: "stacked",
-          chartColors: [C.white, C.maroon, C.estimate, C.slate],
+          // Totals maroon, increases blush, decreases slate (spec 3): the estimate colour is kept for estimates.
+          chartColors: [C.white, C.maroon, C.blush, C.slate, C.white],
           dataLabelPosition: "ctr",
           dataLabelFormatCode: `${fmt};(${fmt});""`,
           showLegend: false,
@@ -1569,10 +1728,25 @@ export function renderPage(deck: Deck, slide: Slide, page: LaidOutPage, furnitur
   for (const p of page.placed) drawBlock(deck, slide, p);
 }
 
+/**
+ * How wide a block's exhibit rule runs in a column `w` wide. A table keeps
+ * the spec's column widths and sits at the left of its column (spec 4.1), so
+ * its rule stops at the table's right edge, or at the end of the title when
+ * that runs further: a rule running on past the figures reads as a ragged
+ * edge. Every other block's rule spans the column.
+ */
+export function ruleWidth(b: Block, w: number): number {
+  const table = b.kind === "numTable" ? b.spec.cols.reduce((s, c) => s + c.w, 0) : b.kind === "textTable" ? b.spec.colW.reduce((s, c) => s + c, 0) : undefined;
+  if (table === undefined || !("header" in b) || !b.header) return w;
+  const h = b.header;
+  const title = textWidth(h.title, 9.5, true) + (h.units ? textWidth(`  ${h.units}`, 9.5) : 0) + 0.1 + (h.annotation ? textWidth(h.annotation, 8) + 0.15 : 0);
+  return r3(Math.min(w, Math.max(table, title)));
+}
+
 function drawBlock(deck: Deck, slide: Slide, p: PlacedBlock): void {
   const b = p.block;
   let y = p.y;
-  if ("header" in b && b.header) y = exhibitHeader(slide, p.x, p.y, p.w, b.header);
+  if ("header" in b && b.header) y = exhibitHeader(slide, p.x, p.y, ruleWidth(b, p.w), b.header);
   switch (b.kind) {
     case "numTable": {
       const w = b.spec.cols.reduce((s, c) => s + c.w, 0);

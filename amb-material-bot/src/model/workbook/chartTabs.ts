@@ -130,6 +130,7 @@ export function planChartTab(ctx: TabContext, tab: ChartTab): SheetBuilder | und
       heightPt: barRows * ROW_PT,
       kind: "bar",
       grouping: stacked ? "stacked" : "clustered",
+      separators: e.form === "stacked",
       categories,
       series: drawn.map(ref),
       labelFormat: stacked ? undefined : LABEL_FORMAT[e.units],

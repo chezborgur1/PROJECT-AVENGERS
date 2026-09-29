@@ -84,8 +84,8 @@
       }
     },
     {
-      "name": "Carrier (local distributor)",
-      "supplies": "HVAC equipment",
+      "name": "Carrier",
+      "supplies": "Equipment through the local distributor",
       "source": {
         "locator": "## Operations"
       }

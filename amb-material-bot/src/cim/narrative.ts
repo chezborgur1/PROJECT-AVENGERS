@@ -119,7 +119,7 @@ How the copy must read (AMB house style):
 - Every observation and bullet carries a figure and a comparison (a prior period, a share, a count). Name the mechanism with "because", "driven by", "as a result". Name systems, suppliers, towns, months and counts.
 - One claim per sentence; median sentence 14 to 20 words, never over 32. No triads of adjectives, no stacked clauses.
 - State a negative with the fact that bounds it. Say what is not assumed ("Nothing pro forma is included").
-- Attribute what is not verified: facts from the intake notes are management's; mark them with the footnote marker " (1)" where the page's footnote (1) reads "Per management; not independently verified."
+- Attribute what is not verified: facts from the intake notes are management's; mark them with the marker " {{fn.mgmt}}". Each page numbers it against its own footnotes ("Per management; not independently verified."), so never type "(1)" or any other footnote number.
 - Customers and employees outside the management roster appear only by their code ("C-001") or their role ("a lead technician"), never by name, even when the intake notes name them. The owner and the listed management team may be named.
 - Buyer-facing voice: never describe the data work, a missing document, a proxy used for lack of a source, or anything left for the advisor; those go to open_questions only.
 - No em dashes, no exclamation marks, no rhetorical questions, no italics for emphasis. Ranges use an en dash with no spaces.

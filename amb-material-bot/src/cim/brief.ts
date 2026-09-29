@@ -10,6 +10,7 @@
 import type { FinancialDataset, KpiSeries } from "../domain/financials.ts";
 import { monthEndDate, monthLabel, parsePeriodKey } from "../domain/financials.ts";
 import type { ModelOutput, PeriodColumn, PeriodValues } from "../model/types.ts";
+import { isFieldDepartment } from "../model/analytics.ts";
 import { cagr, describeDelta, fmtCount, fmtDollars, fmtMoney, fmtPct, growth, indefinite, wholeShares } from "../util/format.ts";
 
 export interface Figure {
@@ -18,16 +19,22 @@ export interface Figure {
   text: string;
   value: number | null;
   label: string;
+  /**
+   * The set of customers (or other units) an aggregate counts, for figures
+   * that total a population: "active at Dec-25" or "billed in FY2025". Two
+   * such figures in one clause must count the same set (guide 4.8).
+   */
+  population?: string;
 }
 
-/** "{{key}}" tokens; page references ("{{page:S7.1}}") are resolved later, after the pages are numbered. */
-const TOKEN = /\{\{(?!page:)([A-Za-z0-9_.:-]+)\}\}/g;
+/** "{{key}}" tokens; page references ("{{page:S7.1}}") and footnote markers ("{{fn.mgmt}}") are resolved later, on the page. */
+const TOKEN = /\{\{(?!page:|fn\.)([A-Za-z0-9_.:-]+)\}\}/g;
 
 export class Brief {
   private readonly figures = new Map<string, Figure>();
 
-  add(key: string, text: string, value: number | null, label: string): void {
-    this.figures.set(key, { key, text, value, label });
+  add(key: string, text: string, value: number | null, label: string, population?: string): void {
+    this.figures.set(key, { key, text, value, label, ...(population ? { population } : {}) });
   }
 
   has(key: string): boolean {
@@ -78,6 +85,21 @@ export class Brief {
   texts(): Set<string> {
     return new Set([...this.figures.values()].map((f) => f.text));
   }
+}
+
+/**
+ * Clauses (split at ";" and at sentence ends) that pair figures counting
+ * different populations: "the 52 accounts were 26.7% of revenue" reads 52 as
+ * the accounts behind 26.7%, though 52 were active at Dec-25 and 56 billed.
+ */
+export function mixedPopulations(text: string, brief: Brief): { keys: string[]; populations: string[] }[] {
+  const out: { keys: string[]; populations: string[] }[] = [];
+  for (const clause of text.split(/[;.:](?:\s|$)/)) {
+    const keys = [...clause.matchAll(TOKEN)].map((m) => m[1]!).filter((k) => brief.get(k)?.population);
+    const populations = [...new Set(keys.map((k) => brief.get(k)!.population!))];
+    if (populations.length > 1) out.push({ keys, populations });
+  }
+  return out;
 }
 
 /** Unknown figure tokens in a string, for the copy lint. */
@@ -133,6 +155,61 @@ export function revenueMix(p: PeriodValues, accounts: string[]): { exact: number
 
 /** Smallest group whose pay the CIM may show: below it, one person's salary could be read off the table (guide 1.4). */
 export const MIN_PAY_GROUP = 3;
+
+type Department = NonNullable<ModelOutput["headcount"]>["byDepartment"][number];
+
+/** Departments summed into one row of the compensation table; `key` names the row and its brief tokens. */
+export interface PayGroup extends Department {
+  key: string;
+  departments: string[];
+}
+
+/** "Field service", "Installation" -> "Field service and installation". */
+export function joinDepartments(names: string[]): string {
+  const joined = names.length === 1 ? names[0]! : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]!.toLowerCase()}`;
+  return joined.charAt(0).toUpperCase() + joined.slice(1);
+}
+
+function sumDepartments(key: string, members: Department[]): PayGroup {
+  const count = members.reduce((sum, d) => sum + d.count, 0);
+  const avgFte = members.reduce((sum, d) => sum + d.avgFte, 0);
+  const totalComp = members.reduce((sum, d) => sum + d.totalComp, 0);
+  const wages = members.every((d) => d.wages !== undefined) ? members.reduce((sum, d) => sum + d.wages!, 0) : undefined;
+  return {
+    key,
+    department: joinDepartments(members.map((d) => d.department)),
+    departments: members.map((d) => d.department),
+    count,
+    avgFte,
+    totalComp,
+    avgComp: avgFte ? totalComp / avgFte : 0,
+    pctRevenue: members.reduce((sum, d) => sum + d.pctRevenue, 0),
+    avgTenureYears: count ? members.reduce((sum, d) => sum + d.avgTenureYears * d.count, 0) / count : 0,
+    ...(wages !== undefined ? { wages } : {}),
+  };
+}
+
+/**
+ * The rows the CIM shows compensation in. With field and office departments
+ * both on the register, the rows follow the P&L's split of wages (technician
+ * wages against office wages): the field departments together, the rest,
+ * management included, together, so each row reconciles to its wage line
+ * (guide 4.8). A register with no field department keeps its own
+ * departments. Then any row of fewer than three people joins the smallest row
+ * of three or more, so no average is one person's salary (guide 1.4).
+ */
+export function payGroups(depts: Department[]): PayGroup[] {
+  const field = depts.filter((d) => isFieldDepartment(d.department));
+  const office = depts.filter((d) => !isFieldDepartment(d.department));
+  const groups = field.length && office.length ? [sumDepartments("field", field), sumDepartments("office", office)] : depts.map((d) => sumDepartments(d.department, [d]));
+  const small = groups.filter((g) => g.count < MIN_PAY_GROUP);
+  const large = groups.filter((g) => g.count >= MIN_PAY_GROUP);
+  if (!small.length || !large.length) return groups;
+  const host = large.reduce((a, b) => (b.count < a.count ? b : a));
+  const members = [host, ...small];
+  const merged = sumDepartments(host.key, depts.filter((d) => members.some((g) => g.departments.includes(d.department))));
+  return groups.filter((g) => !members.includes(g)).concat(merged).sort((a, b) => b.count - a.count);
+}
 
 export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: BriefPeriods): Brief {
   const b = new Brief();
@@ -290,7 +367,9 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
   const cu = out.customers;
   if (cu) {
     const conc = cu.concentration;
-    b.add("cust.count", fmtCount(cu.latestCount), cu.latestCount, `Active coded ${cu.term.toLowerCase()}s at ${cu.period.label}`);
+    const active = `active at ${monthLabel(cu.period.end)}`;
+    const billed = `billed in ${cu.period.label}`;
+    b.add("cust.count", fmtCount(cu.latestCount), cu.latestCount, `Listed ${cu.term.toLowerCase()}s active at ${monthLabel(cu.period.end)}`, active);
     b.add("cust.top10Share", fmtPct(conc.top10Share), conc.top10Share, `Top 10 ${cu.term.toLowerCase()}s as % of revenue, ${cu.period.label}`);
     b.add("cust.top20Share", fmtPct(conc.top20Share), conc.top20Share, `Top 20 as % of revenue, ${cu.period.label}`);
     const top5 = conc.top.slice(0, 5).reduce((s, r) => s + r.pctOfTotal, 0);
@@ -312,18 +391,21 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
     const residual = cu.mixByType.find((m) => m.count === 0);
     const coded = cu.mixByType.filter((m) => m.count > 0);
     const codedRev = coded.reduce((s, m) => s + m.revenue, 0);
-    b.add("cust.codedRevenue", fmtMoney(codedRev), codedRev, `Revenue from coded (listed) ${cu.term.toLowerCase()}s, ${cu.period.label}`);
-    b.add("cust.codedShare", fmtPct(codedRev / conc.total), codedRev / conc.total, "Coded customers as % of revenue");
-    b.add("cust.codedShare0", fmtPct(codedRev / conc.total, 0), codedRev / conc.total, "Listed (coded) accounts as % of revenue, whole percent: the scope of every retention figure");
+    const codedCount = coded.reduce((s, m) => s + m.count, 0);
+    // Billed in the year is a larger set than active at its end; each figure carries its set, so the lint can hold a clause to one.
+    b.add("cust.billedCount", fmtCount(codedCount), codedCount, `Listed ${cu.term.toLowerCase()}s billed at any time in ${cu.period.label}`, billed);
+    b.add("cust.codedRevenue", fmtMoney(codedRev), codedRev, `Revenue from listed ${cu.term.toLowerCase()}s billed in ${cu.period.label}`, billed);
+    b.add("cust.codedShare", fmtPct(codedRev / conc.total), codedRev / conc.total, `Listed ${cu.term.toLowerCase()}s billed in ${cu.period.label} as % of revenue`, billed);
+    b.add("cust.codedShare0", fmtPct(codedRev / conc.total, 0), codedRev / conc.total, "Listed (coded) accounts as % of revenue, whole percent: the scope of every retention figure", billed);
     b.add("cust.top10ShareOfCoded", fmtPct(t10rev / codedRev, 0), t10rev / codedRev, "Top 10 as % of coded-customer revenue");
     if (residual) b.add("cust.residualShare", fmtPct(residual.revenue / conc.total), residual.revenue / conc.total, `${residual.type} as % of revenue`);
     const typeSlugs = slugs(coded.map((m) => m.type));
     coded.forEach((m, i) => {
       const s = typeSlugs[i]!;
       b.add(`cust.type.${s}.label`, m.type, null, `Customer type ${s}`);
-      b.add(`cust.type.${s}.count`, fmtCount(m.count), m.count, `${m.type}: accounts`);
-      b.add(`cust.type.${s}.revenue`, fmtMoney(m.revenue), m.revenue, `${m.type}: revenue`);
-      b.add(`cust.type.${s}.share`, fmtPct(m.revenuePct), m.revenuePct, `${m.type}: % of revenue`);
+      b.add(`cust.type.${s}.count`, fmtCount(m.count), m.count, `${m.type}: accounts billed in ${cu.period.label}`, `${billed}, ${m.type}`);
+      b.add(`cust.type.${s}.revenue`, fmtMoney(m.revenue), m.revenue, `${m.type}: revenue`, `${billed}, ${m.type}`);
+      b.add(`cust.type.${s}.share`, fmtPct(m.revenuePct), m.revenuePct, `${m.type}: % of revenue`, `${billed}, ${m.type}`);
       b.add(`cust.type.${s}.avg`, fmtMoney(m.avgRevenue), m.avgRevenue, `${m.type}: average revenue per account`);
     });
     for (const [fyKey, r] of Object.entries(cu.retention?.byFiscalYear ?? {})) {
@@ -331,7 +413,8 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
       b.add(`cust.start.${k}`, fmtCount(r.counts.startingCount), r.counts.startingCount, `Accounts at the start of ${k}`);
       b.add(`cust.new.${k}`, fmtCount(r.counts.newCustomers), r.counts.newCustomers, `New accounts in ${k}`);
       b.add(`cust.lost.${k}`, fmtCount(r.counts.lostCustomers), r.counts.lostCustomers, `Accounts lost in ${k}`);
-      b.add(`cust.end.${k}`, fmtCount(r.counts.endingCount), r.counts.endingCount, `Accounts at the end of ${k}`);
+      const fyEnd = out.columns.find((c) => c.ref.kind === "fiscal_year" && c.ref.fiscalYear === Number(fyKey))?.end;
+      b.add(`cust.end.${k}`, fmtCount(r.counts.endingCount), r.counts.endingCount, `Accounts at the end of ${k}`, fyEnd ? `active at ${monthLabel(fyEnd)}` : undefined);
       b.add(`cust.churn.${k}`, fmtPct(r.counts.churn), r.counts.churn, `Account churn in ${k} (lost ÷ average accounts)`);
       if (r.dollars.startingRevenue > 0) {
         b.add(`cust.gdr.${k}`, fmtPct(r.dollars.gdr), r.dollars.gdr, `Gross dollar retention in ${k}`);
@@ -364,12 +447,22 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
       const s = depSlugs[i]!;
       b.add(`hc.dept.${s}.label`, d.department, null, `Department ${s}`);
       b.add(`hc.dept.${s}.count`, fmtCount(d.count), d.count, `${d.department}: employees`);
-      // Pay is shown only for groups of three or more, so no figure is one person's salary (guide 1.4).
-      if (d.count >= MIN_PAY_GROUP) {
-        b.add(`hc.dept.${s}.avgComp`, fmtMoney(d.avgComp), d.avgComp, `${d.department}: average compensation including employer costs`);
-        b.add(`hc.dept.${s}.pctRevenue`, fmtPct(d.pctRevenue), d.pctRevenue, `${d.department}: compensation as % of revenue`);
-      }
       b.add(`hc.dept.${s}.tenure`, `${d.avgTenureYears.toFixed(1)} years`, d.avgTenureYears, `${d.department}: average tenure`);
+    });
+    // Pay is quoted only by the compensation table's rows (field and office, three or more people each), so a sentence
+    // reconciles to the P&L wage lines as the table does and no figure is one person's salary (guide 1.4).
+    const groups = payGroups(hc.byDepartment);
+    const groupSlugs = groups.map((g, i) => (g.key === "field" || g.key === "office" ? g.key : slugs(groups.map((x) => x.department))[i]!));
+    groups.forEach((g, i) => {
+      const s = groupSlugs[i]!;
+      b.add(`hc.group.${s}.label`, g.department, null, `Compensation row ${s}`);
+      b.add(`hc.group.${s}.count`, fmtCount(g.count), g.count, `${g.department}: employees`);
+      if (g.count >= MIN_PAY_GROUP) {
+        b.add(`hc.group.${s}.avgComp`, fmtMoney(g.avgComp), g.avgComp, `${g.department}: average compensation including employer costs`);
+        b.add(`hc.group.${s}.pctRevenue`, fmtPct(g.pctRevenue), g.pctRevenue, `${g.department}: compensation including employer costs as % of revenue`);
+        if (g.wages !== undefined) b.add(`hc.group.${s}.wages`, fmtMoney(g.wages), g.wages, `${g.department}: wages before employer costs`);
+      }
+      b.add(`hc.group.${s}.tenure`, `${g.avgTenureYears.toFixed(1)} years`, g.avgTenureYears, `${g.department}: average tenure`);
     });
     for (const [fyKey, r] of Object.entries(hc.rollForwardByFiscalYear)) {
       const k = `FY${fyKey}`;
@@ -410,12 +503,14 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
     if (/two tune-ups/i.test(members!.definition ?? "")) b.add("agreement.visitsPerYear", fmtCount(memberCount * 2), memberCount * 2, "Tune-up visits a year (two per member)");
     const techs = out.headcount?.byDepartment.find((d) => /field service|service/i.test(d.department));
     if (techs) b.add("agreement.membersPerTech", fmtCount(Math.round(memberCount / techs.count)), memberCount / techs.count, `Members per ${techs.department.toLowerCase()} employee`);
+    if (techs && /two tune-ups/i.test(members!.definition ?? "")) b.add("agreement.visitsPerTech", fmtCount(Math.round((memberCount * 2) / techs.count)), (memberCount * 2) / techs.count, `Tune-up visits a year per ${techs.department.toLowerCase()} employee (two per member)`);
   }
   const fleetItems = ds.intake?.fleetAndEquipment.filter((f) => f.count !== undefined) ?? [];
   if (fleetItems.length) {
     const n = fleetItems.reduce((sum, f) => sum + (f.count ?? 0), 0);
     b.add("fleet.count", fmtCount(n), n, "Vehicles in the fleet (per management)");
     b.add("fleet.revenuePerVehicle", fmtMoney(P(latest).pnl.revenue / n), P(latest).pnl.revenue / n, `${latest.label} revenue per vehicle`);
+    if (out.headcount?.latestFieldHeadcount) b.add("fleet.perField", (n / out.headcount.latestFieldHeadcount).toFixed(1), n / out.headcount.latestFieldHeadcount, "Vehicles per field employee");
   }
 
   // Headcount from the intake notes, for a deal without a payroll register; owner rows are not employees.

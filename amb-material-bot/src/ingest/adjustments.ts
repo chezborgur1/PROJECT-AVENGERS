@@ -305,6 +305,26 @@ export function splitByWeights(total: number, weights: Record<MonthKey, number>)
   return Object.fromEntries(keys.map((k) => [k, wsum ? (weights[k]! * total) / wsum : total / keys.length]));
 }
 
+/**
+ * Weights for a non-recurring add-back: in each fiscal year, how far each of
+ * the account's months ran above that year's median month (its run-rate), so
+ * a $24K settlement booked across June and July lands in June and July (QA
+ * round 3 F23). A year with no month above the median keeps the account's
+ * own shape.
+ */
+export function excessOverRunRate(monthly: MonthlyPnl, years: number[], shape: Record<MonthKey, number>): Record<MonthKey, number> {
+  const out: Record<MonthKey, number> = { ...shape };
+  for (const fy of years) {
+    const months = fiscalYearMonths(monthly, fy);
+    if (months.length < 12) continue;
+    const sorted = months.map((m) => shape[m] ?? 0).sort((a, b) => a - b);
+    const median = (sorted[5]! + sorted[6]!) / 2;
+    const excess = months.map((m) => Math.max(0, (shape[m] ?? 0) - median));
+    if (excess.some((x) => x > 0)) months.forEach((m, i) => (out[m] = excess[i]!));
+  }
+  return out;
+}
+
 /** Months of one fiscal year in the grid. */
 function fiscalYearMonths(monthly: MonthlyPnl, fy: number): MonthKey[] {
   return monthly.months.filter((m) => m.fiscalYear === fy).map((m) => m.key);
@@ -471,7 +491,9 @@ export function buildSchedule(ctx: ScheduleContext): ScheduleResult {
     if (!monthly) return undefined;
     const lines = r.account ? matchedLines(monthly, r.account) : [];
     if (r.account && !lines.length) warnings.push(`Adjustment "${r.description}" names account "${r.account}", which is not on the monthly P&L; its months are spread evenly.`);
-    const weights = lines.length ? accountMonths(monthly, r.account!)! : flatMonths(monthly, 1);
+    const shape = lines.length ? accountMonths(monthly, r.account!)! : flatMonths(monthly, 1);
+    // A one-time item sits in the months its account ran above its usual level, not across the year by the account's shape.
+    const weights = r.category === "non_recurring" && lines.length ? excessOverRunRate(monthly, years, shape) : shape;
     const rule = stubRuleFor(r);
     const byMonth = monthsForRow(monthly, years, r.byFiscalYear, weights, rule);
     if (stubMonths.length) {

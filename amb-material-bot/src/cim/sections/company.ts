@@ -91,7 +91,7 @@ function fallback22(ctx: CimContext): NonNullable<CimCopy["s2_2"]> {
     const s = slugOf(ctx, l.label);
     return { row: `rev.line.${l.account}`, lead: `${l.label}: {{line.${s}.latest}}, {{line.${s}.share0.${ctx.latest.key}}} of revenue,`, body: `${ctx.brief.has(`line.${s}.yoy`) ? `{{line.${s}.yoy}} change on the prior year` : "no prior-year revenue to compare"}; ${confirm(ctx, "driver", `What drove the change in ${l.label.toLowerCase()} revenue`)}.` };
   });
-  return { observations: obs.length >= 2 ? obs : [...obs, { row: "", lead: "Revenue of {{rev.latest}}", body: `in ${ctx.latest.label}.` }] };
+  return { observations: obs.length >= 2 ? obs : [...obs, { row: "rev.total", lead: "Revenue of {{rev.latest}}", body: `in ${ctx.latest.label}.` }] };
 }
 
 const s2_3: PageModule = {

@@ -11,7 +11,7 @@ import { findColumn, latestColumn } from "../model/types.ts";
 import { isFieldDepartment } from "../model/analytics.ts";
 import type { RequestRow } from "../requests/schema.ts";
 import { fyRange } from "../util/format.ts";
-import { Brief, buildBrief } from "./brief.ts";
+import { Brief, buildBrief, joinDepartments } from "./brief.ts";
 import type { CimCopy, PageCopyKey } from "./copy.ts";
 
 export interface Firm {
@@ -128,7 +128,13 @@ export const at = (ctx: CimContext, c: PeriodColumn): PeriodValues => ctx.out.pe
 
 
 /** The columns every financial table shows: the fiscal years, then LTM and PF when they differ from the latest year. */
-export const tableColumns = (ctx: CimContext): PeriodColumn[] => [...ctx.fy, ...(ctx.ltm ? [ctx.ltm] : []), ...(ctx.pf ? [ctx.pf] : [])];
+/**
+ * Period columns of the financial tables: every fiscal year, or, when an LTM
+ * differs from the latest fiscal year, the last two with the LTM (as the
+ * headline tables), so a statement with three years, an LTM and a PF column
+ * still fits its six grid columns; then PF.
+ */
+export const tableColumns = (ctx: CimContext): PeriodColumn[] => [...(ctx.ltm ? ctx.fy.slice(-2) : ctx.fy), ...(ctx.ltm ? [ctx.ltm] : []), ...(ctx.pf ? [ctx.pf] : [])];
 
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
@@ -168,13 +174,26 @@ export function residualName(ctx: CimContext): string | undefined {
 /** The field departments on the payroll register, as the register names them ("Field service and installation"). */
 export function fieldDepartments(ctx: CimContext): string {
   const names = (ctx.out.headcount?.byDepartment ?? []).map((d) => d.department).filter(isFieldDepartment);
-  if (!names.length) return "";
-  const joined = names.length === 1 ? names[0]! : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]!.toLowerCase()}`;
-  return joined.charAt(0).toUpperCase() + joined.slice(1);
+  return names.length ? joinDepartments(names) : "";
+}
+
+/**
+ * The customer pages' note. When and how buyers see names is AMB's process
+ * call, not a fact of the sources, so the deck states only that names are
+ * coded and open-questions.md asks for the rest (guide 1.4).
+ */
+export function codedNote(ctx: CimContext): string {
+  const q = "When buyers see customer names (for example, in the data room after a management meeting): the customer pages say only that names are coded";
+  if (!ctx.openQuestions.includes(q)) ctx.openQuestions.push(q);
+  return "Customers are coded; names are not shown in this memorandum.";
 }
 
 /** "Per management; not independently verified." */
 export const PER_MANAGEMENT = "Per management; not independently verified.";
+
+/** Footnotes copy points at by name, "{{fn.mgmt}}"; each page numbers them against its own notes band. */
+export const NAMED_FOOTNOTES: Record<string, string> = { mgmt: PER_MANAGEMENT };
+export const NAMED_MARKER = /\{\{fn\.([a-z]+)\}\}/g;
 
 /**
  * AMB states Adj. EBITDA after the capital reserve (guide 5.4); the figure
@@ -193,7 +212,10 @@ export const reserveSentence = (ctx: CimContext): string => {
  */
 export const nonGaap = (ctx: CimContext): string => {
   const reserve = reserveSentence(ctx);
-  return `Adj. EBITDA${ctx.mainStreet ? ", SDE" : ""} and PF Adj. EBITDA are non-GAAP measures; see ${pageRef("S7.1")} for the reconciliation to net income.${reserve ? ` ${reserve}` : ""}`;
+  // Only the measures the deck shows: PF Adj. EBITDA exists when a pro forma adjustment is included.
+  const measures = ["Adj. EBITDA", ...(ctx.mainStreet ? ["SDE"] : []), ...(ctx.pf ? ["PF Adj. EBITDA"] : [])];
+  const named = measures.length === 1 ? `${measures[0]} is a non-GAAP measure` : `${measures.slice(0, -1).join(", ")} and ${measures[measures.length - 1]} are non-GAAP measures`;
+  return `${named}; see ${pageRef("S7.1")} for the reconciliation to net income.${reserve ? ` ${reserve}` : ""}`;
 };
 
 /** A page reference token resolved after the planner numbers the pages: "{{page:S7.1}}" -> "page 17". */

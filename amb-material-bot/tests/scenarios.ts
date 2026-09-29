@@ -230,3 +230,43 @@ export function zeroRevenueMonths(): Scenario {
   write(file, g);
   return scenario(dir);
 }
+
+/**
+ * The sample carried six months past its year-end, to Jun-26: each row's
+ * Jan-Jun 2026 is its Jan-Jun 2025 grown 5%, so every total row still adds
+ * up. YTD Jun-26, LTM Jun-26 and FY2025 are three different windows, and the
+ * prior-year LTM (Jul-24 to Jun-25) cuts through the [N2] settlement booked
+ * in Jun and Jul 2024 (QA round 3 F25).
+ */
+export function throughJun26(): Scenario {
+  const dir = copySample();
+  remove(dir, [ANNUAL_PNL]);
+  const file = path.join(dir, MONTHLY_PNL);
+  const g = read(file);
+  const header = 5;
+  const total = g[header]!.length - 1;
+  const num = (s: string | undefined) => Number((s ?? "").replace(/,/g, "")) || 0;
+  const added = ["Jan 2026", "Feb 2026", "Mar 2026", "Apr 2026", "May 2026", "Jun 2026"];
+  write(
+    file,
+    g.map((r, i) => {
+      if (i === 2) return [r[0]!.replace("December 2025", "June 2026"), ...r.slice(1)];
+      if (i < header) return r;
+      if (i === header) return [...r.slice(0, total), ...added, ...r.slice(total)];
+      if (!r[total]) return [...r.slice(0, total), ...added.map(() => ""), ...r.slice(total)];
+      // Jan-Jun 2025 are months 25-30 of the export (columns 3 + 24 to 3 + 29).
+      const values = added.map((_, k) => Math.round(num(r[3 + 24 + k]) * 1.05 * 100) / 100);
+      const sum = values.reduce((s, v) => s + v, 0);
+      return [...r.slice(0, total), ...values.map((v) => v.toFixed(2)), (num(r[total]) + sum).toFixed(2)];
+    }),
+  );
+  return scenario(dir);
+}
+
+/** A row of a scenario's monthly P&L export by its label (column A or B), month by month from Jan-23. */
+export function monthlyRow(dir: string, label: string): number[] {
+  const g = read(path.join(dir, MONTHLY_PNL));
+  const row = g.find((r) => r[0] === label || r[1] === label)!;
+  const total = g[5]!.length - 1;
+  return row.slice(3, total).map((c) => Number((c ?? "").replace(/,/g, "")) || 0);
+}

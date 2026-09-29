@@ -119,7 +119,7 @@ describe("the partial current year (YTD stub)", () => {
   it("gives every add-back months when the file names no account, so a window never prorates a year it does not cover", async () => {
     const s = midYear(31, { ytdAddbacks: false });
     const ds = (await gatherIntake(s.row, REPO, () => {})).dataset;
-    const phones = ds.adjustments!.find((a) => a.description.startsWith("Owner family cell phones"))!;
+    const phones = ds.adjustments!.find((a) => /^Owner family (cell )?phones/.test(a.description))!;
     expect(phones.accounts).toBeUndefined();
     expect(phones.byMonth!["2025-03"]).toBe(0);
     // Run-rate of FY2024, which was zero for this row: nothing is invented.

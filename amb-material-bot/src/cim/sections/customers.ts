@@ -5,7 +5,7 @@
 
 import { monthLabel } from "../../domain/financials.ts";
 import type { CimContext } from "../context.ts";
-import { confirm, pageCopy, pageRef, PER_MANAGEMENT, population, residualName, resolveCopy, standardNote } from "../context.ts";
+import { codedNote, confirm, pageCopy, pageRef, PER_MANAGEMENT, population, residualName, resolveCopy, standardNote } from "../context.ts";
 import type { CimCopy } from "../copy.ts";
 import type { Block } from "../design.ts";
 import { spanW } from "../design.ts";
@@ -34,7 +34,7 @@ const s4_1: PageModule = {
     const top = ctx.carried.get("S4.1")?.includes("S4.4") ? top10(ctx, spanW(7, 12)) : undefined;
     const obs = observationsBlock(top ? "the top-10 list" : "the customer mix", keyObservations(ctx, "S4.1", copy.observations, present(top, mix)));
     const b = ctx.brief;
-    const title = chooseTitle(ctx, "S4.1 title", copy.title, `${b.t("cust.count")} listed accounts produced ${b.t("cust.codedRevenue")} in ${ctx.latest.label}; the largest is ${b.t("cust.largestShare")} of revenue and the top 10 ${b.t("cust.top10Share")}`);
+    const title = chooseTitle(ctx, "S4.1 title", copy.title, `${b.t("cust.billedCount")} listed accounts billed ${b.t("cust.codedRevenue")} in ${ctx.out.customers?.period.label ?? ctx.latest.label}; the largest is ${b.t("cust.largestShare")} of revenue and the top 10 ${b.t("cust.top10Share")}`);
     return [
       draft(ctx, {
         id: "S4.1",
@@ -43,7 +43,7 @@ const s4_1: PageModule = {
         rows: [{ columns: [{ span: [1, 6], blocks: present(chart, mix) }, { span: [7, 12], blocks: present(top, obs) }] }],
         notes: {
           source: source(ctx.sources.financials, ctx.sources.customers),
-          note: standardNote(ctx, "Customers are coded; names are available in the data room after a management meeting."),
+          note: standardNote(ctx, codedNote(ctx)),
           footnotes: [
             ...(residualName(ctx) ? [`${capFirst(residualName(ctx)!)} are not listed individually; their revenue is the P&L revenue less the ${population(ctx)}.`] : []),
             ...(ctx.out.customers ? [`${capFirst(population(ctx))} billed at any time in ${ctx.out.customers.period.label}; ${b.t("cust.count")} were active at ${monthLabel(ctx.latest.end)}.`] : []),
@@ -121,7 +121,6 @@ const s4_2: PageModule = {
         notes: {
           source: source(ctx.sources.customers),
           note: `${capFirst(population(ctx))} (coded) only${residualName(ctx) ? `; ${residualName(ctx)} are not listed individually` : ""}. Revenue in USD thousands. Churn is lost ÷ average accounts; GDR and NDR are defined on ${pageRef("S11.1")}.${b.has(`cust.lostBilled.${L}`) ? ` Ending revenue leaves out ${b.t(`cust.lostBilled.${L}`)} billed in ${ctx.fy[ctx.fy.length - 1]!.label} by accounts lost during the year.` : ""}`,
-          footnotes: copy.takeaway?.includes("(1)") ? [PER_MANAGEMENT] : [],
         },
         carries: cohorts ? ["S4.3"] : [],
       }),

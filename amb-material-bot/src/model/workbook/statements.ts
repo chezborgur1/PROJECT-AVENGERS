@@ -679,7 +679,7 @@ export function planLadder(ctx: TabContext): SheetBuilder {
   const l = periodLayout(model, 3);
   // Each rung's basis prints as a numbered note under the ladder, not in a column beside it: a wrapped Basis cell set the
   // height of its figures' row, and printed apart it put the bases pages away from the figures (QA round 3 F1).
-  // Rung labels are the advisor's descriptions with their refs ("(+) Owner family cell phones and personal meals [N3]"): at the
+  // Rung labels are the advisor's descriptions with their refs ("(+) Owner family phones and meals [N3]"): at the
   // standard 34 they wrap, and a two-line rung breaks the 12.75 pt rhythm and pushes the ladder past one page.
   applyPeriodWidths(b, l, LADDER_LABEL_WIDTH, { notes: false });
   b.anatomy({ subtitle: "Adjusted EBITDA and SDE ($000s)", lastCol: l.lastValueCol, toggleCol: l.lastValueCol, masterToggle: ctx.masterToggle });
@@ -1111,7 +1111,7 @@ export function planAdjustments(ctx: TabContext): SheetBuilder {
     }
   }
   b.cell(b.r("tier_s3"), 3, { v: `Capital reserve [S3]${model.mode.mode === "mainStreet" ? "" : " (zero outside Main Street mode)"}` });
-  b.note(noteRow, 2, "Note: a positive amount increases EBITDA. Refs number by tier in row order (insert a row and every ref renumbers). Status is an input: the ladder on Adj. EBITDA lists the rows accepted when the bot wrote the workbook (rerun the bot after changing a status to add a rung); a row set to Proposed, Supported or Excluded here drops out of every total at once. Rows with months are exact for YTD and LTM; rows without months are prorated by fiscal-year months in the window.");
+  b.note(noteRow, 2, "Note: a positive amount increases EBITDA. Refs number by tier in row order (insert a row and every ref renumbers). Status is an input: the ladder on Adj. EBITDA lists the rows accepted when the bot wrote the workbook (rerun the bot after changing a status to add a rung); a row set to Proposed, Supported or Excluded here drops out of every total at once. Rows with months carry each fiscal year by the named account's monthly shape (a one-time item in the months the account ran above its median, typed as inputs), so YTD and LTM take those months; rows without months are prorated by fiscal-year months in the window.");
   // Two ranges, each one page wide: the schedule text with its note, then the compact figures and the tier totals with Ref and
   // Adjustment repeated beside them, so the period pages carry one line per adjustment.
   b.print({ areas: [`B2:${addr(noteRow, 12)}`, `${addr(compactHead, l.firstCol)}:${addr(lastPrinted, l.lastValueCol)}`], landscape: true, fitToWidth: 1, fitToHeight: 0, titlesRow: "2:6", titlesCol: "B:C" });
@@ -1137,6 +1137,9 @@ function sumTier(model: ModelOutput, columnKey: string, pick: (r: Adjustment) =>
 function allocationFormulas(row: Adjustment, model: ModelOutput, r: number, l: PeriodLayout): ({ f?: string } | undefined)[] | undefined {
   // File rows, and the bot's own estimates that follow an account (the owner's payroll taxes follow officer compensation).
   if (row.origin !== "advisor" && row.origin !== "addbacks_csv" && !(row.origin === "suggested" && row.accounts?.length)) return undefined;
+  // A one-time item's months are where its account ran above its run-rate (ingest/adjustments.ts excessOverRunRate): they are
+  // typed as the inputs, and its periods sum them, rather than spreading the year by the account's shape (QA round 3 F23).
+  if (row.category === "non_recurring") return undefined;
   const grid = model.monthly!;
   const hist = model.columns.filter((c) => !c.projected);
   const accounts = row.accounts ?? [];

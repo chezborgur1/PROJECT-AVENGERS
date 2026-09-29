@@ -97,6 +97,10 @@ describe("pipeline on the sample request (offline: no Claude)", () => {
     ]);
   });
 
+  it("keys every listed observation to a table row and lists every letter a table carries (QA round 3 F27)", () => {
+    expect(summary).not.toMatch(/observation letters disagree/);
+  });
+
   it("builds the CIM from the folder's reviewed copy, inside the Main Street length, with no price talk", async () => {
     expect(result.copySource).toBe("fixture");
     expect(result.pages).toBeGreaterThanOrEqual(20);

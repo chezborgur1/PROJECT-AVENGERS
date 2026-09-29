@@ -198,7 +198,7 @@ const s6_4: PageModule = {
         section: SECTION,
         title,
         rows: [{ columns: [{ span: [1, 12], blocks: present(chart) }] }, { columns: [{ span: [1, 7], blocks: present(quarters) }, { span: [8, 12], blocks: present(obs) }] }],
-        notes: { source: source(`${ctx.sources.statements}, monthly, ${monthLabel(ctx.out.monthly!.chartWindow.start)} to ${monthLabel(ctx.out.monthly!.chartWindow.end)}`), note: standardNote(ctx, "Months are as reported; quarters are fiscal quarters.") },
+        notes: { source: source(`${ctx.sources.statements}, monthly, ${monthLabel(ctx.out.monthly!.chartWindow.start)} to ${monthLabel(ctx.out.monthly!.chartWindow.end)}`), note: standardNote(ctx, "Months are as reported; the line is the trailing twelve-month average from the twelfth month; quarters are fiscal quarters.") },
       }),
     ];
   },

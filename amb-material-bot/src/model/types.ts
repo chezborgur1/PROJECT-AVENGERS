@@ -318,7 +318,8 @@ export interface HeadcountAnalytics {
    * fiscal year's pay of everyone in the department, leavers included, so
    * the average divides it by the year's average FTE (`avgFte`).
    */
-  byDepartment: { department: string; count: number; avgFte: number; totalComp: number; avgComp: number; pctRevenue: number; avgTenureYears: number }[];
+  /** `wages` is the fiscal year's gross pay from the register, before the employer costs `totalComp` adds. */
+  byDepartment: { department: string; count: number; avgFte: number; totalComp: number; avgComp: number; pctRevenue: number; avgTenureYears: number; wages?: number }[];
   rollForwardByFiscalYear: Record<number, { start: number; hires: number; departures: number; departuresByType: Record<string, number>; end: number }>;
   /** Monthly hires and departures for MC-H1. */
   monthly?: { month: MonthKey; hires: number; departures: number; end: number }[];

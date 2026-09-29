@@ -6,7 +6,7 @@
 import { monthLabel } from "../../domain/financials.ts";
 import type { CimContext } from "../context.ts";
 import { dataAgeDays, STALE_DAYS } from "../../model/types.ts";
-import { fieldDepartments, standardNote } from "../context.ts";
+import { codedNote, fieldDepartments, standardNote } from "../context.ts";
 import type { Block, TextCell } from "../design.ts";
 import { blockHeight, gapBefore, r3, spanW } from "../design.ts";
 import { monthlyIncomeStatement, ownerCompRung } from "../exhibits.ts";
@@ -193,7 +193,7 @@ const s11_4: PageModule = {
         section: SECTION,
         title: `Coded customer list, ${ctx.out.customers!.period.label}`,
         rows: [{ columns: [0, 1, 2].map((i) => ({ span: [1 + i * 4, 4 + i * 4] as [number, number], blocks: [table(list.slice(i * per, (i + 1) * per), i === 0)] })) }],
-        notes: { source: source(ctx.sources.customers), note: "Customers are coded; names are available in the data room after a management meeting." },
+        notes: { source: source(ctx.sources.customers), note: codedNote(ctx) },
         kind: "reference",
       }),
     ];

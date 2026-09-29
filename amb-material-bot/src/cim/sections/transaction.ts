@@ -43,7 +43,7 @@ const s10_1: PageModule = {
       ctx,
       "S10.1 title",
       copy.title,
-      `${owner?.name ?? "The Seller"} is offering ${ctx.assetSale ? "the operating assets" : "100% of the Company"}${months ? ` with up to ${months} months of transition` : ""}${ctx.intake?.transaction.timing ? `, targeting a closing within ${/12 months/.test(ctx.intake.transaction.timing) ? "12 months" : ctx.intake.transaction.timing}` : ""}`,
+      `${owner?.name ?? "The Seller"} is offering ${ctx.assetSale ? "the operating assets" : "100% of the Company"}${months ? ` with up to ${months} months of transition` : ""}${timingMonths(ctx) ? `, targeting a closing within ${timingMonths(ctx)} months` : ""}`,
     );
     const merged = ctx.carried.get("S10.1")?.includes("S10.2") ?? false;
     const rows = merged
@@ -71,9 +71,9 @@ function fallback101(ctx: CimContext): NonNullable<CimCopy["s10_1"]> {
     ? `${owner} is offering substantially all of the operating assets of ${ctx.legalName}, free and clear of liens. The Seller retains cash, receivables and payables.`
     : `${owner} is offering 100% of ${ctx.legalName}. Offers should assume a cash-free, debt-free basis, with a normalized level of working capital delivered at close.`;
   return {
-    transaction: `${offer} ${i?.reasonForSale.text ? `The reason for sale is ${i.reasonForSale.text.charAt(0).toLowerCase()}${i.reasonForSale.text.slice(1)} (1).` : `Reason for sale: ${confirm(ctx, "reason for sale", "Reason for sale")}.`}`,
-    transition: i?.owner.transition.description ? `${owner} is ${i.owner.transition.description.charAt(0).toLowerCase()}${i.owner.transition.description.slice(1)} (1).` : `${confirm(ctx, "transition", "Owner transition offer")}.`,
-    premises: i?.locations[0] ? `The Company operates from ${i.locations[0].name}${i.locations[0].leaseExpiry ? `, leased through ${i.locations[0].leaseExpiry}` : ""} (1).` : `${confirm(ctx, "premises", "Premises and lease terms")}.`,
+    transaction: `${offer} ${i?.reasonForSale.text ? `The reason for sale is ${i.reasonForSale.text.charAt(0).toLowerCase()}${i.reasonForSale.text.slice(1)} {{fn.mgmt}}.` : `Reason for sale: ${confirm(ctx, "reason for sale", "Reason for sale")}.`}`,
+    transition: i?.owner.transition.description ? `${owner} is ${i.owner.transition.description.charAt(0).toLowerCase()}${i.owner.transition.description.slice(1)} {{fn.mgmt}}.` : `${confirm(ctx, "transition", "Owner transition offer")}.`,
+    premises: i?.locations[0] ? `The Company operates from ${i.locations[0].name}${i.locations[0].leaseExpiry ? `, leased through ${i.locations[0].leaseExpiry}` : ""} {{fn.mgmt}}.` : `${confirm(ctx, "premises", "Premises and lease terms")}.`,
     // ICP1's closing sentences, verbatim (guide 2.9).
     process: `Qualified buyers who have signed a confidentiality agreement may request a management meeting through AMB Advisory. ${NO_CONTACT}`,
   };
@@ -81,6 +81,11 @@ function fallback101(ctx: CimContext): NonNullable<CimCopy["s10_1"]> {
 
 /** ICP1's no-contact instruction, verbatim (guide 2.9). */
 const NO_CONTACT = "All inquiries should be directed to AMB Advisory. Do not contact the Seller or its employees directly.";
+
+/** The months in the Seller's timing goal ("Clean exit within 12 months" -> 12), when it names them. */
+function timingMonths(ctx: CimContext): string | undefined {
+  return /within\s+(\d+)\s+months/i.exec(ctx.intake?.transaction.timing ?? "")?.[1];
+}
 
 /**
  * ICP1's eight stages verbatim, with AMB's post-LOI wording for stages 6 to 8,
@@ -90,8 +95,9 @@ const NO_CONTACT = "All inquiries should be directed to AMB Advisory. Do not con
 function processRows(ctx: CimContext): TextCell[][] {
   const n = ctx.out.namedOutputs;
   const date = (d: string | null, what: string) => (d ? new Date(`${d}T00:00:00Z`).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" }) : confirm(ctx, "date", what));
-  const timing = ctx.intake?.transaction.timing;
-  const close = n.EffectiveDate ? date(n.EffectiveDate, "") : timing ? `${timing} (1)` : confirm(ctx, "date", "Target effective date");
+  // The Seller's timing goal gives the stage a timing ("Within 12 months"), not the goal's own phrase, in its column.
+  const months = timingMonths(ctx);
+  const close = n.EffectiveDate ? date(n.EffectiveDate, "") : months ? `Within ${months} months (1)` : confirm(ctx, "date", "Target effective date");
   return [
     ["1", "NDA Execution", "Prospective buyer executes AMB Advisory's standard NDA to receive full financial package and data room access.", ""],
     ["2", "Initial Call", "AMB Advisory schedules an introductory call with the prospective buyer to review the opportunity and answer preliminary questions.", ""],
@@ -155,7 +161,7 @@ const s10_2: PageModule = {
         section: SECTION,
         title: "Process and next steps",
         rows: [{ columns: [{ span: [1, 8], blocks: [processTable(ctx, spanW(1, 8))] }, { span: [9, 12], blocks: [contactTable(ctx, spanW(9, 12), true)] }] }],
-        notes: { source: "AMB Advisory.", footnotes: ctx.intake?.transaction.timing ? [PER_MANAGEMENT] : [] },
+        notes: { source: "AMB Advisory.", footnotes: timingMonths(ctx) ? [PER_MANAGEMENT] : [] },
         kind: "reference",
       }),
     ];

@@ -381,7 +381,8 @@ export function headcountAnalytics(ctx: HeadcountContext): HeadcountAnalytics {
       // Pay covers everyone on payroll during the year, leavers included, so the average divides by the year's average FTE, not the year-end count.
       const avgFte = members.reduce((s, e) => s + fteYears(e, fyStart, fyEnd), 0);
       const avgTenureYears = onboard.length ? onboard.reduce((s, e) => s + tenureYears(e.hireDate, asOfDate), 0) / onboard.length : 0;
-      return { department, count, avgFte, totalComp, avgComp: avgFte ? totalComp / avgFte : 0, pctRevenue: ctx.fiscalYear.revenue ? totalComp / ctx.fiscalYear.revenue : 0, avgTenureYears };
+      const wages = members.reduce((s, e) => s + (e.wagesByFiscalYear[fy] ?? 0), 0);
+      return { department, count, avgFte, totalComp, avgComp: avgFte ? totalComp / avgFte : 0, pctRevenue: ctx.fiscalYear.revenue ? totalComp / ctx.fiscalYear.revenue : 0, avgTenureYears, wages };
     })
     .sort((a, b) => b.totalComp - a.totalComp);
 

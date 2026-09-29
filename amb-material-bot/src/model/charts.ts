@@ -28,6 +28,8 @@ export interface ChartPlacement {
   heightPt: number;
   kind: "bar" | "line";
   grouping: "clustered" | "stacked";
+  /** Stacked bars parted by a white hairline (a mix); a diverging stack has none, so an empty month draws nothing on the axis. */
+  separators?: boolean;
   categories: { ref: string; labels: string[] };
   series: ChartSeriesRef[];
   /** Data-label number format; undefined leaves the bars unlabelled. */
@@ -81,8 +83,8 @@ function seriesXml(p: ChartPlacement, s: ChartSeriesRef, i: number): string {
   if (p.kind === "line") {
     return `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${tx}<c:spPr><a:ln w="${Math.round(1.75 * EMU_PER_PT)}" cap="rnd">${solid(s.color)}<a:round/></a:ln></c:spPr><c:marker><c:symbol val="none"/></c:marker>${cat}${val}<c:smooth val="0"/></c:ser>`;
   }
-  // Stacked segments are parted by a white hairline; single and diverging bars have no outline.
-  const outline = p.grouping === "stacked" ? line(CHART_COLOR.separator, 0.5) : noLine;
+  // Stacked mix segments are parted by a white hairline; single and diverging bars have no outline, so a zero segment is invisible.
+  const outline = p.grouping === "stacked" && p.separators !== false ? line(CHART_COLOR.separator, 0.5) : noLine;
   const labels = p.labelFormat
     ? `<c:dLbls><c:numFmt formatCode="${esc(p.labelFormat)}" sourceLinked="0"/><c:spPr><a:noFill/>${noLine}</c:spPr>${text(CHART_COLOR.label)}<c:dLblPos val="outEnd"/><c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbls>`
     : "";

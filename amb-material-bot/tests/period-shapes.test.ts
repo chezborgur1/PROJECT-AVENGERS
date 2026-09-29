@@ -16,7 +16,7 @@ import { runModel } from "../src/model/engine.ts";
 import { verifyWorkbook } from "../src/model/verifyWorkbook.ts";
 import { writeWorkbook } from "../src/model/workbook.ts";
 import { REPO, tmpDir } from "./helpers.ts";
-import { annualNewer, annualYears, bankOutsideGrid, juneYearEnd, midYear, mixedOlderAnnual, monthly12, zeroRevenueMonths, type Scenario } from "./scenarios.ts";
+import { annualNewer, annualYears, bankOutsideGrid, juneYearEnd, midYear, mixedOlderAnnual, monthly12, monthlyRow, throughJun26, zeroRevenueMonths, type Scenario } from "./scenarios.ts";
 
 const firm = { name: "AMB Advisory Services", contact: "Frank", email: "frank@example.com", phone: "" };
 const date = new Date("2026-09-29T12:00:00Z");
@@ -63,6 +63,34 @@ describe("period shapes beyond the sample (offline)", () => {
     expect(heads).toContain("FY24 y/y");
     expect(heads).not.toContain("LTM y/y");
     expect(r.cim.log.filter((l) => /prints .* on page \d+ and .* on page/.test(l))).toEqual([]);
+  }, 600_000);
+
+  it("builds an as-of month six months into the fiscal year (Jun-26) whose windows match hand sums (QA round 3 F25)", async () => {
+    const s = throughJun26();
+    const r = await build(s);
+    expectDelivered(r);
+    // Month 0 is Jan-23; the export now runs to Jun-26 (month 41).
+    const revenue = monthlyRow(s.dir, "Total Income");
+    expect(revenue).toHaveLength(42);
+    const sum = (from: number, to: number) => revenue.slice(from, to + 1).reduce((a, v) => a + v, 0);
+    const p = r.model.periods;
+    expect(p["LTM2026-06"]!.pnl.revenue).toBeCloseTo(sum(30, 41), 2);
+    expect(p["LTM2025-06"]!.pnl.revenue).toBeCloseTo(sum(18, 29), 2);
+    expect(p["YTD2026-06"]!.pnl.revenue).toBeCloseTo(sum(36, 41), 2);
+    expect(p["YTD2025-06"]!.pnl.revenue).toBeCloseTo(sum(24, 29), 2);
+    expect(p.FY2025!.pnl.revenue).toBeCloseTo(sum(24, 35), 2);
+    expect(r.model.namedOutputs.Rev_LTM).toBeCloseTo(sum(30, 41), 2);
+    // The strip and the charts end at the as-of month.
+    expect(r.model.monthly!.chartWindow.end).toBe("2026-06");
+    // [N2], the $24K settlement in the Jun and Jul 2024 legal fees: out of LTM Jun-26, and the prior-year LTM takes July's half.
+    const n2 = r.model.adjustments.find((a) => a.row.description.startsWith("Legal fees: settled"))!;
+    expect(n2.row.byMonth!["2024-06"]! + n2.row.byMonth!["2024-07"]!).toBeCloseTo(24_000, 0);
+    expect(n2.byColumn["LTM2026-06"]).toBeCloseTo(0, 6);
+    expect(n2.byColumn["LTM2025-06"]).toBeCloseTo(n2.row.byMonth!["2024-07"]!, 6);
+    expect(n2.byColumn["LTM2025-06"]).toBeGreaterThan(8_000);
+    // The named LTM outputs read the LTM column, not a fiscal year: the customer list is by fiscal year, so no Top10Share_LTM.
+    expect(r.model.namedOutputs.SDE_LTM).toBeCloseTo(p["LTM2026-06"]!.ladder.sde, 6);
+    expect(r.model.namedOutputs.Top10Share_LTM).toBeNull();
   }, 600_000);
 
   it("builds a June year-end whose balance sheets fall in December", async () => {

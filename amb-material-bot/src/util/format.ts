@@ -4,6 +4,8 @@
 // observation can never disagree on rounding.
 
 export const EN_DASH = "–";
+/** The minus sign (U+2212) of a signed change; the en dash stays the zero mark, so the two never sit side by side as one glyph (spec 4.1). */
+export const MINUS = "\u2212";
 
 /** Prose money, whole dollars in: "$3.04M", "$452.9K", "$3.1K", "$850" (guide 4.6; exact salaries use fmtDollars). Negatives use the minus form AMB writes in prose ("–$166K"). */
 export function fmtMoney(v: number): string {
@@ -96,14 +98,14 @@ const shown = (v: number, dp: number) => Math.round(v * 100 * 10 ** dp) / (100 *
 
 /**
  * Change between two ratios in basis points, signed, as one column's unit
- * (design spec 4.1: one unit per column, named in the header): +40 bps, –160 bps.
+ * (design spec 4.1: one unit per column, named in the header): +40 bps, −160 bps.
  * Taken between the levels as printed at `dp` (61.0% to 61.9% is +90 bps).
  */
 export function fmtBps(from: number, to: number, dp = 1): string {
   if (!Number.isFinite(from) || !Number.isFinite(to)) return "n.a.";
   const bps = Math.round((shown(to, dp) - shown(from, dp)) * 10_000);
   if (bps === 0) return EN_DASH;
-  return `${bps < 0 ? EN_DASH : "+"}${Math.abs(bps).toLocaleString("en-US")} bps`;
+  return `${bps < 0 ? MINUS : "+"}${Math.abs(bps).toLocaleString("en-US")} bps`;
 }
 
 /** Growth as a table figure with the n.m. rule: from a zero or negative base, or to zero, the cell reads "n.m.". */

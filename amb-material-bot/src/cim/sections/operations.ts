@@ -10,7 +10,7 @@ import { pageCopy, PER_MANAGEMENT, standardNote } from "../context.ts";
 import type { CimCopy } from "../copy.ts";
 import type { Block, Paragraph, TextCell } from "../design.ts";
 import { r3, spanW } from "../design.ts";
-import { facilities, headcountByDepartment, headcountRollForward, keyObservations, observationsBlock, organization, tenureAtDeparture, usable } from "../exhibits.ts";
+import { facilities, fieldWagesTie, headcountByDepartment, headcountRollForward, keyObservations, observationsBlock, organization, tenureAtDeparture, usable } from "../exhibits.ts";
 import { chooseTitle, draft, present, source } from "./common.ts";
 import type { PageModule, SectionModule } from "./types.ts";
 
@@ -53,6 +53,21 @@ function suppliers(ctx: CimContext, w: number): Block | undefined {
 /** "a, b and c". */
 const series = (xs: string[]): string => (xs.length <= 1 ? (xs[0] ?? "") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`);
 
+/** A head count in running text: "one" for a single person, the figure otherwise. */
+const countWord = (n: number): string => (n === 1 ? "one" : fmtCount(n));
+
+/**
+ * A role from the notes as a noun for its count: "service technicians",
+ * "install crew" (a collective), "CSR / dispatch staff", "one bookkeeper".
+ */
+function roleNoun(role: string, count: number): string {
+  const r = inText(role);
+  if (count === 1) return r;
+  if (/\bcrew$|\bstaff$|s$/i.test(r)) return r;
+  if (/\//.test(r)) return `${r} staff`;
+  return `${r}s`;
+}
+
 /** A clause starting a sentence. */
 const inTextUpper = (s: string): string => `${s.charAt(0).toUpperCase()}${s.slice(1)}`;
 
@@ -73,33 +88,42 @@ function peopleProse(ctx: CimContext): Block | undefined {
   const b = ctx.brief;
   const L = ctx.latest.label;
   const paragraphs: Paragraph[] = [];
-  const roles = i.workforce.composition.filter((c) => !/\bowner\b/i.test(c.role)).map((c) => `${inText(c.role)} ${fmtCount(c.count)}`);
-  if (roles.length) {
-    const size = b.has("hc.total") ? `${b.t("hc.total")} employees besides the owner, by role: ` : "By role: ";
+  const staff = i.workforce.composition.filter((c) => !/\bowner\b/i.test(c.role));
+  if (staff.length) {
+    // A sentence, not a list dump (QA round 3 F30): "Of the 23 employees besides the owner, 14 are service technicians, ...".
+    const total = b.has("hc.total") ? b.t("hc.total") : fmtCount(staff.reduce((s, c) => s + c.count, 0));
+    const roles = staff.map((c, k) => `${countWord(c.count)} ${k === 0 ? "are " : ""}${roleNoun(c.role, c.count)}`);
     const pay = i.workforce.payBasis ? ` ${i.workforce.payBasis}${i.workforce.union === false ? "; there is no union" : i.workforce.union ? "; the workforce is unionized" : ""} (1).` : "";
     const flow = b.has(`hc.hires.${ctx.latest.key}`) ? ` ${L} saw ${b.t(`hc.hires.${ctx.latest.key}`)} hires and ${b.t(`hc.departures.${ctx.latest.key}`)} departures.` : "";
-    paragraphs.push({ lead: "Staffing.", body: `${size}${series(roles)} (1).${pay}${flow}` });
+    paragraphs.push({ lead: "Staffing.", body: `Of the ${total} employees besides the owner, ${series(roles)} (1).${pay}${flow}` });
   }
   const o = i.owner;
   if (o.responsibilities.length) {
     const hours = o.hoursPerWeek ? `about ${o.hoursPerWeek} hours a week` : "the week";
-    const stay = o.transition.months ? ` ${o.name} will support the transition for up to ${o.transition.months} months after closing (1).` : "";
-    paragraphs.push({ lead: "The owner's role.", body: `${o.name} spends ${hours} on ${series(o.responsibilities.map((r) => inText(r.responsibility)))} (1).${stay}` });
+    // The repeat subject is "the owner", which the notes support; a pronoun would state a fact they do not give.
+    const stay = o.transition.months ? ` The owner will support the transition for up to ${o.transition.months} months after closing (1).` : "";
+    paragraphs.push({ lead: "The owner's role.", body: `${o.name || "The owner"} spends ${hours} on ${series(o.responsibilities.map((r) => inText(r.responsibility)))} (1).${stay}` });
   }
-  const fleet = i.fleetAndEquipment.map((f) => `${f.count !== undefined ? `${fmtCount(f.count)} ` : ""}${inText(f.item)} (${inText(f.ownership)})`);
+  // Fleet items that share an ownership phrase read as one clause: "18 service vans and 2 install trucks, all owned, ...".
+  const byOwnership = new Map<string, string[]>();
+  for (const f of i.fleetAndEquipment) byOwnership.set(f.ownership, [...(byOwnership.get(f.ownership) ?? []), `${f.count !== undefined ? `${fmtCount(f.count)} ` : ""}${inText(f.item)}`]);
+  const fleet = [...byOwnership].map(([ownership, items]) => `${series(items)}, ${items.length > 1 ? "all " : ""}${inText(ownership)}`);
   const systems = i.systems.map((s) => `${s.system} for ${inText(s.function)}`);
   if (fleet.length || systems.length) {
-    paragraphs.push({ lead: "Fleet and systems.", body: `${fleet.length ? `The fleet is ${series(fleet)} (1).` : ""}${systems.length ? `${fleet.length ? " " : ""}The Company runs ${series(systems)} (1).` : ""}` });
+    paragraphs.push({ lead: "Fleet and systems.", body: `${fleet.length ? `The fleet is ${fleet.join("; ")} (1).` : ""}${systems.length ? `${fleet.length ? " " : ""}The Company runs ${series(systems)} (1).` : ""}` });
   }
   const main = i.suppliers.filter((s) => /^main supplier/i.test(s.supplies)).map((s) => s.name);
-  const other = i.suppliers.filter((s) => !/^main supplier/i.test(s.supplies)).map((s) => `${s.name} for ${inText(s.supplies)}`);
-  const buys = [...(main.length ? [`main suppliers ${series(main)}`] : []), ...other];
+  const other = i.suppliers.filter((s) => !/^main supplier/i.test(s.supplies)).map((s) => {
+    const via = /^(.+?) through (.+)$/i.exec(s.supplies);
+    return via ? `${s.name} ${inText(via[1]!)} comes through ${via[2]}` : `${s.name} supplies ${inText(s.supplies)}`;
+  });
+  const buys = [...(main.length ? [`${series(main)} ${main.length > 1 ? "are the main suppliers" : "is the main supplier"}`] : []), ...other];
   const certified = i.company.certifications.map((c) => `a ${c.name}${c.since ? ` since ${c.since}` : ""}`);
   const rated = i.company.reputation.map((r) => `its ${r.metric} is ${r.value}`);
   const standing = certified.length ? [`It has been ${series(certified)}`, ...rated].join(", and ") : rated.length ? `${inTextUpper(series(rated))}` : "";
   if (buys.length || standing) {
     askLicenses(ctx);
-    paragraphs.push({ lead: "Suppliers and reputation.", body: `${buys.length ? `The Company buys from ${series(buys)} (1).` : ""}${standing ? `${buys.length ? " " : ""}${standing} (1).` : ""}` });
+    paragraphs.push({ lead: "Suppliers and reputation.", body: `${buys.length ? `${inTextUpper(buys.join("; "))} (1).` : ""}${standing ? `${buys.length ? " " : ""}${standing} (1).` : ""}` });
   }
   // Customer facts without a share: the shares are printed from the data on the customer pages.
   const who = i.customerFacts.filter((f) => !/%/.test(f.fact)).map((f) => f.fact);
@@ -143,7 +167,7 @@ const s5_1: PageModule = {
         rows: [prose ? { columns: [{ span: [1, 7], blocks: present(prose, org) }, { span: [8, 12], blocks: present(dept, roll, fac, obs) }] } : { columns: [{ span: [1, 7], blocks: present(org, roll) }, { span: [8, 12], blocks: present(dept, sup, fac, obs) }] }],
         notes: {
           source: source(ctx.sources.payroll, "Management"),
-          note: standardNote(ctx, "Employees other than management are described by role only; compensation includes employer taxes and benefits."),
+          note: standardNote(ctx, `Employees other than management are described by role only. ${(dept && fieldWagesTie(ctx)) || "Compensation includes employer taxes and benefits."}`),
           footnotes: [PER_MANAGEMENT],
         },
         carries: [dept ? "S5.2" : "", roll ? "S5.3" : "", sup || (prose && carries(ctx, "S5.1", "S5.5")) ? "S5.5" : "", ...(fac ? ["S2.4", "S2.5"].filter((id) => carries(ctx, "S5.1", id)) : [])].filter(Boolean),
@@ -161,7 +185,7 @@ function fallback51(ctx: CimContext): NonNullable<CimCopy["s5_1"]> {
     const role = m ? i!.workforce.composition.find((c) => c.role.toLowerCase() === m.role.toLowerCase())?.role : undefined;
     return {
       observations: [
-        { row: "org.total", lead: "{{staff.total}} employees besides the owner (1),", body: `with payroll excluding the owner at {{payrollPct.latest}} of revenue in ${ctx.latest.label}.` },
+        { row: "org.total", lead: "{{staff.total}} employees besides the owner {{fn.mgmt}},", body: `with payroll excluding the owner at {{payrollPct.latest}} of revenue in ${ctx.latest.label}.` },
         ...(m && role
           ? [{ row: `org.${role}`, lead: `${m.name}, ${m.role.toLowerCase()}${m.since ? ` with the Company since ${m.since.slice(0, 4)}` : ""},`, body: `runs ${m.responsibilities.join(" and ").toLowerCase()}${m.postCloseIntent === "stays" ? " and is expected to stay after closing" : ""} (1).` }]
           : []),
@@ -171,7 +195,7 @@ function fallback51(ctx: CimContext): NonNullable<CimCopy["s5_1"]> {
   return {
     observations: [
       { row: "org.total", lead: `{{hc.total}} employees besides the owner`, body: `at ${monthLabel(ctx.latest.end)}, {{hc.field}} of them in field roles.` },
-      { row: "", lead: `Payroll excluding the owner was {{payrollPct.latest}} of revenue`, body: `in ${ctx.latest.label}; compensation by department is in the table.` },
+      { row: "dept.total", lead: `Payroll excluding the owner was {{payrollPct.latest}} of revenue`, body: `in ${ctx.latest.label}; compensation by department is in the table.` },
     ],
   };
 }
@@ -190,7 +214,7 @@ const s5_2: PageModule = {
         section: SECTION,
         title: `${ctx.brief.t("hc.total")} employees besides the owner at ${monthLabel(ctx.latest.end)}, by department`,
         rows: [{ columns: [{ span: [1, 6], blocks: present(headcountByDepartment(ctx, usable(1, 6))) }] }],
-        notes: { source: source(ctx.sources.payroll), note: standardNote(ctx) },
+        notes: { source: source(ctx.sources.payroll), note: standardNote(ctx, fieldWagesTie(ctx) ?? "Compensation includes employer taxes and benefits.") },
       }),
     ];
   },

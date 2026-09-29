@@ -3,10 +3,10 @@
 // and assembling a page draft from rows of blocks.
 
 import type { CimContext } from "../context.ts";
-import { PER_MANAGEMENT, resolveCopy } from "../context.ts";
+import { NAMED_FOOTNOTES, NAMED_MARKER, PER_MANAGEMENT, resolveCopy } from "../context.ts";
 import { lintTitle, titleWidow } from "../copy.ts";
 import type { Block, ExhibitHeader, Notes, PageSpec, Row } from "../design.ts";
-import { cellText, notesLineCount, proseHeight } from "../design.ts";
+import { cellText, mapBlockText, notesLineCount, proseHeight } from "../design.ts";
 import { exhibitTitles } from "../exhibits.ts";
 import type { PageDraft } from "./types.ts";
 
@@ -56,11 +56,31 @@ export function markersIn(blocks: Block[]): number[] {
   return [...new Set(texts.flatMap((t) => [...t.matchAll(/\((\d)\)/g)].map((m) => Number(m[1]))))].sort((a, b) => a - b);
 }
 
+/**
+ * Give every named marker ("{{fn.mgmt}}") the number of its footnote on this
+ * page, adding the footnote when the page lacks it. Copy never types "(1)":
+ * which note is (1) depends on the page, and a typed number can point a
+ * management fact at another note (guide 4.6). Returns the page's footnotes.
+ */
+export function numberFootnotes(blocks: Block[], footnotes: string[]): string[] {
+  const list = [...footnotes];
+  const number = (t: string) =>
+    t.replace(NAMED_MARKER, (m, name: string) => {
+      const text = NAMED_FOOTNOTES[name];
+      if (!text) return m;
+      const i = list.indexOf(text);
+      return `(${(i < 0 ? list.push(text) : i + 1)})`;
+    });
+  for (const b of blocks) mapBlockText(b, number);
+  return list;
+}
+
 export function draft(ctx: CimContext, p: { id: string; section: string; title: string; rows: Row[]; notes: Notes; carries?: string[]; kind?: PageDraft["kind"] }): PageDraft {
   const rows = p.rows.filter((r) => r.columns.some((c) => c.blocks.length) || r.floating?.length);
   const blocks = rows.flatMap((r) => [...r.columns.flatMap((c) => c.blocks), ...(r.floating ?? [])]);
-  // (1) is "per management" throughout the deck: a page that marks a fact (1) and lists no footnote gets that one (guide 4.6).
-  const notes = markersIn(blocks).includes(1) && !p.notes.footnotes?.length ? { ...p.notes, footnotes: [PER_MANAGEMENT] } : p.notes;
+  const numbered = { ...p.notes, footnotes: numberFootnotes(blocks, p.notes.footnotes ?? []) };
+  // A table's typed (1) is "per management" when its page lists no footnote (guide 4.6).
+  const notes = markersIn(blocks).includes(1) && !numbered.footnotes.length ? { ...numbered, footnotes: [PER_MANAGEMENT] } : numbered;
   const spec: PageSpec = { id: p.id, section: p.section, title: p.title, rows, notes: fitNotes(ctx, p.id, notes) };
   return { id: p.id, spec, exhibits: exhibitTitles(blocks), carries: p.carries ?? [], kind: p.kind ?? "content" };
 }
@@ -91,6 +111,8 @@ const sentencesOf = (t: string): string[] => t.split(/(?<=\.)(?<!\b(?:Adj|Inc|No
 
 /** Sentences the Note line never gives up: the units line that opens it, the fiscal year-end (guide 4.6) and the rounding clause of a table that does not foot as shown. */
 const REQUIRED_NOTE = /^(Figures in USD|Fiscal year ends)|totals may not sum due to rounding/i;
+/** Sentences the Note line gives up last, after the source line's periods: the unaudited basis and the non-GAAP statement (guide 4.6). */
+const LAST_NOTE = /not been independently audited|non-GAAP measure/i;
 
 /** Period clauses a source part may lose when the band is full; the tables' own headings still name the periods. */
 const SOURCE_PERIOD = [/ and LTM [A-Z][a-z]{2}-\d{2}/g, /, FY\d{4}(–FY\d{4})?/g, / as of [A-Z][a-z]{2}-\d{2}/g];
@@ -98,11 +120,12 @@ const SOURCE_PERIOD = [/ and LTM [A-Z][a-z]{2}-\d{2}/g, /, FY\d{4}(–FY\d{4})?/
 /**
  * The notes band holds three lines at most (spec 6.3), so the band is fitted
  * rather than refused, in this order: the Note line gives up its optional
- * sentences (never the units or fiscal year-end sentence), the source line
- * its period clauses, then each footnote its later sentences, the last
- * footnote first. Each step is logged for run-summary.md. A band that still
- * needs a fourth line throws, and the planner reports that page instead of
- * failing the deck.
+ * sentences, each footnote its later sentences (the last footnote first),
+ * the source line its period clauses, and only then the Note line's
+ * unaudited and non-GAAP sentences. The units, fiscal year-end and rounding
+ * sentences are never cut. Each step is logged for run-summary.md. A band
+ * that still needs a fourth line throws, and the planner reports that page
+ * instead of failing the deck.
  */
 export function fitNotes(ctx: CimContext, id: string, notes: Notes): Notes {
   const out: Notes = { ...notes, footnotes: notes.footnotes && [...notes.footnotes] };
@@ -111,12 +134,21 @@ export function fitNotes(ctx: CimContext, id: string, notes: Notes): Notes {
   const resolved = (t: string | undefined) => t?.replace(/\{\{page:[^}]+\}\}/g, "the appendix");
   const over = () => notesLineCount({ ...out, source: resolved(out.source), note: resolved(out.note), footnotes: out.footnotes?.map((f) => resolved(f)!) }) > 3;
   const cut = new Set<string>();
-  while (over() && out.note) {
-    const parts = sentencesOf(out.note);
-    const drop = parts.map((p, i) => (REQUIRED_NOTE.test(p) ? -1 : i)).filter((i) => i >= 0).pop();
-    if (drop === undefined) break;
-    out.note = parts.filter((_, i) => i !== drop).join(" ");
-    cut.add("the note line");
+  const cutNote = (keep: (sentence: string) => boolean) => {
+    while (over() && out.note) {
+      const parts = sentencesOf(out.note);
+      const drop = parts.map((p, i) => (keep(p) ? -1 : i)).filter((i) => i >= 0).pop();
+      if (drop === undefined) break;
+      out.note = parts.filter((_, i) => i !== drop).join(" ");
+      cut.add("the note line");
+    }
+  };
+  cutNote((p) => REQUIRED_NOTE.test(p) || LAST_NOTE.test(p));
+  for (let i = (out.footnotes?.length ?? 0) - 1; i >= 0 && over(); i--) {
+    while (over() && sentencesOf(out.footnotes![i]!).length > 1) {
+      out.footnotes![i] = sentencesOf(out.footnotes![i]!).slice(0, -1).join(" ");
+      cut.add(`footnote (${i + 1})`);
+    }
   }
   for (const re of SOURCE_PERIOD) {
     if (!over() || !out.source) break;
@@ -125,12 +157,7 @@ export function fitNotes(ctx: CimContext, id: string, notes: Notes): Notes {
     out.source = shorter;
     cut.add("the source line's periods");
   }
-  for (let i = (out.footnotes?.length ?? 0) - 1; i >= 0 && over(); i--) {
-    while (over() && sentencesOf(out.footnotes![i]!).length > 1) {
-      out.footnotes![i] = sentencesOf(out.footnotes![i]!).slice(0, -1).join(" ");
-      cut.add(`footnote (${i + 1})`);
-    }
-  }
+  cutNote((p) => REQUIRED_NOTE.test(p));
   if (over()) throw new Error(`Notes band on ${id} needs more than three lines: ${JSON.stringify(out)}`);
   const entry = `${id}: ${[...cut].join(", ")} shortened to keep the notes band to three lines`;
   if (cut.size && !ctx.log.includes(entry)) ctx.log.push(entry);

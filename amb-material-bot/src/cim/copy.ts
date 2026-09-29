@@ -10,7 +10,8 @@
 import { z } from "zod";
 import type { FinancialDataset } from "../domain/financials.ts";
 import type { Brief } from "./brief.ts";
-import { unknownTokens } from "./brief.ts";
+import { mixedPopulations, unknownTokens } from "./brief.ts";
+import { NAMED_FOOTNOTES, NAMED_MARKER } from "./context.ts";
 import { titleWrap } from "./design.ts";
 
 // ---------------------------------------------------------------------------
@@ -336,7 +337,10 @@ export function lintCopy(copy: CimCopy, brief?: Brief): LintIssue[] {
     if (typeof v === "string") {
       if (path.endsWith(".row") || path.endsWith(".page")) return;
       if (brief) for (const k of unknownTokens(v, brief)) issues.push({ path, issue: `unknown figure token {{${k}}}`, text: v });
-      const text = (brief ? brief.resolve(v) : v).replace(/\{\{page:[^}]+\}\}/g, "page 00");
+      if (brief) for (const m of mixedPopulations(v, brief)) issues.push({ path, issue: `one clause pairs figures of different populations (${m.populations.join(" vs ")}): ${m.keys.map((k) => `{{${k}}}`).join(", ")}`, text: v });
+      for (const m of v.matchAll(/\(\d\)/g)) issues.push({ path, issue: `footnote marker "${m[0]}" typed as a number: write {{fn.mgmt}} for a management fact, and the page numbers it`, text: v });
+      for (const m of v.matchAll(NAMED_MARKER)) if (!NAMED_FOOTNOTES[m[1]!]) issues.push({ path, issue: `unknown footnote marker ${m[0]} (known: ${Object.keys(NAMED_FOOTNOTES).map((n) => `{{fn.${n}}}`).join(", ")})`, text: v });
+      const text = (brief ? brief.resolve(v) : v).replace(/\{\{page:[^}]+\}\}/g, "page 00").replace(NAMED_MARKER, "(1)");
       prose.push({ path, text });
       issues.push(...(path.endsWith(".title") ? lintTitle(text, path) : lintText(text, path)));
       const budget = BUDGETS.find((b) => b.match.test(path));

@@ -377,6 +377,33 @@ describe("house style (guide 5.8-5.13)", () => {
     expect(checks.getCell(c15, 5).formula).toMatch(/^SUM\(E\d+:E\d+\)$/);
   });
 
+  it("prints the raw tabs with the confidentiality footer, a title inside the print width and no repeated first column (QA round 3 F18)", () => {
+    const raws = wb.worksheets.filter((w) => w.name.startsWith("Raw - "));
+    expect(raws.length).toBeGreaterThan(2);
+    for (const ws of raws) {
+      expect(ws.headerFooter.oddFooter, ws.name).toContain("Strictly confidential");
+      expect(ws.pageSetup.printTitlesColumn, ws.name).toBeFalsy();
+      // A short title in A1 and the file on its own line in A2, never one long line cut at the print edge.
+      expect(String(ws.getCell(1, 1).value), ws.name).toMatch(/^Raw - [^()]+$/);
+      expect(String(ws.getCell(2, 1).value).length, ws.name).toBeGreaterThan(0);
+    }
+    const bank = wb.getWorksheet("Raw - Bank");
+    if (bank) expect(bank.getCell(4, 3).numFmt.replace(/\\/g, "")).toBe(FMT.rawCents.replace(/\\/g, ""));
+  });
+
+  it("writes the Personal? tag and fills the period columns of the export-total rows on the Databook (QA round 3 F20)", () => {
+    const db = wb.getWorksheet("Databook")!;
+    const tags = db.getColumn(6).values.filter((v) => typeof v === "string" && v.startsWith("(+) "));
+    expect(tags).toContain("(+) Vehicle expenses");
+    // "Personal?" is the header only, never a row's value.
+    expect(db.getColumn(6).values.filter((v) => v === "Personal?")).toHaveLength(1);
+    const income = db.getColumn(2).values.findIndex((v) => v === "Total Income");
+    // FY2025 (column K on the Databook's period block) is a SUMIFS over the row's months, as on every account row.
+    const fy = [...Array(12).keys()].map((i) => 9 + i).find((c) => db.getCell(6, c).result === "FY2025" || db.getCell(6, c).value === "FY2025")!;
+    expect(db.getCell(income, fy).formula).toMatch(/^SUMIFS\(/);
+    expect(Number(db.getCell(income, fy).result)).toBeCloseTo(3_040_800, 0);
+  });
+
   it("maps each check to every tab it tests in the Contents Check column, and describes Raw - Bank as it is (QA round 3 F19)", () => {
     const contents = wb.getWorksheet("Contents")!;
     const rowOfTab = (name: string) => {

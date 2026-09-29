@@ -11,6 +11,7 @@ import type { Block, TextCell } from "../design.ts";
 import { blockHeight, CONTENT_H, r3, SPACE, spanW } from "../design.ts";
 import {
   condensedLadder,
+  earningsBuild,
   keyObservations,
   observationsBlock,
   ownerResponsibilities,
@@ -89,7 +90,7 @@ const s1_1: PageModule = {
         section: SECTION,
         title,
         rows: [{ columns: [{ span: [1, 7], blocks: present(fin, op, { kind: "prose", paragraphs: [{ body: overview }] }) }, { span: [8, 12], blocks: present(txn, obs) }] }],
-        notes: { source: source(ctx.sources.financials, ctx.sources.customers, ctx.sources.payroll, "Management"), note: standardNote(ctx), footnotes: [PER_MANAGEMENT, nonGaap(ctx)] },
+        notes: { source: source(ctx.sources.financials, ctx.sources.customers, ctx.sources.payroll, "Management"), note: standardNote(ctx, nonGaap(ctx)), footnotes: [PER_MANAGEMENT] },
       }),
     ];
   },
@@ -128,7 +129,9 @@ const s1_2: PageModule = {
     const lw = usable(1, 8);
     const rows: TextCell[][] = copy.considerations.map((c) => [{ lead: resolveCopy(ctx, c.lead, "S1.2"), body: resolveCopy(ctx, c.evidence, "S1.2") }, pageNo(c.page)]);
     // Body size from the type scale (spec 2): the list is never padded with a larger font to fill the column (spec 1).
-    const list: Block = { kind: "textTable", header: { title: "Investment considerations", units: "(each proved on the page shown)" }, spec: { colW: [r3(lw - 0.55), 0.55], head: ["Consideration and evidence", "Page"], rows, aligns: ["left", "right"], fontSize: 9.5, firstBold: false } };
+    const list: Block = { kind: "textTable", header: { title: "Investment considerations", units: "(each proved on the page shown)" }, spec: { colW: [r3(lw - 0.55), 0.55], head: ["Consideration and evidence", "Page"], rows, aligns: ["left", "right"], fontSize: 9, firstBold: false } };
+    // Under the list, the earnings build the considerations cite, at its own width, so the page is not left airy (spec 1, 9).
+    const build = earningsBuild(ctx, Math.min(lw, 4.6));
     const b = ctx.brief;
     const growth = b.has("rev.cagr") ? `grew at a ${b.t("rev.cagr")} CAGR to` : b.has("rev.yoy") ? `${verb(b.value("rev.yoy"))} ${b.t("rev.yoy")} to` : "reached";
     // Alternates in the same words, so a line break never leaves the period alone on the title's last line.
@@ -143,9 +146,9 @@ const s1_2: PageModule = {
         section: SECTION,
         title,
         // The rail carries the twin panels alone, at full height: its key figures repeated the Quick Stats page (F29).
-        rows: [{ columns: [{ span: [1, 8], blocks: [list] }, { span: [9, 12], blocks: [revenueAdjPanels(ctx, true, "adj", "(2)")] }] }],
+        rows: [{ columns: [{ span: [1, 8], blocks: [list, build] }, { span: [9, 12], blocks: [revenueAdjPanels(ctx, true, "adj")] }] }],
         // The headline Adj. EBITDA is after the capital reserve; the page says so and gives the pre-reserve figure (QA round 1 F35).
-        notes: { source: source(ctx.sources.financials, ctx.sources.customers, ctx.sources.payroll, "Management"), note: standardNote(ctx), footnotes: [PER_MANAGEMENT, nonGaap(ctx)] },
+        notes: { source: source(ctx.sources.financials, ctx.sources.customers, ctx.sources.payroll, "Management"), note: standardNote(ctx, nonGaap(ctx)), footnotes: [PER_MANAGEMENT] },
       }),
     ];
   },
@@ -161,9 +164,9 @@ function fallbackConsiderations(ctx: CimContext): NonNullable<CimCopy["s1_2"]> {
   ];
   if (b.has("cust.largestShare")) items.push({ lead: "The largest customer is {{cust.largestShare}} of revenue.", evidence: "The top 10 customers are {{cust.top10Share}} of revenue.", page: "S4.1" });
   if (b.has("hc.total")) items.push({ lead: "{{hc.total}} employees besides the owner, {{hc.field}} in the field.", evidence: `Payroll excluding the owner was {{payrollPct.latest}} of revenue in ${ctx.latest.label}.`, page: "S5.1" });
-  else if (b.has("staff.total")) items.push({ lead: "{{staff.total}} employees besides the owner (1).", evidence: `Payroll excluding the owner was {{payrollPct.latest}} of revenue in ${ctx.latest.label}.`, page: "S5.1" });
+  else if (b.has("staff.total")) items.push({ lead: "{{staff.total}} employees besides the owner {{fn.mgmt}}.", evidence: `Payroll excluding the owner was {{payrollPct.latest}} of revenue in ${ctx.latest.label}.`, page: "S5.1" });
   const transition = ctx.intake?.owner.transition.description;
-  if (b.has("owner.transitionMonths") && transition) items.push({ lead: "The owner offers up to {{owner.transitionMonths}} months of transition after closing (1).", evidence: `${transition} (1).`, page: "S10.1" });
+  if (b.has("owner.transitionMonths") && transition) items.push({ lead: "The owner offers up to {{owner.transitionMonths}} months of transition after closing {{fn.mgmt}}.", evidence: `${transition} {{fn.mgmt}}.`, page: "S10.1" });
   if (items.length < 5) items.push({ lead: `Reported EBITDA was {{repEbitda.latest}} in ${ctx.latest.label}.`, evidence: "Net income plus interest, taxes and depreciation, per the Company's financial statements.", page: "S7.1" });
   if (items.length < 5) items.push({ lead: `The Seller offers a transition after closing.`, evidence: `${confirm(ctx, "transition terms", "Owner transition terms")}`, page: "S10.1" });
   return { considerations: items.slice(0, 7) };
@@ -207,7 +210,7 @@ const s1_3: PageModule = {
         section: SECTION,
         title,
         rows: [{ columns: [{ span: [1, 6], blocks: present(is, pnlObs) }, { span: [7, 12], blocks: present(ladder, ladderObs) }] }],
-        notes: { source: source(ctx.sources.financials, "general ledger detail"), note: standardNote(ctx), footnotes: [nonGaap(ctx)] },
+        notes: { source: source(ctx.sources.financials, "general ledger detail"), note: standardNote(ctx, nonGaap(ctx)) },
       }),
     ];
   },
@@ -299,24 +302,24 @@ function fallbackBuyer(ctx: CimContext): NonNullable<CimCopy["s1_4"]> {
   const rows: NonNullable<CimCopy["s1_4"]>["rows"] = [
     {
       consideration: "Owner involvement",
-      shows: ctx.intake?.owner.hoursPerWeek ? `The owner works about {{owner.hours}} hours a week (1).` : `The owner's weekly role is ${confirm(ctx, "owner hours and duties", "Owner's hours per week and duties")}.`,
-      addressed: ctx.intake?.owner.transition.description ? `${ctx.intake.owner.transition.description} (1).` : `${confirm(ctx, "transition plan", "Owner transition plan")}.`,
+      shows: ctx.intake?.owner.hoursPerWeek ? `The owner works about {{owner.hours}} hours a week {{fn.mgmt}}.` : `The owner's weekly role is ${confirm(ctx, "owner hours and duties", "Owner's hours per week and duties")}.`,
+      addressed: ctx.intake?.owner.transition.description ? `${ctx.intake.owner.transition.description} {{fn.mgmt}}.` : `${confirm(ctx, "transition plan", "Owner transition plan")}.`,
     },
   ];
   if (b.has("cust.largestShare")) rows.push({ consideration: "Customer concentration", shows: "The largest customer is {{cust.largestShare}} of revenue and the top 10 are {{cust.top10Share}}.", addressed: `Losing the largest customer in full would remove {{cust.largestRevenue}} of revenue${b.has("rev.change") && (b.value("rev.change") ?? 0) > 0 ? ` against ${ctx.latest.label} growth of {{rev.change}}` : `, {{cust.largestShare}} of the total`}.` });
-  const staff = b.has("hc.total") ? "{{hc.total}} employees besides the owner, {{hc.field}} in the field" : b.has("staff.total") ? "{{staff.total}} employees besides the owner (1)" : undefined;
+  const staff = b.has("hc.total") ? "{{hc.total}} employees besides the owner, {{hc.field}} in the field" : b.has("staff.total") ? "{{staff.total}} employees besides the owner {{fn.mgmt}}" : undefined;
   if (staff) {
     const keep = ctx.intake?.management.find((m) => m.postCloseIntent === "stays");
     rows.push({
       consideration: "Workforce",
       shows: `${staff}; payroll excluding the owner was {{payrollPct.latest}} of revenue in ${ctx.latest.label}.`,
-      addressed: `${keep ? `${keep.name}, ${keep.role.toLowerCase()}, is expected to stay after closing (1); ` : ""}retention arrangements for key employees are ${confirm(ctx, "retention arrangements", "Retention or employment arrangements for key employees after closing")}.`,
+      addressed: `${keep ? `${keep.name}, ${keep.role.toLowerCase()}, is expected to stay after closing {{fn.mgmt}}; ` : ""}retention arrangements for key employees are ${confirm(ctx, "retention arrangements", "Retention or employment arrangements for key employees after closing")}.`,
     });
   }
   rows.push({ consideration: "Add-back quality", shows: `Adjustments total {{adjTotal.latest}} in ${ctx.latest.label}, from Reported EBITDA of {{repEbitda.latest}} to Adj. EBITDA of {{adjEbitda.latest}}.`, addressed: `Each adjustment is listed with its basis and evidence on ${pageRef("S7.2")}.${ctx.brief.has("adj.repOnly.bps") ? ` Excluding the {{adj.repOnly.latest}} resting on management representation ({{adj.repOnly.refs}}) lowers the ${ctx.latest.label} Adj. EBITDA margin by {{adj.repOnly.bps}}.` : ""}` });
   return {
     rows,
-    observations: [{ row: "owner.total", lead: ctx.intake?.owner.hoursPerWeek ? "About {{owner.hours}} hours a week of owner duties (1)" : "The owner's responsibilities", body: `pass to ${confirm(ctx, "successors", "Who takes each owner responsibility after closing")} after closing.` }, { row: "", lead: `Market replacement compensation of {{s2.latest}}`, body: "is already deducted in Adj. EBITDA for a general manager." }],
+    observations: [{ row: "owner.total", lead: ctx.intake?.owner.hoursPerWeek ? "About {{owner.hours}} hours a week of owner duties {{fn.mgmt}}" : "The owner's responsibilities", body: `pass to ${confirm(ctx, "successors", "Who takes each owner responsibility after closing")} after closing.` }, { row: "owner.total", lead: `Market replacement compensation of {{s2.latest}}`, body: "is already deducted in Adj. EBITDA for a general manager." }],
   };
 }
 
