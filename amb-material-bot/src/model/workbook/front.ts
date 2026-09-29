@@ -117,6 +117,19 @@ function localChecks(p: SheetPlan | undefined): string[] {
   return p.cf.flatMap((rule) => (/^ROUND\(\$?[A-Z]+\$?\d+,3\)<>0$/.test(rule.formula ?? "") ? [rule.ref] : []));
 }
 
+/** Whether a check row's planned figures leave anything but zero (to 0.0005), as its red format and the Contents formula read it. */
+function localCheckFails(p: SheetPlan, ref: string): boolean {
+  const m = /^([A-Z]+)(\d+):([A-Z]+)(\d+)$/.exec(ref.replace(/\$/g, ""));
+  if (!m) return false;
+  const col = (x: string) => [...x].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0);
+  const [c1, r1, c2, r2] = [col(m[1]!), Number(m[2]), col(m[3]!), Number(m[4])];
+  return [...p.cells].some(([k, spec]) => {
+    const [r, c] = k.split(":").map(Number) as [number, number];
+    const v = spec.f !== undefined ? spec.expect : spec.v;
+    return r >= r1 && r <= r2 && c >= c1 && c <= c2 && typeof v === "number" && Math.abs(v) > 0.0005;
+  });
+}
+
 export function planContents(ctx: TabContext, built: SheetKey[], opts: { preparedBy: string; preparedOn: string; version: string; sources: { label: string; value: string }[] }, plans: Partial<Record<SheetKey, SheetPlan>> = {}): SheetBuilder {
   const { model } = ctx;
   const b = new SheetBuilder("contents", SHEET.contents, { output: false });
@@ -144,10 +157,15 @@ export function planContents(ctx: TabContext, built: SheetKey[], opts: { prepare
     // Every check that tests the tab: the one it lives on, another it reads (C06 tests Adjustments as well as the ladder), C15
     // on every output tab it scans for errors, and the tab's own check rows (verification F19).
     const scannedByC15 = key !== "checks" && !!plans[key]?.output;
-    const tested = model.checks.filter((c) => (c.tab === name || CHECKS.find((x) => x.id === c.id)?.also?.includes(name) || (c.id === "C15" && scannedByC15)));
-    const local = localChecks(plans[key]).map((ref) => `${S(key)}${ref.replace(/([A-Z]+)(\d+)/g, "$$$1$$$2")}`);
+    const listed = model.checks.filter((c) => c.tab === name || CHECKS.find((x) => x.id === c.id)?.also?.includes(name));
+    const tested = [...listed, ...model.checks.filter((c) => c.id === "C15" && scannedByC15)];
+    // A tab no listed check covers is read by its own check rows (Customer Retention, Cohorts). A tab a listed check covers
+    // leaves them to it: the check applies its tolerance, where a tie within $1 still shows a few cents on the row.
+    const localRefs = listed.length ? [] : localChecks(plans[key]);
+    const local = localRefs.map((ref) => `${S(key)}${ref.replace(/([A-Z]+)(\d+)/g, "$$$1$$$2")}`);
+    const localFails = localRefs.some((ref) => localCheckFails(plans[key]!, ref));
     if ((tested.length || local.length) && built.includes("checks")) {
-      const failing = tested.filter((c) => c.status === "CHECK").length;
+      const failing = tested.filter((c) => c.status === "CHECK").length + (localFails ? 1 : 0);
       const status = (id: string) => `${S("checks")}$G${rowOf("checks", `check_${id}`)}="CHECK"`;
       // A check row reads CHECK when any of its figures rounds away from zero; text (n.a.) in it is not a figure.
       const row = (ref: string) => `COUNTIFS(${ref},">0.0005")+COUNTIFS(${ref},"<-0.0005")>0`;

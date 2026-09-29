@@ -879,7 +879,13 @@ describe("QA round 2 fixes on the written workbook", () => {
 
   it("writes [S4] as a formula on [S1] at the statutory rates, which are blue inputs on Assumptions (F12)", () => {
     const adj = wb.getWorksheet("Adjustments")!;
-    const r = rowOfLabel(adj, "Payroll taxes and benefits on owner compensation", 3);
+    const label = rowOfLabel(adj, "Payroll taxes and benefits on owner compensation", 3);
+    // The figures sit on the row's line in the Figures by period block, whose Adjustment cell links the schedule row (verification F24).
+    let r = label;
+    adj.eachRow((row, n) => {
+      if ((row.getCell(3).value as { formula?: string } | null)?.formula === `C${label}`) r = n;
+    });
+    expect(r).toBeGreaterThan(label);
     const statutory: number[] = [];
     adj.getRow(r).eachCell((c, col) => {
       const f = (c.value as { formula?: string } | null)?.formula;
