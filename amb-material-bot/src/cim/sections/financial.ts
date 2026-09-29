@@ -85,9 +85,9 @@ function fallback61(ctx: CimContext): NonNullable<CimCopy["s6_1"]> {
       yoy
         ? { row: "is.revenue", lead: `Revenue ${verb(b.value("rev.yoy"))} {{rev.yoy}} to {{rev.latest}}`, body: `in ${ctx.latest.label}; the change by service line is in the table.` }
         : { row: "is.revenue", lead: "Revenue of {{rev.latest}}", body: `in ${ctx.latest.label}; the lines are in the table.` },
-      { row: "is.gp", lead: "Gross profit of {{gp.latest}}", body: `at a {{gm.latest}} margin${yoy ? ", {{gm.deltaYoy}} on the prior year" : ""}.` },
+      { row: "is.gp", lead: "Gross profit of {{gp.latest}}", body: `at ${b.article("gm.latest")} {{gm.latest}} margin${yoy ? ", {{gm.deltaYoy}} on the prior year" : ""}.` },
       { row: "is.opex", lead: "Operating expenses of {{opex.latest}}", body: "were {{opexPct.latest}} of revenue, including owner compensation of {{ownerComp.latest}}." },
-      { row: "is.ebitda", lead: "Reported EBITDA of {{repEbitda.latest}}", body: `was a {{repMargin.latest}} margin${yoy ? ", {{repMargin.deltaYoy}} on the prior year" : ""}.` },
+      { row: "is.ebitda", lead: "Reported EBITDA of {{repEbitda.latest}}", body: `was ${b.article("repMargin.latest")} {{repMargin.latest}} margin${yoy ? ", {{repMargin.deltaYoy}} on the prior year" : ""}.` },
     ],
   };
 }
@@ -183,12 +183,14 @@ const s6_4: PageModule = {
       ctx,
       "S6.4 title",
       copy.title,
-      b.has(`month.peak.${L}`)
+      b.has(`month.peakToTrough.${L}`)
         ? [
             `Revenue peaks in ${b.t(`month.peak.${L}`)} at ${b.t(`month.peakRevenue.${L}`)}, ${b.t(`month.peakToTrough.${L}`)} the ${b.t(`month.trough.${L}`)} low, and trailing-12 revenue reached ${b.t("month.t12Latest")}`,
             `Revenue peaks in ${b.t(`month.peak.${L}`)} at ${b.t(`month.peakRevenue.${L}`)}, ${b.t(`month.peakToTrough.${L}`)} the ${b.t(`month.trough.${L}`)} low`,
           ]
-        : `Monthly revenue through ${monthLabel(ctx.out.asOfDate.slice(0, 7))}`,
+        : b.has(`month.peak.${L}`)
+          ? `Revenue peaks in ${b.t(`month.peak.${L}`)} at ${b.t(`month.peakRevenue.${L}`)} against ${b.t(`month.troughRevenue.${L}`)} in ${b.t(`month.trough.${L}`)}`
+          : `Monthly revenue through ${monthLabel(ctx.out.asOfDate.slice(0, 7))}`,
     );
     return [
       draft(ctx, {
@@ -210,7 +212,9 @@ function fallback64(ctx: CimContext): NonNullable<CimCopy["s6_4"]> {
   return {
     observations: [
       { row: `q.${top}`, lead: `Fiscal Q${top} carried {{q${top}.share.${L}}} of ${ctx.fy[ctx.fy.length - 1]!.label} revenue`, body: `and the peak month was {{month.peak.${L}}} at {{month.peakRevenue.${L}}}.` },
-      { row: "q.total", lead: "Trailing-12-month revenue of {{month.t12Latest}}", body: `at ${monthLabel(ctx.out.asOfDate.slice(0, 7))}; the highest month was {{month.peakToTrough.${L}}} the lowest.` },
+      b.has(`month.peakToTrough.${L}`)
+        ? { row: "q.total", lead: "Trailing-12-month revenue of {{month.t12Latest}}", body: `at ${monthLabel(ctx.out.asOfDate.slice(0, 7))}; the highest month was {{month.peakToTrough.${L}}} the lowest.` }
+        : { row: "q.total", lead: "Trailing-12-month revenue of {{month.t12Latest}}", body: `at ${monthLabel(ctx.out.asOfDate.slice(0, 7))}; the lowest month was {{month.trough.${L}}} at {{month.troughRevenue.${L}}}.` },
     ],
   };
 }

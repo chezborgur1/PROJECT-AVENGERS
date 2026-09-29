@@ -74,8 +74,8 @@ function fallback71(ctx: CimContext): NonNullable<CimCopy["s7_1"]> {
       { row: "ladder.reported", lead: "Reported EBITDA of {{repEbitda.latest}}", body: "is net income of {{netIncome.latest}} plus interest of {{interest.latest}} and depreciation of {{da.latest}}." },
       { row: "ladder.normTotal", lead: "Normalization adjustments total {{normTotal.latest}}", body: `each listed with its basis and evidence on ${pageRef("S7.2")}.` },
       ctx.mainStreet
-        ? { row: "ladder.sde", lead: "SDE of {{sde.latest}} ({{sdeMargin.latest}})", body: "keeps one working owner's pay; Adj. EBITDA deducts a {{replacementCost}} replacement and the reserve." }
-        : { row: "ladder.ownerNorm", lead: "Owner pay above market of {{ownerAboveMarket.latest}}", body: "is added back after deducting a {{replacementCost}} market replacement." },
+        ? { row: "ladder.sde", lead: "SDE of {{sde.latest}} ({{sdeMargin.latest}})", body: `keeps one working owner's pay; Adj. EBITDA deducts ${ctx.brief.article("replacementCost")} {{replacementCost}} replacement and the reserve.` }
+        : { row: "ladder.ownerNorm", lead: "Owner pay above market of {{ownerAboveMarket.latest}}", body: `is added back after deducting ${ctx.brief.article("replacementCost")} {{replacementCost}} market replacement.` },
     ],
     takeaway: ctx.mainStreet
       ? "A buyer who hires a general manager underwrites Adj. EBITDA of {{adjEbitda.latest}}; an owner-operator underwrites SDE of {{sde.latest}}. Nothing pro forma is included; the figures assume no change in pricing, headcount or programs after closing."
@@ -136,7 +136,7 @@ function fallback72(ctx: CimContext): NonNullable<CimCopy["s7_2"]> {
   return {
     observations: [
       { row: above, lead: "Owner pay above market of {{ownerAboveMarket.latest}}", body: "is compensation as paid of {{ownerCompPaid.latest}} less the {{replacementCost}} replacement cost." },
-      { row: replacement, lead: "The replacement cost of {{replacementCost}}", body: "is a {{replacementSalary}} salary plus {{burdenPct}} payroll taxes and benefits." },
+      { row: replacement, lead: "The replacement cost of {{replacementCost}}", body: `is ${ctx.brief.article("replacementSalary")} {{replacementSalary}} salary plus {{burdenPct}} payroll taxes and benefits.` },
     ],
   };
 }

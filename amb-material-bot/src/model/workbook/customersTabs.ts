@@ -49,7 +49,7 @@ export function planCustomerOverview(ctx: TabContext): SheetBuilder | undefined 
   const b = new SheetBuilder("customers", SHEET.customers);
   const years = model.columns.filter((c) => c.ref.kind === "fiscal_year" && !c.projected).map((c) => c.fiscalYear!);
   const headers = ["Type", `${ca.term}s (#)`, "% of Count", "Revenue ($)", "% of Revenue", "Avg. Revenue ($)"];
-  const widths = [WIDTH.label, 12, 10, 14, 11, 16];
+  const widths = [WIDTH.label, 12, 10, 14, 12, 16];
   b.width(1, WIDTH.gutter);
   widths.forEach((w, i) => b.width(2 + i, w));
   b.spacerCol(8);

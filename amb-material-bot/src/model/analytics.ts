@@ -3,7 +3,7 @@
 // department and tenure buckets. The workbook computes the same figures with
 // COUNTIFS / SUMIFS over helper blocks; the verifier compares the two.
 
-import { fiscalYearOf, monthEndDate, monthRange, type CustomerList, type CustomerRecord, type MonthKey, type PayrollRecord, type PayrollRegister } from "../domain/financials.ts";
+import { addMonths, fiscalYearOf, monthEndDate, monthRange, type CustomerList, type CustomerRecord, type MonthKey, type PayrollRecord, type PayrollRegister } from "../domain/financials.ts";
 import type { ConcentrationRow, CustomerAnalytics, HeadcountAnalytics, PeriodColumn, RetentionCounts, RetentionDollars } from "./types.ts";
 import { amountInWindow, fiscalYearMonths } from "./periods.ts";
 
@@ -258,7 +258,9 @@ export function customerAnalytics(ctx: CustomerContext): CustomerAnalytics {
     }
     const countWindow = ctx.countWindow ?? period;
     const ltmCounts = countRollForward(dated, `${countWindow.start}-01`, monthEndDate(countWindow.end));
-    const stripMonths = ctx.gridMonths ?? months;
+    // The grid's months plus the LTM strip's thirteen (its hidden prior month included), which a 12-month grid does not
+    // reach; counts come from the dates, so any month can be counted.
+    const stripMonths = [...new Set([...(ctx.gridMonths ?? months), ...(ctx.gridMonths ? monthRange(addMonths(ctx.asOfMonth, -12), ctx.asOfMonth) : [])])].sort();
     const monthly = stripMonths.map((m) => ({ month: m, counts: countRollForward(dated, `${m}-01`, monthEndDate(m)) }));
     const active = dated.filter((c) => customerActiveAt(c, asOfDate, fye)).map((c) => tenureYears(c.startDate, asOfDate)).sort((a, b) => a - b);
     const medianTenureYears = active.length ? (active.length % 2 ? active[(active.length - 1) / 2]! : (active[active.length / 2 - 1]! + active[active.length / 2]!) / 2) : 0;
@@ -336,12 +338,13 @@ export interface HeadcountContext {
   years: number[];
   fye: number;
   /** Revenue and payroll of the latest full window (LTM, or the latest FY in annual mode), for the load ratios. */
-  window: { revenue: number; payroll: number };
+  /** The latest window's revenue and payroll, and the owner's employer payroll taxes the payroll line carries ([S4]). */
+  window: { revenue: number; payroll: number; ownerPayrollTaxes?: number };
   /**
    * The register's grain is the fiscal year, so department compensation, its
    * % of revenue and the C13 tie use the latest full fiscal year's figures.
    */
-  fiscalYear: { year: number; revenue: number; payroll: number };
+  fiscalYear: { year: number; revenue: number; payroll: number; ownerTaxes: number; wages?: { total: number; accounts: string[] } };
   customersLatest?: number;
   gridMonths?: MonthKey[];
 }
@@ -353,7 +356,14 @@ export function headcountAnalytics(ctx: HeadcountContext): HeadcountAnalytics {
   const latestHeadcount = current.reduce((s, e) => s + e.fte, 0);
   const latestFieldHeadcount = current.filter((e) => isFieldDepartment(e.department)).reduce((s, e) => s + e.fte, 0);
   const fy = ctx.fiscalYear.year;
-  const comp = (e: PayrollRecord) => (e.wagesByFiscalYear[fy] ?? 0) + (e.employerCostsByFiscalYear[fy] ?? 0);
+  // Employer costs: the file's own, or the P&L payroll line's taxes and benefits (the line less its wage accounts, or less
+  // staff wages when the P&L shows none) less the owner's [S4] taxes, spread over staff pro rata to wages. The Headcount tab
+  // computes the same by formula, so no allocated figure is typed into the raw register.
+  const staffWages = staff.reduce((s, e) => s + (e.wagesByFiscalYear[fy] ?? 0), 0);
+  const fromFile = !!register.employerCostsFromFile;
+  const pool = ctx.fiscalYear.payroll - (ctx.fiscalYear.wages?.total ?? staffWages);
+  const staffCosts = fromFile ? staff.reduce((s, e) => s + (e.employerCostsByFiscalYear[fy] ?? 0), 0) : Math.max(0, pool - ctx.fiscalYear.ownerTaxes);
+  const comp = (e: PayrollRecord) => (e.wagesByFiscalYear[fy] ?? 0) + (fromFile ? (e.employerCostsByFiscalYear[fy] ?? 0) : staffWages ? ((e.wagesByFiscalYear[fy] ?? 0) * staffCosts) / staffWages : 0);
 
   const departments = [...new Set(staff.map((e) => e.department))];
   const fyMonths = fiscalYearMonths(fy, fye);
@@ -403,9 +413,16 @@ export function headcountAnalytics(ctx: HeadcountContext): HeadcountAnalytics {
     tenureAtDeparture.find((t) => t.bucket === b)!.count++;
   }
 
-  // Staff pay plus the owner's employer costs, which the payroll line carries (the owner's salary is officer compensation).
-  const ownerCosts = register.employees.filter((e) => e.isOwner).reduce((s, e) => s + (e.employerCostsByFiscalYear[fy] ?? 0), 0);
-  const registerTotal = register.totalsByFiscalYear[fy] ?? staff.reduce((s, e) => s + comp(e), 0) + ownerCosts;
+  // C13 compares what the register and the P&L state independently: staff wages against the P&L wage accounts; with employer
+  // costs in the file, the register's wages and costs (the owner's employer costs included) against the payroll line. An
+  // allocated cost ties by construction, so it never enters the tie.
+  const ownerFileCosts = register.employees.filter((e) => e.isOwner).reduce((s, e) => s + (e.employerCostsByFiscalYear[fy] ?? 0), 0);
+  const wagesAccounts = ctx.fiscalYear.wages;
+  const tieToPnl: HeadcountAnalytics["tieToPnl"] = wagesAccounts
+    ? { registerTotal: staffWages, pnlPayroll: wagesAccounts.total, variancePct: wagesAccounts.total ? (staffWages - wagesAccounts.total) / wagesAccounts.total : 0, basis: "wages" }
+    : fromFile
+      ? { registerTotal: staffWages + staffCosts + ownerFileCosts, pnlPayroll: ctx.fiscalYear.payroll, variancePct: ctx.fiscalYear.payroll ? (staffWages + staffCosts + ownerFileCosts - ctx.fiscalYear.payroll) / ctx.fiscalYear.payroll : 0, basis: "payroll" }
+      : { registerTotal: staffWages, pnlPayroll: ctx.fiscalYear.payroll, variancePct: 0, basis: "none" };
   return {
     asOf: asOfDate,
     latestHeadcount,
@@ -418,9 +435,16 @@ export function headcountAnalytics(ctx: HeadcountContext): HeadcountAnalytics {
       revenuePerEmployee: latestHeadcount ? ctx.window.revenue / latestHeadcount : 0,
       revenuePerFieldEmployee: latestFieldHeadcount ? ctx.window.revenue / latestFieldHeadcount : 0,
       customersPerEmployee: ctx.customersLatest !== undefined && latestHeadcount ? ctx.customersLatest / latestHeadcount : undefined,
-      laborCostPctRevenue: ctx.window.revenue ? ctx.window.payroll / ctx.window.revenue : 0,
+      // Excludes the owner as the P&L Summary KPI of the same label does: his employer taxes come out with him.
+      laborCostPctRevenue: ctx.window.revenue ? (ctx.window.payroll - (ctx.window.ownerPayrollTaxes ?? 0)) / ctx.window.revenue : 0,
     },
-    tieToPnl: { registerTotal, pnlPayroll: ctx.fiscalYear.payroll, variancePct: ctx.fiscalYear.payroll ? (registerTotal - ctx.fiscalYear.payroll) / ctx.fiscalYear.payroll : 0 },
+    tieToPnl,
+    employerCosts: { from: fromFile ? "file" : "allocated", pool, ownerTaxes: ctx.fiscalYear.ownerTaxes, staff: staffCosts, staffWages, pnlWageAccounts: wagesAccounts?.accounts ?? [] },
   };
 }
 
+
+/** A P&L payroll account that holds gross pay (wages, salaries, commission), not the employer taxes and benefits on it. */
+export function isWageAccount(account: string): boolean {
+  return /wage|salar|commission|bonus|overtime/i.test(account) && !/tax|insurance|benefit|401|retire|pension|workers/i.test(account);
+}

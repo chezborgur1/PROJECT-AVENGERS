@@ -158,6 +158,29 @@ function buildGrid(sources: IngestExtract[], years: number[], fyEndMonth: number
 }
 
 /**
+ * A grid that ends before a fiscal year another source covers in full (a
+ * QuickBooks export to Jun-25 beside an annual export or return for FY2025)
+ * is stale: its YTD and LTM would head the model and the CIM with a period
+ * older than the latest full year. The model then runs on full fiscal years
+ * only (the annual layout, guide 5.2A), and the warning says what to supply.
+ */
+function staleGridDropped(grid: Grid | undefined, years: number[], fyEndMonth: number, sources: IngestExtract[], warnings: string[]): Grid | undefined {
+  if (!grid) return undefined;
+  const last = grid.monthly.months[grid.monthly.months.length - 1]!.key;
+  const newer = years.filter((y) => monthKey(y, fyEndMonth) > last);
+  if (!newer.length) return grid;
+  const fy = newer[newer.length - 1]!;
+  const src = sources.find((e) => e !== grid.source && e.fullYears.includes(fy));
+  // The export's own note that its partial year is carried as YTD no longer holds.
+  const file = path.basename(grid.source.file);
+  for (let i = warnings.length - 1; i >= 0; i--) if (warnings[i]!.includes(file) && /carried as YTD/.test(warnings[i]!)) warnings.splice(i, 1);
+  warnings.push(
+    `${path.basename(grid.source.file)} runs to ${monthLabel(last)}, but ${src ? path.basename(src.file) : "another source"} covers FY${fy} in full: the model uses full fiscal years only (annual layout, no YTD, LTM or monthly analyses). Supply the monthly P&L through ${monthLabel(monthKey(fy, fyEndMonth))} to build them.`,
+  );
+  return undefined;
+}
+
+/**
  * The subtotals each export prints, for the periods the dataset reads from
  * that export, one entry per total line in the order the first export
  * prints them.
@@ -222,7 +245,7 @@ export function mergeSources(input: MergeInput): FinancialDataset {
   if (allYears.length > years.length) {
     warnings.push(`Using the latest ${HISTORY_YEARS} full fiscal years; FY${allYears.slice(0, -HISTORY_YEARS).join(", FY")} left out.`);
   }
-  const grid = buildGrid(pnlSources, years, fyEndMonth, overrides, warnings);
+  const grid = staleGridDropped(buildGrid(pnlSources, years, fyEndMonth, overrides, warnings), years, fyEndMonth, pnlSources, warnings);
 
   const pnl: FinancialDataset["pnl"] = {};
   const provenance: FinancialDataset["provenance"] = [];

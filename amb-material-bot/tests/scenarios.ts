@@ -147,3 +147,86 @@ export function bankOutsideGrid(): Scenario {
   write(file, read(file).map((r, i) => (i === 0 || !r[0] ? r : [r[0].replace(/^2025-/, "2022-"), ...r.slice(1)])));
   return scenario(dir);
 }
+
+/** Keep `n` monthly columns of the monthly P&L export from column `from` (0 = Jan-23); the Total column goes with the rest. */
+function sliceMonthly(dir: string, from: number, n: number): void {
+  const file = path.join(dir, MONTHLY_PNL);
+  write(file, read(file).map((r, i) => (i < 5 ? r : [...r.slice(0, 3), ...r.slice(3 + from, 3 + from + n)])));
+}
+
+function remove(dir: string, files: string[]): void {
+  for (const f of files) fs.rmSync(path.join(dir, f), { force: true });
+}
+
+/**
+ * QuickBooks monthly detail for FY2024-FY2025 only, beside the annual export
+ * that also carries FY2023: the older year is read from the annual source
+ * and every other column from the grid (QA round 3 F44).
+ */
+export function mixedOlderAnnual(): Scenario {
+  const dir = copySample();
+  sliceMonthly(dir, 12, 24);
+  remove(dir, ["customers.csv", "payroll.csv"]);
+  return scenario(dir);
+}
+
+/** A monthly export that stops at Jun-25 beside an annual export covering FY2025 in full: the stale grid gives way to the full years (F44). */
+export function annualNewer(): Scenario {
+  const dir = copySample();
+  sliceMonthly(dir, 0, 30);
+  remove(dir, ["customers.csv", "payroll.csv"]);
+  return scenario(dir);
+}
+
+/** Exactly twelve months (Jan-25 to Dec-25), the shortest grid the merge accepts, with or without the customer list (F45). */
+export function monthly12(opts: { customers: boolean }): Scenario {
+  const dir = copySample();
+  sliceMonthly(dir, 24, 12);
+  remove(dir, [ANNUAL_PNL, ...(opts.customers ? [] : [BALANCE_SHEET, "customers.csv", "payroll.csv"])]);
+  return scenario(dir);
+}
+
+/** Annual statements for the latest one or two fiscal years only, as a Main Street client with a short history supplies them (F46). */
+export function annualYears(n: 1 | 2): Scenario {
+  const dir = copySample();
+  remove(dir, [MONTHLY_PNL, "customers.csv", "payroll.csv", "kpis.csv", "adjustments.csv", "addbacks.csv"]);
+  const keep = n === 1 ? [2] : [1, 2];
+  const file = path.join(dir, ANNUAL_PNL);
+  write(file, read(file).map((r, i) => (i < 4 ? r : [...r.slice(0, 3), ...keep.map((c) => r[3 + c] ?? "")])));
+  return scenario(dir);
+}
+
+/**
+ * The monthly export with every income account zeroed in Jan-24 and Jan-25
+ * (a business closed for a month), its totals restated to match (F47).
+ */
+export function zeroRevenueMonths(): Scenario {
+  const dir = copySample();
+  remove(dir, [ANNUAL_PNL, "adjustments.csv", "customers.csv", "payroll.csv"]);
+  const file = path.join(dir, MONTHLY_PNL);
+  const g = read(file);
+  const num = (s: string | undefined) => Number((s ?? "").replace(/,/g, "")) || 0;
+  const restated = ["Total Income", "Gross Profit", "Net Operating Income", "Net Income"];
+  const total = g[5]!.length - 1;
+  for (const month of [12, 24]) {
+    const col = 3 + month;
+    let removed = 0;
+    let income = false;
+    for (const r of g) {
+      if (r[0] === "Income") income = true;
+      else if (r[0] === "Total Income") income = false;
+      else if (income && r[1]) {
+        removed += num(r[col]);
+        r[total] = (num(r[total]) - num(r[col])).toFixed(2);
+        r[col] = "0.00";
+      }
+    }
+    for (const r of g) {
+      if (!restated.includes(r[0] ?? "")) continue;
+      r[col] = (num(r[col]) - removed).toFixed(2);
+      r[total] = (num(r[total]) - removed).toFixed(2);
+    }
+  }
+  write(file, g);
+  return scenario(dir);
+}

@@ -3,7 +3,7 @@
 // Assumptions cell map, and the formulas that derive period windows and
 // labels from AsOfDate and FYEMonth so nothing is typed twice.
 
-import { monthEndDate, monthLabel, type MonthKey } from "../../domain/financials.ts";
+import { addMonths, monthEndDate, monthLabel, monthRange, type MonthKey } from "../../domain/financials.ts";
 import { excelSerial, firstDayOf, fiscalYearEndKey, latestFullFiscalYear } from "../periods.ts";
 import { addr, colLetter, q, rowOf, type CellSpec, type SheetBuilder } from "../sheet.ts";
 import { COLOR, FMT, WIDTH } from "../styles.ts";
@@ -44,6 +44,7 @@ export const SHEET = {
   databook: "Databook",
   mapping: "Mapping",
   rawPnl: "Raw - P&L",
+  rawPnlAnnual: "Raw - P&L Annual",
   rawBs: "Raw - BS",
   rawBank: "Raw - Bank",
   rawCustomers: "Raw - Customers",
@@ -155,12 +156,12 @@ export function valueSpans(l: PeriodLayout): [number, number][] {
   return l.groups.map((g) => [g.from, g.to] as [number, number]);
 }
 
-export function applyPeriodWidths(b: SheetBuilder, l: PeriodLayout, labelWidth: number = WIDTH.label): void {
+export function applyPeriodWidths(b: SheetBuilder, l: PeriodLayout, labelWidth: number = WIDTH.label, opts: { notes?: boolean } = {}): void {
   b.width(1, WIDTH.gutter);
   b.width(2, labelWidth);
   for (let c = l.firstCol; c <= l.lastValueCol; c++) b.width(c, WIDTH.value);
-  for (const s of l.spacers) b.spacerCol(s);
-  b.width(l.notesCol, WIDTH.notes);
+  for (const s of l.spacers) if (s < l.notesCol - 1 || opts.notes !== false) b.spacerCol(s);
+  if (opts.notes !== false) b.width(l.notesCol, WIDTH.notes);
 }
 
 // --- Windows derived from Assumptions (guide 5.2) --------------------------------------------
@@ -231,6 +232,25 @@ export function writePeriodHelpers(b: SheetBuilder, l: PeriodLayout, model: Mode
   return { start: startRow, end: endRow };
 }
 
+/**
+ * The months of a column's window a year earlier, when the monthly grid holds
+ * every one: a column with no prior column in its block (the prior-year YTD
+ * or LTM, the oldest fiscal year) still has a growth rate then, read from the
+ * grid by `yearEarlierSumifs` (QA round 3 F10). Undefined when any is off it.
+ */
+export function yearEarlierMonths(model: ModelOutput, column: PeriodColumn): MonthKey[] | undefined {
+  // A pro forma column is a run-rate, not a window with a year-earlier twin.
+  if (column.ref.kind === "pf" || column.projected) return undefined;
+  const grid = new Set(gridMonths(model));
+  const months = monthRange(addMonths(column.start, -12), addMonths(column.end, -12));
+  return months.every((m) => grid.has(m)) ? months : undefined;
+}
+
+/** SUMIFS of a grid row over a column's window moved back twelve months, on the column's helper cells. */
+export function yearEarlierSumifs(o: { valuesRow: string; monthsRow: string; startCell: string; endCell: string }): string {
+  return `SUMIFS(${o.valuesRow},${o.monthsRow},">="&(EOMONTH(${o.startCell},-13)+1),${o.monthsRow},"<="&EOMONTH(${o.endCell},-12))`;
+}
+
 /** SUMIFS of a row of a monthly grid over the window in a column's helper cells (bounded both ends). */
 export function sumifsFormula(o: { valuesRow: string; monthsRow: string; startCell: string; endCell: string }): string {
   return `SUMIFS(${o.valuesRow},${o.monthsRow},">="&${o.startCell},${o.monthsRow},"<="&${o.endCell})`;
@@ -250,6 +270,18 @@ export function prorationFormula(fy: { amountCell: string; startCell: string; en
 }
 
 // --- Month columns on the grid tabs -----------------------------------------------------------
+
+/**
+ * A historical fiscal-year column the monthly grid does not cover: an older
+ * year read from an annual export or a return beside a grid of recent months.
+ * Its cells read the Databook's fiscal-year column, as annual-only mode does,
+ * the way the engine's categoryTotals falls back to the annual P&L.
+ */
+export function offGrid(model: ModelOutput, c: PeriodColumn): boolean {
+  const months = model.monthly?.months;
+  if (!months?.length || c.ref.kind !== "fiscal_year" || c.projected) return false;
+  return c.start < months[0]!.key || c.end > months[months.length - 1]!.key;
+}
 
 /** Months of the grid, oldest first. */
 export function gridMonths(model: ModelOutput): MonthKey[] {

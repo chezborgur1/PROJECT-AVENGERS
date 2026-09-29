@@ -236,7 +236,7 @@ export function lintText(text: string, path: string): LintIssue[] {
   if (LEVERAGE_VERB.test(bare)) out.push({ path, issue: 'banned phrase "leverage" as a verb', text });
   if (PRICE_TALK.test(bare)) out.push({ path, issue: "valuation or price language (guide D5)", text });
   // "a 18.5% margin" reads "a eighteen": figures spoken with a vowel sound take "an" (guide 4.2).
-  if (/\ba \$?(8|11(?![\d,])|18(?![\d,]))/.test(bare)) out.push({ path, issue: 'use "an" before a figure read with a vowel sound (8, 11, 18)', text });
+  if (/\ba \$?(8|1[18](?!\d))/.test(bare)) out.push({ path, issue: 'use "an" before a figure read with a vowel sound (8, 11, 18)', text });
   for (const s of sentences(bare)) {
     for (const o of BANNED_OPENERS) if (s.startsWith(`${o},`) || s.startsWith(`${o} `)) out.push({ path, issue: `filler opener "${o}"`, text: s });
     if (!HAS_FIGURE.test(s)) {

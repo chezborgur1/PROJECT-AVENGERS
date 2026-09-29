@@ -40,6 +40,7 @@ import {
 } from "../domain/financials.ts";
 import { normaliseAccount } from "../domain/chartOfAccounts.ts";
 import { clientLabel, parseAmount, readRecords } from "../util/tables.ts";
+import { fyRange } from "../util/format.ts";
 import { employerPayrollTaxes, socialSecurityWageBase } from "./payroll.ts";
 
 export const DEFAULT_REPLACEMENT_SALARY = 85_000;
@@ -272,7 +273,7 @@ export interface ScheduleContext {
   equipmentPlacedInService?: Record<number, number>;
   /** The owner's employer taxes and benefits per fiscal year, when the payroll register records them (else statutory rates apply). */
   ownerEmployerCosts?: { byFiscalYear: Record<number, number>; file: string };
-  owner?: { name: string; role: string };
+  owner?: { name?: string; role?: string };
   passThrough: boolean;
   dealFormPreference?: "asset" | "equity" | "either";
   /** File names, for the source-document column. */
@@ -554,7 +555,7 @@ export function buildSchedule(ctx: ScheduleContext): ScheduleResult {
     warnings.push(`[S1] owner compensation in ${s1Override.sourceFile} (${years.map((y) => `FY${y} ${money(s1Override!.byFiscalYear[y] ?? 0)}`).join(", ")}) differs from the P&L owner compensation line (${years.map((y) => `FY${y} ${money(ownerComp[y] ?? 0)}`).join(", ")}); the schedule uses the file.`);
   }
   const s1TiesToPnl = years.every((y) => Math.abs((s1Amounts[y] ?? 0) - (ownerComp[y] ?? 0)) < 1);
-  const ownerLabel = ctx.owner ? `${ctx.owner.name}` : "the owner";
+  const ownerLabel = ctx.owner?.name || "the owner";
   const s1Evidence = s1Override?.evidence ?? "documented";
   rows.push({
     tier: "owner_compensation",
@@ -649,12 +650,12 @@ export function buildSchedule(ctx: ScheduleContext): ScheduleResult {
   // Capital reserve: Form 4562 equipment when a return gave it, else the three-year average of D&A as a proxy.
   const equipmentYears = years.filter((y) => ctx.equipmentPlacedInService?.[y] !== undefined);
   const daYears = years.filter((y) => (pnl[y]?.depreciation_amortization ?? 0) > 0);
-  const daSpan = daYears.length ? `FY${daYears[0]}–FY${daYears[daYears.length - 1]}` : "";
+  const daSpan = fyRange(daYears);
   const capitalReserve: RecastInputs["capitalReserve"] = s3Override
     ? { amount: Math.abs(s3Override.byFiscalYear[firstNonZeroYear(s3Override.byFiscalYear, years)] ?? 0), basis: "advisor", source: `${s3Override.sourceFile}: ${s3Override.sourceDocument ?? s3Override.description}` }
     : equipmentYears.length
       ? { amount: equipmentYears.reduce((s, y) => s + ctx.equipmentPlacedInService![y]!, 0) / equipmentYears.length, basis: "form_4562", source: `Form 4562, FY${equipmentYears[0]}–FY${equipmentYears[equipmentYears.length - 1]}` }
-      : { amount: daYears.length ? daYears.reduce((s, y) => s + pnl[y]!.depreciation_amortization, 0) / daYears.length : 0, basis: "da_proxy", source: daYears.length ? `${daYears.length === 3 ? "Three" : daYears.length === 2 ? "Two" : "One"}-year average of depreciation expense, ${daSpan}` : "No depreciation expense in the sources" };
+      : { amount: daYears.length ? daYears.reduce((s, y) => s + pnl[y]!.depreciation_amortization, 0) / daYears.length : 0, basis: "da_proxy", source: daYears.length ? depreciationProxySource(daYears) : "No depreciation expense in the sources" };
   // [S3] is always on the schedule so the ladder and the workbook keep one row per rung; outside Main Street mode it is zero,
   // and the Assumptions MainStreetMode switch turns the reserve back on without a new row.
   const mainStreet = mode.mode === "mainStreet";
@@ -673,7 +674,7 @@ export function buildSchedule(ctx: ScheduleContext): ScheduleResult {
     basis: !mainStreet
       ? "Zero outside Main Street mode: a lower-middle-market buyer underwrites capital expenditure separately (set MainStreetMode on Assumptions to apply it)."
       : (s3Override?.basis ??
-        `Deducts a reserve for equipment replacement of $${Math.round(capitalReserve.amount).toLocaleString("en-US")} a year, equal to the ${capitalReserve.basis === "form_4562" ? "three-year average equipment cost placed in service per Form 4562" : `${capitalReserve.source.charAt(0).toLowerCase()}${capitalReserve.source.slice(1)}`}.`),
+        `Deducts a reserve for equipment replacement of $${Math.round(capitalReserve.amount).toLocaleString("en-US")} a year, equal to the ${capitalReserve.basis === "form_4562" ? `${equipmentYears.length === 1 ? "" : "average "}equipment cost placed in service per Form 4562, ${fyRange(equipmentYears)}` : `${capitalReserve.source.charAt(0).toLowerCase()}${capitalReserve.source.slice(1)}`}.`),
     sourceDocument: s3Override?.sourceDocument ?? (capitalReserve.basis === "form_4562" ? capitalReserve.source : `P&L, account ${accountName("depreciation_amortization")}${daSpan ? `, ${daSpan}` : ""}`),
     evidence: s3Override?.evidence ?? "documented",
     status: s3Override?.status ?? "accepted",
@@ -709,7 +710,7 @@ export function buildSchedule(ctx: ScheduleContext): ScheduleResult {
       burdenPct: ctx.burden.pct,
       burdenSource: ctx.burden.source,
       capitalReserve,
-      owners: [{ name: ctx.owner?.name ?? "Owner (not named in the sources)", role: ctx.owner?.role ?? "Owner", compensationByFiscalYear: s1Amounts }],
+      owners: [{ name: ctx.owner?.name || "Owner (not named in the sources)", role: ctx.owner?.role || "Owner", compensationByFiscalYear: s1Amounts }],
     },
     mode,
     dealForm,
@@ -727,4 +728,11 @@ export function trailingMonths(end: MonthKey, n = 12): MonthKey[] {
 /** A month key for a fiscal year's last month. */
 export function fiscalYearEndMonth(fy: number, fyEndMonth: number): MonthKey {
   return monthKey(fy, fyEndMonth);
+}
+
+/** The [S3] proxy's source line: "FY2025 depreciation expense" for one year, "Two-year average of depreciation expense, FY2024–FY2025" for two. */
+export function depreciationProxySource(years: number[]): string {
+  if (years.length === 1) return `FY${years[0]} depreciation expense`;
+  const count = ["", "", "Two", "Three", "Four", "Five"][years.length] ?? String(years.length);
+  return `${count}-year average of depreciation expense, FY${years[0]}–FY${years[years.length - 1]}`;
 }

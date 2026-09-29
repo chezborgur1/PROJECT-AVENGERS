@@ -12,7 +12,7 @@ import { addr, colLetter, rowOf, SheetBuilder } from "../sheet.ts";
 import { FMT, WIDTH } from "../styles.ts";
 import type { ChartExhibit, ChartSeriesData, ChartTab, ModelOutput } from "../types.ts";
 import type { TabContext } from "./assumptionsTab.ts";
-import { DATABOOK_COL, DATABOOK_FIRST_ROW, MONTH_START, RAW_CUSTOMER_COLS, RAW_PAYROLL_COLS } from "./data.ts";
+import { DATABOOK_COL, DATABOOK_FIRST_ROW, MONTH_START, RAW_CUSTOMER_COLS, rawPayrollColsFor } from "./data.ts";
 import { ASOF, S, SHEET, gridMonths, serialOfMonthStart } from "./layout.ts";
 
 const AREA: Record<ChartTab, string> = { revenueCharts: "Revenue", expenseCharts: "Expense", retentionCharts: "Retention", headcountCharts: "Headcount" };
@@ -92,8 +92,9 @@ export function planChartTab(ctx: TabContext, tab: ChartTab): SheetBuilder | und
     // Caption (a formula on the window names, units last), chart rows, note.
     const caption = e.monthly ? `"${e.title}, "&TEXT(ChartStart,"mmm-yy")&" – "&TEXT(ChartEnd,"mmm-yy")&" (${e.units})"` : undefined;
     const captionText = e.monthly ? `${e.title}, ${monthLabel(window[0]!)} – ${monthLabel(window.at(-1)!)} (${e.units})` : `${e.title} (${e.units})`;
-    if (caption) b.formula(top, 2, caption, { style: "chartTitle", role: "text", expect: captionText, label: `${e.id} caption` });
-    else b.text(top, 2, captionText, { style: "chartTitle" });
+    // The caption runs on across C:M on one 12 pt line; wrapped inside B it split a date ("Dec-" / "25") and stretched the block.
+    if (caption) b.formula(top, 2, caption, { style: "chartTitle", role: "text", expect: captionText, label: `${e.id} caption`, align: { wrap: false } });
+    else b.text(top, 2, captionText, { style: "chartTitle", align: { wrap: false } });
     b.note(top + EXHIBIT_ROWS - 2, 2, e.note, { align: { wrap: false } });
 
     // Chart-data rows for this exhibit.
@@ -213,7 +214,7 @@ function writeSeriesRow(b: SheetBuilder, ctx: TabContext, e: ChartExhibit, s: Ch
   const dbLast = DATABOOK_FIRST_ROW + (model.databook?.pnl.length ?? 1) - 1;
   const raw = (sheet: "rawCustomers" | "rawPayroll", col: number) => `${S(sheet)}$${colLetter(col)}:$${colLetter(col)}`;
   const C = RAW_CUSTOMER_COLS;
-  const P = RAW_PAYROLL_COLS;
+  const P = rawPayrollColsFor(model);
   // COUNTIFS criteria for a window: [from, to] as formula text.
   const customers = (event: "new" | "lost", from: string, to: string, extra = "") => {
     const date = raw("rawCustomers", event === "new" ? C.start : C.end);

@@ -47,6 +47,9 @@ export const FMT = {
   debtConstant: '#,##0.00%;\\(#,##0.00%\\);"–";@',
   toggle: "0",
   days: '#,##0;\\(#,##0\\);"–";@',
+  /** Raw tabs only (V51 raw exports); `rawCents` where the export itself prints cents. */
+  raw: '_(* #,##0_);_(* \\(#,##0\\);_(* "-"??_);_(@_)',
+  rawCents: '_(* #,##0.00_);_(* \\(#,##0.00\\);_(* "-"??_);_(@_)',
 } as const;
 
 export type StyleName =

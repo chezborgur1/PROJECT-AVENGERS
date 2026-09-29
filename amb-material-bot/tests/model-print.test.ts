@@ -10,8 +10,8 @@ import type { FinancialDataset } from "../src/domain/financials.ts";
 import { defaultAssumptions } from "../src/model/assumptions.ts";
 import { masterCheckOf, withRenderCheck } from "../src/model/checks.ts";
 import { runModel } from "../src/model/engine.ts";
-import { assess, printedTabsOf, renderCheckWorkbook, type Span } from "../src/model/renderCheck.ts";
-import { clippedTexts, fitPrintWidth, MIN_PRINT_SCALE, printScaleOf, type SheetPlan } from "../src/model/sheet.ts";
+import { assess, badBreaks, printedTabsOf, renderCheckWorkbook, type Span } from "../src/model/renderCheck.ts";
+import { clippedTexts, fitPrintWidth, MIN_PRINT_SCALE, paginate, printScaleOf, type SheetPlan } from "../src/model/sheet.ts";
 import { planWorkbook, writeWorkbook } from "../src/model/workbook.ts";
 import { ridgelineDataset } from "./fixtures/sampleDataset.ts";
 import { sampleRow, tmpDir } from "./helpers.ts";
@@ -115,6 +115,67 @@ describe("nothing cut at a cell edge (F11)", () => {
     const monthly = ridgelineDataset();
     const annual: FinancialDataset = { ...monthly, monthly: undefined, sourceGranularity: "annual", asOfMonth: undefined, depositsByMonth: undefined };
     for (const ds of [monthly, annual]) for (const p of plansFor(ds).plans) expect(clippedTexts(p), p.name).toEqual([]);
+  });
+});
+
+describe("page breaks at block boundaries (QA round 3 F1, F7)", () => {
+  const line = (t: string, y: number, x = 36): Span => ({ t, x0: x, y0: y, x1: x + t.length * 4.5, y1: y + 8, size: 7.4 });
+  const body = (labels: string[], y0 = 90) => labels.flatMap((t, i) => [line(t, y0 + i * 12), line(`${(i + 1) * 10}`, y0 + i * 12, 300)]);
+  const title = [line("Ridgeline Comfort Services LLC", 50)];
+  const furniture = new Set(["Ridgeline Comfort Services LLC", "Account"]);
+  const sections = new Set(["Sensitivity Assumptions", "Tie Outs"]);
+  const repeated = new Set(["Ridgeline Comfort Services LLC@36,50"]);
+
+  it("flags a heading left at a page foot and a page that opens inside a block", () => {
+    const p1 = [...title, ...body(["Row 1", "Row 2", "Row 3", "Row 4", "Row 5"]), line("Sensitivity Assumptions", 160)];
+    const p2 = [...title, ...body(["Earnings Midpoint", "Earnings Step", "Multiple Midpoint", "Multiple Step", "Tie Outs", "Tie Out Valuation"])];
+    expect(badBreaks([p1, p2], repeated, sections, furniture)).toEqual(['p1: the heading "Sensitivity Assumptions" ends the page, apart from its block', 'p2: opens inside a block at "Earnings Midpoint"']);
+    const clean2 = [...title, line("Sensitivity Assumptions", 78), ...body(["Earnings Midpoint", "Earnings Step", "Multiple Midpoint", "Multiple Step", "Tie Outs"])];
+    expect(badBreaks([p1.slice(0, -1), clean2], repeated, sections, furniture)).toEqual([]);
+  });
+
+  it("reads a page of further columns as a continuation, its period header line as furniture", () => {
+    // Page 2 prints the months after page 1's: the label column repeats (set aside) and the header line is the tab's own.
+    const p1 = [...title, line("Account", 70), line("Jan-24", 70, 300), line("Sensitivity Assumptions", 82), ...body(["Row 1", "Row 2", "Row 3", "Row 4", "Row 5"])];
+    const p2 = [...title, line("Account", 70), line("Jan-25", 70, 300), ...Array.from({ length: 6 }, (_, i) => line(`${(i + 1) * 10}`, 90 + i * 12, 120))];
+    expect(badBreaks([p1, p2], repeated, sections, furniture)).toEqual([]);
+  });
+
+  it("flags a last page of fewer than five rows as a widow", () => {
+    const p1 = [...title, ...body(["Row 1", "Row 2", "Row 3", "Row 4", "Row 5", "Row 6"])];
+    const p2 = [...title, ...body(["Row 7", "Row 8"])];
+    expect(badBreaks([p1, p2], repeated, sections, furniture)).toEqual(["p2: prints only 2 rows (a widow page)"]);
+  });
+
+  it("moves a block that would split onto the next page whole, and keeps a forced break", () => {
+    const cells = new Map<string, object>();
+    for (let r = 7; r <= 80; r++) cells.set(`${r}:2`, { v: `Row ${r}`, style: r === 50 ? "section" : "line" });
+    const plan = (rowBreaks: number[]) =>
+      ({
+        key: "t",
+        name: "T",
+        cells: new Map(cells),
+        widths: new Map([[2, 30], [3, 12]]),
+        hiddenCols: new Set(),
+        heights: new Map(),
+        merges: [],
+        charts: [],
+        output: true,
+        print: { areas: ["B2:C80"], landscape: false, fitToWidth: 1, fitToHeight: 0, titlesRow: "5:6", rowBreaks, colBreaks: [] },
+      }) as unknown as SheetPlan;
+    // Rows 7-49 fit a portrait page with room to spare; the block from the heading at 50 does not, so it starts page 2.
+    const p = plan([]);
+    paginate(p);
+    expect(p.print.rowBreaks).toEqual([49]);
+    const forced = plan([30]);
+    paginate(forced);
+    expect(forced.print.rowBreaks[0]).toBe(30);
+  });
+
+  it("starts the Sensitivities settings block on a page of its own under three grids", () => {
+    const p = plansFor(ridgelineDataset()).plans.find((x) => x.name === "Sensitivities")!;
+    const heading = [...p.cells.entries()].find(([, c]) => c.v === "Sensitivity Assumptions")![0];
+    expect(p.print.rowBreaks).toContain(Number(heading.split(":")[0]) - 1);
   });
 });
 

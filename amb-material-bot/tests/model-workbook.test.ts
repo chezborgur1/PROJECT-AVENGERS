@@ -290,7 +290,7 @@ describe("house style (guide 5.8-5.13)", () => {
     }
   });
 
-  it("dates the Cover from the fixed as-of date and shows the model status", async () => {
+  it("dates the Cover from the fixed as-of date, in black furniture, with no model status line (QA round 3 F9)", async () => {
     const cover = wb.getWorksheet("Cover")!;
     const texts: string[] = [];
     cover.eachRow((r) => r.eachCell((c) => {
@@ -299,7 +299,10 @@ describe("house style (guide 5.8-5.13)", () => {
       else if (v && typeof v === "object" && v.formula) texts.push(String(ev.value("Cover", Number(c.row), Number(c.col))));
     }));
     expect(texts).toContain("As of 12/31/25");
-    expect(texts).toContain("Model status: All checks OK (render check pending)");
+    // The master check sits on Contents; guide 5.13 gives the Cover no status line.
+    expect(texts.some((t) => /Model status/.test(t))).toBe(false);
+    // Linked or not, Cover text prints black, so Print mode (which blackens only conditional formats) leaves nothing green.
+    cover.eachRow((r) => r.eachCell((c) => c.value !== null && expect(c.font?.color?.argb ?? "FF000000", c.address).toMatch(/^FF(000000|FFFFFF)$/)));
   }, 120_000);
 
   it("links every tab from Contents and names only guide 5.14 outputs", () => {
@@ -309,6 +312,43 @@ describe("house style (guide 5.8-5.13)", () => {
     for (const n of names) if (!n.startsWith("Monthly_")) expect(NAMED_OUTPUTS, n).toContain(n);
     // Guide 5.14 names added by the follow-ups: the LOI dates, the Offer names for the Reference column and the Monthly_<line> rows.
     for (const n of ["LOIDate", "SigningDate", "EffectiveDate", "Offer_Count", "Offer_Reference", "Offer_Headline_1", "Offer_CashAtClose_1", "Monthly_Revenue", "Monthly_AdjEBITDA"]) expect(names, n).toContain(n);
+  });
+
+  it("computes prior-year YTD and LTM growth from the grid a year earlier instead of typing n.a. (QA round 3 F10)", () => {
+    const pnl = wb.getWorksheet("P&L Summary")!;
+    const growth = pnl.getColumn(2).values.findIndex((v) => v === "% Growth");
+    // G = YTD Dec-24 and J = LTM Dec-24: Jan-Dec 2023 is on the grid, so both are FY2024 over FY2023.
+    for (const c of [7, 10]) {
+      expect(pnl.getCell(growth, c).formula, `col ${c}`).toMatch(/SUMIFS\(.*EOMONTH\(.*,-13\)\+1/);
+      expect(Number(pnl.getCell(growth, c).result)).toBeCloseTo(2_718_600 / 2_406_800 - 1, 6);
+    }
+    // The oldest year and the run-rate PF column have no year-earlier window: n.a.
+    expect(pnl.getCell(growth, 3).value).toBe("n.a.");
+    expect(pnl.getCell(growth, 12).value).toBe("n.a.");
+    const detail = wb.getWorksheet("Revenue Detail")!;
+    const total = detail.getColumn(2).values.findIndex((v) => v === "Revenue Growth");
+    expect(Number(detail.getCell(total, 7).result)).toBeCloseTo(2_718_600 / 2_406_800 - 1, 6);
+  });
+
+  it("maps each check to every tab it tests in the Contents Check column, and describes Raw - Bank as it is (QA round 3 F19)", () => {
+    const contents = wb.getWorksheet("Contents")!;
+    const rowOfTab = (name: string) => {
+      let at = -1;
+      contents.eachRow((r, n) => {
+        if (at < 0 && r.getCell(3).result === name) at = n;
+      });
+      return at;
+    };
+    for (const name of ["Adjustments", "Expense Detail", "Expense Charts", "NWC"]) {
+      const cell = contents.getCell(rowOfTab(name), 6);
+      expect(cell.formula, name).toMatch(/^IF\(OR\(/);
+      expect(cell.result, name).toBe("OK");
+    }
+    // C06 lives on the ladder and tests the schedule too: its status cell is in both tabs' formulas.
+    const checks = wb.getWorksheet("Checks")!;
+    const c06 = checks.getColumn(2).values.findIndex((v) => v === "C06");
+    for (const name of ["Adj. EBITDA", "Adjustments"]) expect(contents.getCell(rowOfTab(name), 6).formula, name).toContain(`$G${c06}="CHECK"`);
+    expect(contents.getCell(rowOfTab("Raw - Bank"), 4).value).toBe("Bank transactions as exported, classified");
   });
 
   it("wires every check C01-C37 to the Checks tab with the engine's status", async () => {
@@ -401,8 +441,35 @@ describe("annual-only workbook (guide 5.2A)", () => {
       await w.xlsx.readFile(annualFile);
       return w.worksheets.map((ws) => ws.name);
     })());
-    for (const monthlyOnly of ["Monthly P&L", "Revenue Detail", "Expense Detail", "Proof of Cash", "Raw - Bank", "Revenue Charts", "Headcount Charts"]) expect(names).not.toContain(monthlyOnly);
+    for (const monthlyOnly of ["Monthly P&L", "Proof of Cash", "Raw - Bank", "Revenue Charts", "Headcount Charts"]) expect(names).not.toContain(monthlyOnly);
     expect(names).toContain("Databook");
+    // Revenue Detail and Expense Detail are status A (always built): the fiscal years and the cases, no strip (QA round 3 F4).
+    expect(names).toEqual(expect.arrayContaining(["Revenue Detail", "Expense Detail"]));
+    const w = new ExcelJS.Workbook();
+    await w.xlsx.readFile(annualFile);
+    const detail = w.getWorksheet("Expense Detail")!;
+    expect([6].flatMap((r) => [3, 4, 5, 7, 8, 9].map((c) => String(detail.getCell(r, c).result ?? detail.getCell(r, c).value)))).toEqual(["FY2023", "FY2024", "FY2025", "Low", "Mid", "High"]);
+    expect(detail.pageSetup.orientation).toBe("portrait");
+
+    // The SUN page (guide 5.2A): banded expense lines each with a % Sales row, the subsections, the vertical rule on E, the
+    // SDE box with its DSCR row in the case columns, portrait.
+    const pnl = w.getWorksheet("P&L Summary")!;
+    const rowOf = (label: string) => pnl.getColumn(2).values.findIndex((v) => v === label);
+    const payroll = rowOf("Salaries, Wages and Benefits");
+    expect(pnl.getCell(payroll + 1, 2).value).toBe("% Sales");
+    expect(pnl.getCell(payroll + 1, 3).formula).toMatch(/^IFERROR\(C\d+\/C\d+,"n\.m\."\)$/);
+    expect(pnl.getColumn(2).values.filter((v) => v === "% Sales")).toHaveLength(6);
+    for (const c of [2, 3, 5, 7, 9]) expect((pnl.getCell(payroll, c).fill as ExcelJS.FillPattern).fgColor?.argb, `banded col ${c}`).toBe("FFF2F2F2");
+    expect(pnl.getCell(payroll, 6).fill).toBeUndefined();
+    for (const label of ["Expenses", "EBITDA Bridge", "Business Valuation", "Financing"]) expect(pnl.getCell(rowOf(label), 2).font?.underline, label).toBe(true);
+    for (const r of [5, payroll, rowOf("EBITDA Bridge")]) expect(pnl.getCell(r, 5).border?.right?.style, `rule on E${r}`).toBe("thin");
+    const sde = rowOf("Seller's Discretionary Earnings (SDE)");
+    expect(pnl.getCell(sde + 2, 2).value).toBe("DSCR (SBA loan only)");
+    expect(pnl.getCell(sde + 2, 8).formula).toMatch(/^'Valuation'!D\d+$/);
+    expect(pnl.getCell(sde + 2, 8).result).toBeCloseTo(annual.valuationDetail!.cases.mid.financing.dscr, 6);
+    expect(pnl.getCell(sde + 2, 9).border?.bottom?.style).toBe("thin");
+    expect(pnl.getCell(sde, 4).result).toBeCloseTo(annual.periods.FY2024!.ladder.sde / 1000, 6);
+    expect(pnl.pageSetup.orientation).toBe("portrait");
   }, 180_000);
 });
 

@@ -105,7 +105,7 @@ function fallback11(ctx: CimContext): NonNullable<CimCopy["s1_1"]> {
       // With two fiscal years there is no compound rate, only the year-on-year change; with one, only the level.
       f0 === fl
         ? { row: "qs.revenue", lead: `Revenue was {{rev.latest}} in ${ctx.latest.label},`, body: `${ctx.brief.has("rev.yoy") ? "{{rev.yoy}} on the prior year; " : ""}${confirm(ctx, "growth drivers", "What drove revenue by year")}.` }
-        : { row: "qs.revenue", lead: `Revenue went from {{rev.${f0}}} to {{rev.${fl}}},`, body: `${ctx.brief.has("rev.cagr") ? "a {{rev.cagr}} compound rate" : ctx.brief.has("rev.yoy") ? "{{rev.yoy}} on the prior year" : "{{rev.total}} over the years shown"}; ${confirm(ctx, "growth drivers", "What drove revenue growth by year")}.` },
+        : { row: "qs.revenue", lead: `Revenue went from {{rev.${f0}}} to {{rev.${fl}}},`, body: `${ctx.brief.has("rev.cagr") ? `${ctx.brief.article("rev.cagr")} {{rev.cagr}} compound rate` : ctx.brief.has("rev.yoy") ? "{{rev.yoy}} on the prior year" : "{{rev.total}} over the years shown"}; ${confirm(ctx, "growth drivers", "What drove revenue growth by year")}.` },
       ctx.brief.has("gm.delta")
         ? { row: "qs.gm", lead: "Gross margin moved {{gm.delta}} to {{gm.latest}},", body: `driven by ${confirm(ctx, "gross-margin driver", "What moved gross margin")}.` }
         : { row: "qs.gm", lead: "Gross margin was {{gm.latest}},", body: `with cost of revenue at {{cogsPct.latest}} of revenue; ${confirm(ctx, "gross-margin driver", "What drives gross margin")}.` },
@@ -157,7 +157,7 @@ function fallbackConsiderations(ctx: CimContext): NonNullable<CimCopy["s1_2"]> {
   const items: NonNullable<CimCopy["s1_2"]>["considerations"] = [
     { lead: `Revenue reached {{rev.latest}} in ${ctx.latest.label}${b.has("rev.yoy") ? `, ${b.value("rev.yoy")! < 0 ? "down" : "up"} {{rev.yoy}} on the prior year` : ""}.`, evidence: `The growth came from ${confirm(ctx, "growth drivers", "Principal drivers of revenue growth")}.`, page: "S6.1" },
     { lead: `Gross margin was {{gm.latest}} in ${ctx.latest.label}.`, evidence: `Cost of revenue was {{cogsPct.latest}} of revenue; the pricing basis is ${confirm(ctx, "pricing basis", "How the Company prices its work")}.`, page: "S6.3" },
-    { lead: `Adj. EBITDA was {{adjEbitda.latest}}, a {{adjMargin.latest}} margin.`, evidence: `Every adjustment from Reported EBITDA of {{repEbitda.latest}} is itemized with its evidence.`, page: "S7.1" },
+    { lead: `Adj. EBITDA was {{adjEbitda.latest}}, ${b.article("adjMargin.latest")} {{adjMargin.latest}} margin.`, evidence: `Every adjustment from Reported EBITDA of {{repEbitda.latest}} is itemized with its evidence.`, page: "S7.1" },
   ];
   if (b.has("cust.largestShare")) items.push({ lead: "The largest customer is {{cust.largestShare}} of revenue.", evidence: "The top 10 customers are {{cust.top10Share}} of revenue.", page: "S4.1" });
   if (b.has("hc.total")) items.push({ lead: "{{hc.total}} employees besides the owner, {{hc.field}} in the field.", evidence: `Payroll excluding the owner was {{payrollPct.latest}} of revenue in ${ctx.latest.label}.`, page: "S5.1" });
@@ -226,7 +226,7 @@ function fallbackSnapshot(ctx: CimContext): NonNullable<CimCopy["s1_3"]> {
     ],
     ladder: [
       { row: "cl.norm", lead: "Normalization adjustments of {{normTotal.latest}}", body: `are listed with their evidence on ${pageRef("S7.2")}.` },
-      { row: "cl.adj", lead: "Adj. EBITDA of {{adjEbitda.latest}}", body: "is a {{adjMargin.latest}} margin; nothing pro forma is included unless shown." },
+      { row: "cl.adj", lead: "Adj. EBITDA of {{adjEbitda.latest}}", body: `is ${b.article("adjMargin.latest")} {{adjMargin.latest}} margin; nothing pro forma is included unless shown.` },
     ],
   };
 }

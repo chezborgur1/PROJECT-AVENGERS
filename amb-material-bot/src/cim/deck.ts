@@ -5,6 +5,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import JSZip from "jszip";
 import type { CimContext, CimInput } from "./context.ts";
 import { buildContext } from "./context.ts";
 import { placeholdersIn } from "./copy.ts";
@@ -30,6 +31,8 @@ export interface CimBuildResult {
   plan: DeckPlan;
   /** Build notes for run-summary.md: copy fallbacks, observations dropped to fit, rendering notes. */
   log: string[];
+  /** Set when the PDF and page images were withheld (a chart LibreOffice would not draw): the run is not OK. */
+  renderError?: string;
 }
 
 /** Lay out and draw every page into a pptx buffer. */
@@ -61,6 +64,27 @@ export function collectOpenQuestions(ctx: CimContext, plan: DeckPlan): string[] 
   return [...new Set([...recorded, ...standalone, ...ctx.copy.open_questions, ...unexplained])];
 }
 
+/** A figure that failed to compute or a token that failed to resolve, as it would print. */
+const UNRESOLVED = /\bNaN|Infinity|\bundefined\b|\{\{/;
+
+/**
+ * Every text run on every slide that prints an unresolved value ("Infinityx",
+ * "up NaN pts", "{{token}}"), as "page N: text". The deck is refused on any,
+ * as a workbook that fails verification is (CLAUDE.md).
+ */
+export async function unresolvedText(buf: Buffer): Promise<string[]> {
+  const zip = await JSZip.loadAsync(buf);
+  const out: string[] = [];
+  for (const f of Object.keys(zip.files)) {
+    const m = /^ppt\/slides\/slide(\d+)\.xml$/.exec(f);
+    if (!m) continue;
+    const xml = await zip.file(f)!.async("string");
+    const text = [...xml.matchAll(/<a:t>([^<]*)<\/a:t>/g)].map((x) => x[1]).join(" ");
+    for (const hit of text.matchAll(new RegExp(`.{0,40}(${UNRESOLVED.source}).{0,40}`, "g"))) out.push(`page ${m[1]}: ${hit[0].trim()}`);
+  }
+  return out;
+}
+
 /**
  * The CIM engine's entry point: plan the deck from the model output and the
  * dataset's facts, draw it to `pptxPath`, and optionally render the PDF and
@@ -70,9 +94,11 @@ export async function buildCim(input: CimInput, pptxPath: string, opts: CimBuild
   const ctx = buildContext(input);
   const plan = planDeck(ctx, opts);
   const buf = await renderDeck(ctx, plan);
+  const unresolved = await unresolvedText(buf);
+  if (unresolved.length) throw new Error(`CIM not written: it prints unresolved values (${unresolved.slice(0, 3).join("; ")})`);
   fs.mkdirSync(path.dirname(pptxPath), { recursive: true });
   fs.writeFileSync(pptxPath, buf);
-  const rendered = renderOutputs(pptxPath, { pdf: opts.pdf ?? false, png: opts.png ?? false });
+  const rendered = await renderOutputs(pptxPath, { pdf: opts.pdf ?? false, png: opts.png ?? false });
   return {
     pptx: pptxPath,
     pdf: rendered.pdf,
@@ -80,5 +106,6 @@ export async function buildCim(input: CimInput, pptxPath: string, opts: CimBuild
     openQuestions: collectOpenQuestions(ctx, plan),
     plan,
     log: [...ctx.log, ...plan.warnings, ...rendered.notes],
+    ...(rendered.error ? { renderError: rendered.error } : {}),
   };
 }

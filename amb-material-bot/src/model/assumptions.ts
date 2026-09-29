@@ -1,5 +1,6 @@
 import { addMonths, monthKey, type DealForm, type FinancialDataset, type PremisesArrangement } from "../domain/financials.ts";
 import { fiscalYearEndMonth, isPassThrough, type RequestRow } from "../requests/schema.ts";
+import { depreciationProxySource } from "../ingest/adjustments.ts";
 
 export const PROJECTION_YEARS = 5;
 
@@ -197,12 +198,12 @@ export function defaultAssumptions(ds: FinancialDataset, row: RequestRow): Assum
   const burden = recastInputs?.burdenPct ?? DEFAULT_BURDEN_PCT;
 
   // Capital reserve [S3]: Form 4562 when the data layer found one, else the
-  // three-year average of D&A as a proxy (guide 5.4), flagged for open-questions.md.
+  // average of D&A over the years there are as a proxy (guide 5.4), flagged for open-questions.md.
   const daAvg = years.reduce((s, y) => s + ds.pnl[y]!.depreciation_amortization, 0) / years.length;
   const reserve = recastInputs?.capitalReserve;
   const capitalReserve = reserve?.amount ?? round(daAvg, 0);
   const capitalReserveBasis = reserve?.basis ?? "da_proxy";
-  const capitalReserveSource = reserve?.source ?? `Three-year average of depreciation expense FY${first}–FY${last} (proxy; Form 4562 not in the sources)`;
+  const capitalReserveSource = reserve?.source ?? `${depreciationProxySource(years)} (proxy; Form 4562 not in the sources)`;
 
   const monthly = ds.monthly;
   const asOfMonth = ds.asOfMonth ?? monthly?.months[monthly.months.length - 1]?.key ?? monthKey(last, fye);

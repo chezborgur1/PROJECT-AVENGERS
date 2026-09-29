@@ -125,6 +125,8 @@ function rowKeysOf(b: Block): string[] {
  */
 export function keyObservations(ctx: CimContext, where: string, obs: Observation[] | undefined, blocks: Block[]): ObsItem[] {
   if (!obs?.length) return [];
+  // A key copied with the label the prompt lists beside it ("is.gp = Gross profit", "is.gp (Gross profit)") is the key.
+  obs = obs.map((o) => (o.row ? { ...o, row: o.row.replace(/\s*(=.*|\(.*\))$/, "").trim() } : o));
   const order = new Map<string, number>();
   let n = 0;
   for (const b of blocks) for (const key of rowKeysOf(b)) if (key && !order.has(key)) order.set(key, n++);
@@ -249,8 +251,8 @@ export function quickStatsOperating(ctx: CimContext, w: number): Block | undefin
   const members = kpiOf(ctx, "maintenance_members");
   if (members) {
     const renewal = kpiOf(ctx, "renewal_rate");
-    const v = latestKpi(members)!;
-    rows.push({ type: "line", key: "op.members", label: "Agreement members (#)", vals: [fmtCount(v)], text: `${shortDefinition(members.definition ?? members.label)}${renewal ? `; about ${fmtKpi(renewal, latestKpi(renewal)!)} renew` : ""}` });
+    const v = latestKpi(members, ctx.out.fiscalYearEndMonth)!;
+    rows.push({ type: "line", key: "op.members", label: "Agreement members (#)", vals: [fmtCount(v)], text: `${shortDefinition(members.definition ?? members.label)}${renewal ? `; about ${fmtKpi(renewal, latestKpi(renewal, ctx.out.fiscalYearEndMonth)!)} renew` : ""}` });
   }
   const cu = ctx.out.customers;
   if (cu) {
@@ -276,8 +278,8 @@ export function quickStatsOperating(ctx: CimContext, w: number): Block | undefin
       type: "line",
       key: "op.rating",
       label: "Google rating",
-      vals: [fmtKpi(rating, latestKpi(rating)!)],
-      text: [reviews ? `${fmtCount(latestKpi(reviews)!)}+ reviews` : "", cert ? `${cert.name}${cert.since ? ` since ${cert.since}` : ""}` : ""].filter(Boolean).join("; "),
+      vals: [fmtKpi(rating, latestKpi(rating, ctx.out.fiscalYearEndMonth)!)],
+      text: [reviews ? `${fmtCount(latestKpi(reviews, ctx.out.fiscalYearEndMonth)!)}${statedAsFloor(reviews) ? "+" : ""} reviews` : "", cert ? `${cert.name}${cert.since ? ` since ${cert.since}` : ""}` : ""].filter(Boolean).join("; "),
     });
   }
   if (!rows.length) return undefined;
@@ -303,6 +305,9 @@ function offerTerms(ctx: CimContext, full: boolean): { offered: string; basis: s
   };
 }
 
+/** A count the source states as a floor ("Stated as 900+", "over 250", "250 or more") keeps its "+"; an exact count never gains one. */
+const statedAsFloor = (k: KpiSeries): boolean => /\+|\bor more\b|\bover\b/i.test(`${k.definition ?? ""} ${k.label}`);
+
 const sentence = (t: string): string => `${t.charAt(0).toUpperCase()}${t.slice(1)}${/[.)]$/.test(t) ? "" : "."}`;
 
 /** Term rows shared by the Transaction summary (S1.1) and the term table (S10.1). */
@@ -319,7 +324,7 @@ export function termRows(ctx: CimContext, full: boolean): TextCell[][] {
     [
       "Owner transition",
       owner?.transition.description
-        ? `${owner.name} ${owner.transition.months ? `will remain for up to ${owner.transition.months} months after closing` : "will support the transition after closing"}${/commercial accounts/i.test(owner.transition.description) ? " and introduce each commercial account" : ""} (1).`
+        ? `${owner.name || "The owner"} ${owner.transition.months ? `will remain for up to ${owner.transition.months} months after closing` : "will support the transition after closing"}${/commercial accounts/i.test(owner.transition.description) ? " and introduce commercial accounts" : ""} (1).`
         : confirm(ctx, "owner transition", "Owner transition period and role after closing"),
     ],
     [
@@ -1150,7 +1155,9 @@ export function keyCustomers(ctx: CimContext, w: number): Block | undefined {
 
 /** Account wins and losses by quarter (diverging bars: wins above, losses below, guide 2.6). */
 export function winsLosses(ctx: CimContext): Block | undefined {
-  const monthly = ctx.out.customers?.retention?.monthly;
+  // The months of the P&L grid only: the retention series also counts the LTM strip's prior month, which may precede it.
+  const grid = new Set(ctx.out.monthly?.months.map((m) => m.key) ?? []);
+  const monthly = ctx.out.customers?.retention?.monthly?.filter((m) => grid.has(m.month));
   if (!monthly || monthly.length < 12) return undefined;
   const quarters = new Map<string, { wins: number; losses: number }>();
   for (const m of monthly) {
@@ -1358,7 +1365,7 @@ export function capacityFacts(ctx: CimContext, w: number): Block | undefined {
   const recurring = latest.revenueLines.filter((l) => l.recurring);
   const techs = hc?.byDepartment.find((d) => /field service|service/i.test(d.department));
   if (members && recurring.length === 1) {
-    const m = latestKpi(members)!;
+    const m = latestKpi(members, ctx.out.fiscalYearEndMonth)!;
     const rev = recurring[0]!.amount;
     rows.push({ type: "line", key: "cap.perMember", label: "Agreement revenue per member", vals: [`$${fmtCount(Math.round(rev / m))} a year`], text: `${ctx.latest.label} ${recurring[0]!.label.toLowerCase()} revenue ÷ ${fmtCount(m)} members (1)` });
     rows.push({ type: "line", key: "cap.visits", label: "Tune-up visits a year (#)", vals: [fmtCount(m * 2)], text: /two tune-ups/i.test(members.definition ?? "") ? "Two tune-ups a year per member (1)" : "" });
@@ -1366,12 +1373,12 @@ export function capacityFacts(ctx: CimContext, w: number): Block | undefined {
     if (techs) rows.push({ type: "line", key: "cap.membersPerTech", label: `Members per ${techs.department.toLowerCase()} employee (#)`, vals: [fmtCount(Math.round(m / techs.count))], text: `${fmtCount(m)} members ÷ ${techs.count} ${techs.department.toLowerCase()} employees` });
   }
   const offer = kpiOf(ctx, "agreement_offer_rate");
-  if (offer) rows.push({ type: "line", key: "cap.offer", label: "Service calls offered an agreement", vals: [fmtKpi(offer, latestKpi(offer)!)], text: "Per management (1)" });
+  if (offer) rows.push({ type: "line", key: "cap.offer", label: "Service calls offered an agreement", vals: [fmtKpi(offer, latestKpi(offer, ctx.out.fiscalYearEndMonth)!)], text: "Per management (1)" });
   const renewal = kpiOf(ctx, "renewal_rate");
-  if (renewal) rows.push({ type: "line", key: "cap.renewal", label: "Agreement renewal rate", vals: [fmtKpi(renewal, latestKpi(renewal)!)], text: "Per management (1)" });
+  if (renewal) rows.push({ type: "line", key: "cap.renewal", label: "Agreement renewal rate", vals: [fmtKpi(renewal, latestKpi(renewal, ctx.out.fiscalYearEndMonth)!)], text: "Per management (1)" });
   // The owner's own week is capacity the business must replace (guide S5.4).
   const ownerHours = kpiOf(ctx, "owner_hours");
-  if (ownerHours) rows.push({ type: "line", key: "cap.ownerHours", label: "Owner hours a week (#)", vals: [fmtKpi(ownerHours, latestKpi(ownerHours)!)], text: "Per management (1)" });
+  if (ownerHours) rows.push({ type: "line", key: "cap.ownerHours", label: "Owner hours a week (#)", vals: [fmtKpi(ownerHours, latestKpi(ownerHours, ctx.out.fiscalYearEndMonth)!)], text: "Per management (1)" });
   const fleet = fleetCount(ctx);
   if (fleet) {
     rows.push({ type: "line", key: "cap.revVehicle", label: "Revenue per vehicle", vals: [fmtMoney(latest.pnl.revenue / fleet.count)], text: `${ctx.latest.label} revenue ÷ ${fleet.count} vehicles` });
@@ -1699,7 +1706,7 @@ export function leverBaselines(ctx: CimContext, w: number): Block | undefined {
     rows.push({ type: "line", key: "base.recurring", label: `${rec.map((l) => l.label).join(", ")} revenue`, vals: [k(amt, { dollar: true })], text: `${fmtPct(amt / latest.pnl.revenue)} of ${L} revenue` });
   }
   const members = kpiOf(ctx, "maintenance_members");
-  if (members) rows.push({ type: "line", key: "base.members", label: "Agreement members (#)", vals: [fmtCount(latestKpi(members)!)], text: kpiOf(ctx, "agreement_offer_rate") ? `Agreement offered on about ${fmtKpi(kpiOf(ctx, "agreement_offer_rate")!, latestKpi(kpiOf(ctx, "agreement_offer_rate")!)!)} of service calls (1)` : "" });
+  if (members) rows.push({ type: "line", key: "base.members", label: "Agreement members (#)", vals: [fmtCount(latestKpi(members, ctx.out.fiscalYearEndMonth)!)], text: kpiOf(ctx, "agreement_offer_rate") ? `Agreement offered on about ${fmtKpi(kpiOf(ctx, "agreement_offer_rate")!, latestKpi(kpiOf(ctx, "agreement_offer_rate")!, ctx.out.fiscalYearEndMonth)!)} of service calls (1)` : "" });
   const commercial = latest.revenueLines.find((l) => /commercial/i.test(l.label));
   if (commercial && ctx.prior) {
     const prev = at(ctx, ctx.prior).revenueLines.find((l) => l.account === commercial.account)?.amount ?? 0;

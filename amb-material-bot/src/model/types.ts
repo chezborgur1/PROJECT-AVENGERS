@@ -321,8 +321,20 @@ export interface HeadcountAnalytics {
   /** V51 buckets verbatim: "First 3 Months", "3 - 6 Months", "6 - 12 Months", "1 - 2 Years", "Over 2 Years". */
   tenureAtDeparture: { bucket: string; count: number }[];
   loadRatios: { revenuePerEmployee: number; revenuePerFieldEmployee: number; customersPerEmployee?: number; laborCostPctRevenue: number };
-  /** Payroll register vs P&L payroll (check C13). */
-  tieToPnl: { registerTotal: number; pnlPayroll: number; variancePct: number };
+  /**
+   * Payroll register vs the P&L (check C13), on the one basis that is
+   * independent of the allocation: staff wages against the P&L wage accounts
+   * (`wages`); with employer costs from the file, the register's wages and
+   * costs against the payroll line (`payroll`); `none` when neither exists.
+   */
+  tieToPnl: { registerTotal: number; pnlPayroll: number; variancePct: number; basis?: "wages" | "payroll" | "none" };
+  /**
+   * Employer taxes and benefits of the latest fiscal year: from the file, or
+   * the P&L payroll line less its wage accounts (less staff wages when the
+   * P&L shows none) and the owner's [S4] taxes, allocated to staff pro rata
+   * to wages. `pnlWageAccounts` names the accounts the tie reads.
+   */
+  employerCosts?: { from: "file" | "allocated"; pool: number; ownerTaxes: number; staff: number; staffWages: number; pnlWageAccounts: string[] };
 }
 
 // --- Chart exhibits (guide 5.12) ------------------------------------------------------
@@ -533,6 +545,8 @@ export interface DatabookRow {
   mappedBy: MappedLine["mappedBy"];
   byMonth?: Record<MonthKey, number>;
   byFiscalYear: Record<number, number>;
+  /** An account only in a fiscal year the monthly grid does not cover: its row has no months (monthly mode). */
+  annualOnly?: boolean;
 }
 
 /** One part of an export total: the Databook rows under an export heading, added or taken away. */

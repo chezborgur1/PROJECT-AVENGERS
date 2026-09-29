@@ -10,18 +10,11 @@ import { addr, colLetter, rowOf, SheetBuilder } from "../sheet.ts";
 import { COLOR, FMT, WIDTH } from "../styles.ts";
 import { latestColumn } from "../types.ts";
 import type { TabContext } from "./assumptionsTab.ts";
-import { RAW_PAYROLL_COLS } from "./data.ts";
-import { ASOF, periodLayout, S, SHEET, serialOfMonthEnd, serialOfMonthStart, windowFormulas } from "./layout.ts";
+import { DATABOOK_COL, rawPayrollColsFor } from "./data.ts";
+import { adjustmentsLayout, ASOF, periodLayout, S, SHEET, serialOfMonthEnd, serialOfMonthStart, windowFormulas } from "./layout.ts";
 
 const K = 1000;
 const RAW = (n: number) => `${S("rawPayroll")}$${colLetter(n)}:$${colLetter(n)}`;
-const DEPT = RAW(RAW_PAYROLL_COLS.department);
-const OWNER = RAW(RAW_PAYROLL_COLS.owner);
-const HIRE = RAW(RAW_PAYROLL_COLS.hire);
-const TERM = RAW(RAW_PAYROLL_COLS.termination);
-const TERM_TYPE = RAW(RAW_PAYROLL_COLS.terminationType);
-const FTE = RAW(RAW_PAYROLL_COLS.fte);
-const ID = RAW(RAW_PAYROLL_COLS.id);
 
 /** Month bounds of each tenure bucket (V51 labels verbatim); the last has no upper bound. */
 const BUCKET_MONTHS: [number, number | undefined][] = [[0, 3], [3, 6], [6, 12], [12, 24], [24, undefined]];
@@ -34,9 +27,10 @@ export function planHeadcount(ctx: TabContext): SheetBuilder | undefined {
   const years = model.columns.filter((c) => c.ref.kind === "fiscal_year" && !c.projected);
   const n = years.length;
   const latestFy = years[n - 1]!;
-  const register = (first: number, i: number) => RAW(first + i);
-  const wages = register(RAW_PAYROLL_COLS.firstWages, n - 1);
-  const costs = register(RAW_PAYROLL_COLS.firstWages + n, n - 1);
+  const P = rawPayrollColsFor(model);
+  const [DEPT, OWNER, HIRE, TERM, TERM_TYPE, FTE, ID] = [P.department, P.owner, P.hire, P.termination, P.terminationType, P.fte, P.id].map(RAW) as [string, string, string, string, string, string, string];
+  const wages = RAW(P.firstWages + n - 1);
+  const costs = RAW(P.firstCosts + n - 1);
   const pnlL = periodLayout(model, 3);
   const pnlCell = (key: string, colKey: string) => `${S("pnl")}${colLetter(pnlL.byKey[colKey]!)}${rowOf("pnl", key)}`;
   const window = latestColumn(model);
@@ -79,6 +73,13 @@ export function planHeadcount(ctx: TabContext): SheetBuilder | undefined {
   b.row("tieRegister", r++);
   b.row("tiePnl", r++);
   b.row("tieVariance", r++);
+  const ec = hc.employerCosts!;
+  const allocated = ec.from === "allocated";
+  if (allocated) {
+    b.row("costPool", r++);
+    b.row("costOwner", r++);
+    b.row("costStaff", r++);
+  }
   r++;
   const noteRow = r;
   const helperStart = noteRow + 3;
@@ -100,7 +101,12 @@ export function planHeadcount(ctx: TabContext): SheetBuilder | undefined {
     const dep = `"${d.department.replace(/"/g, '""')}"`;
     b.text(rr, 2, d.department, { style: "line" });
     b.formula(rr, 3, onPayroll(`,${DEPT},${dep}`), { style: i === 0 ? "lineFirst" : "line", fmt: FMT.body, expect: d.count, label: `count ${d.department}` });
-    b.formula(rr, 4, `SUMIFS(${wages},${OWNER},"No",${DEPT},${dep})+SUMIFS(${costs},${OWNER},"No",${DEPT},${dep})`, { style: i === 0 ? "lineFirst" : "line", fmt: i === 0 ? FMT.currency : FMT.body, expect: d.totalComp, label: `comp ${d.department}` });
+    // Wages plus employer costs: the file's own, or the staff share of the P&L's taxes and benefits (the tie-out block below)
+    // spread pro rata to wages.
+    const comp = allocated
+      ? `SUMIFS(${wages},${OWNER},"No",${DEPT},${dep})*(1+IFERROR(${addr(b.r("costStaff"), 3, { col: true, row: true })}/${addr(b.r("tieRegister"), 3, { col: true, row: true })},0))`
+      : `SUMIFS(${wages},${OWNER},"No",${DEPT},${dep})+SUMIFS(${costs},${OWNER},"No",${DEPT},${dep})`;
+    b.formula(rr, 4, comp, { style: i === 0 ? "lineFirst" : "line", fmt: i === 0 ? FMT.currency : FMT.body, expect: d.totalComp, label: `comp ${d.department}` });
     // Pay covers leavers too, so the average divides by the year's average FTE (helper block), not the head count at the as-of date.
     b.formula(rr, 5, `IFERROR(${addr(rr, 4)}/SUMIFS(${helperRange(helperCol.fteYears)},${helperRange(helperCol.dept)},${dep}),"n.a.")`, { style: "line", fmt: i === 0 ? FMT.currency : FMT.body, expect: d.avgFte ? d.avgComp : "n.a.", label: `avg comp ${d.department}` });
     b.formula(rr, 6, `IFERROR(${addr(rr, 4)}/${fyRevenue},"n.a.")`, { style: "ratio", fmt: FMT.pct1, expect: d.pctRevenue, label: `pct rev ${d.department}` });
@@ -132,7 +138,8 @@ export function planHeadcount(ctx: TabContext): SheetBuilder | undefined {
     // The count is of listed accounts only (households are not listed), so the label says so (QA round 1 F12).
     ratio("customersPerEmployee", `Listed ${model.customers!.term.toLowerCase()}s per employee (#)`, `IFERROR(${S("customers")}$C$${rowOf("customers", "latestCount")}/${addr(tr, 3)},"n.a.")`, FMT.oneDp, hc.loadRatios.customersPerEmployee);
   }
-  ratio("laborCost", "Labor cost, % of revenue (excludes owner)", `IFERROR(${pnlCell("payroll", window.key)}/${pnlCell("revenue", window.key)},"n.a.")`, FMT.pct1, hc.loadRatios.laborCostPctRevenue);
+  // One definition for one label: the P&L Summary's KPI, which takes the owner's employer payroll taxes out with him.
+  ratio("laborCost", "Labor cost, % of revenue (excludes owner)", pnlCell("kpi_labor_cost", window.key), FMT.pct1, hc.loadRatios.laborCostPctRevenue);
 
   // Roll-forward by fiscal year, windows from Assumptions in the helper rows below.
   const rollSpan: [number, number] = [3, 2 + n];
@@ -194,20 +201,48 @@ export function planHeadcount(ctx: TabContext): SheetBuilder | undefined {
   b.subtotalBorder(bt, [[3, 3]]);
   b.formula(bt, 3, `SUM(${addr(b.r("bucket0"), 3)}:${addr(b.r(`bucket${TENURE_BUCKETS.length - 1}`), 3)})`, { style: "subtotal", fmt: FMT.body, expect: hc.tenureAtDeparture.reduce((s, t) => s + t.count, 0), label: "total departures" });
 
-  // Tie-out, check C13.
-  b.section(b.r("secTie"), `Tie-out, ${latestFy.label}`, [[3, 3]]);
+  // Tie-out (check C13) on what the register and the P&L state independently, then the employer costs the compensation adds.
+  b.section(b.r("secTie"), `Payroll tie-out and employer costs, ${latestFy.label}`, [[3, 3]]);
+  const tie = hc.tieToPnl;
   const rt = b.r("tieRegister");
-  // The owner's salary is officer compensation, but the employer taxes on it are in the payroll line, so they join the tie.
-  b.text(rt, 2, "Payroll register: staff wages and every employer cost ($)", { style: "line" });
-  b.formula(rt, 3, `SUMIFS(${wages},${OWNER},"No")+SUMIFS(${costs},${OWNER},"No")+SUMIFS(${costs},${OWNER},"Yes")`, { style: "lineFirst", fmt: FMT.currency, expect: hc.tieToPnl.registerTotal, label: "register total" });
   const pt = b.r("tiePnl");
-  b.text(pt, 2, "P&L salaries, wages and benefits ($)", { style: "line" });
-  b.formula(pt, 3, `${pnlCell("payroll", latestFy.key)}*${K}`, { style: "line", fmt: FMT.body, expect: hc.tieToPnl.pnlPayroll, label: "pnl payroll" });
   const vt = b.r("tieVariance");
-  b.text(vt, 2, "Check: variance, % of P&L payroll (flag above 5%)", { style: "check" });
-  b.formula(vt, 3, `IFERROR((${addr(rt, 3)}-${addr(pt, 3)})/${addr(pt, 3)},0)`, { style: "check", fmt: FMT.pct1, expect: hc.tieToPnl.variancePct, tol: 1e-6, label: "C13" });
-  b.cf({ ref: addr(vt, 3), formula: `ABS(${addr(vt, 3)})>0.05`, font: { color: COLOR.pending } });
-  b.note(noteRow, 2, "Note: counts are non-owner FTE on payroll at the as-of date (hired on or before it, not terminated on or before it). Compensation is the fiscal year's wages plus employer taxes and benefits allocated pro rata to wages; the average divides it by the year's average FTE, so leavers count for the months they were paid. Names stay on Raw - Payroll; management names reach the CIM only through the intake notes.");
+  const pnlPayroll = `${pnlCell("payroll", latestFy.key)}*${K}`;
+  const dbFy = colLetter(DATABOOK_COL.periodStart + model.columns.filter((c) => !c.projected).findIndex((c) => c.key === latestFy.key));
+  const dbRange = (c: string) => `${S("databook")}$${c}$${rowOf("databook", "first")}:$${c}$${rowOf("databook", "last")}`;
+  const wageAccounts = ec.pnlWageAccounts.map((a) => `SUMIFS(${dbRange(dbFy)},${dbRange(colLetter(DATABOOK_COL.account))},"${a.replace(/"/g, '""')}")`).join("+");
+  if (tie.basis === "payroll") {
+    // Employer costs from the file: the register's wages and costs, the owner's employer costs included, against the payroll line.
+    b.text(rt, 2, "Payroll register: staff wages and every employer cost ($)", { style: "line" });
+    b.formula(rt, 3, `SUMIFS(${wages},${OWNER},"No")+SUMIFS(${costs},${OWNER},"No")+SUMIFS(${costs},${OWNER},"Yes")`, { style: "lineFirst", fmt: FMT.currency, expect: tie.registerTotal, label: "register total" });
+    b.text(pt, 2, "P&L salaries, wages and benefits ($)", { style: "line" });
+    b.formula(pt, 3, pnlPayroll, { style: "line", fmt: FMT.body, expect: tie.pnlPayroll, label: "pnl payroll" });
+  } else {
+    b.text(rt, 2, "Payroll register: staff wages ($)", { style: "line" });
+    b.formula(rt, 3, `SUMIFS(${wages},${OWNER},"No")`, { style: "lineFirst", fmt: FMT.currency, expect: tie.registerTotal, label: "register wages" });
+    b.text(pt, 2, tie.basis === "wages" ? "P&L wage accounts ($)" : "P&L salaries, wages and benefits ($)", { style: "line" });
+    b.formula(pt, 3, tie.basis === "wages" ? wageAccounts : pnlPayroll, { style: "line", fmt: FMT.body, expect: tie.pnlPayroll, label: "pnl wages" });
+  }
+  b.text(vt, 2, tie.basis === "wages" ? "Check: variance, % of P&L wages (flag > 5%)" : "Check: variance, % of P&L payroll (flag > 5%)", { style: "check" });
+  if (tie.basis === "none") b.na(vt, 3, "n.a.", { style: "check" });
+  else b.formula(vt, 3, `IFERROR((${addr(rt, 3)}-${addr(pt, 3)})/${addr(pt, 3)},0)`, { style: "check", fmt: FMT.pct1, expect: tie.variancePct, tol: 1e-6, label: "C13" });
+  b.cf({ ref: addr(vt, 3), formula: `AND(ISNUMBER(${addr(vt, 3)}),ABS(N(${addr(vt, 3)}))>0.05)`, font: { color: COLOR.pending } });
+  if (allocated) {
+    // The staff's employer taxes and benefits: what the payroll line holds beyond gross pay, less the owner's taxes ([S4]).
+    const ownerTaxRow = model.adjustments.findIndex((x) => x.row.tier === "owner_compensation" && x.row.category === "owner_compensation" && x.row.origin !== "owner_comp");
+    const s4 = ownerTaxRow >= 0 ? `${S("adjustments")}$${colLetter(adjustmentsLayout(model).byKey[latestFy.key]!)}@{adjustments.row${ownerTaxRow}}*${K}` : "0";
+    const cp = b.r("costPool");
+    b.text(cp, 2, tie.basis === "wages" ? "P&L payroll taxes and benefits ($)" : "P&L payroll less register wages ($)", { style: "line" });
+    b.formula(cp, 3, `${pnlPayroll}-${addr(tie.basis === "wages" ? pt : rt, 3)}`, { style: "line", fmt: FMT.body, expect: ec.pool, label: "employer cost pool" });
+    const co = b.r("costOwner");
+    b.text(co, 2, "(-) Owner's employer payroll taxes [S4] ($)", { style: "line" });
+    b.formula(co, 3, `-${s4}`, { style: "line", fmt: FMT.body, expect: -ec.ownerTaxes, label: "owner employer taxes" });
+    const cs = b.r("costStaff");
+    b.text(cs, 2, "Staff employer costs, pro rata to wages ($)", { style: "subtotal" });
+    b.subtotalBorder(cs, [[3, 3]]);
+    b.formula(cs, 3, `MAX(0,${addr(cp, 3)}+${addr(co, 3)})`, { style: "subtotal", fmt: FMT.currency, expect: ec.staff, label: "staff employer costs" });
+  }
+  b.note(noteRow, 2, `Note: counts are non-owner FTE on payroll at the as-of date (hired on or before it, not terminated on or before it). Compensation is the fiscal year's wages plus employer taxes and benefits (${allocated ? "the P&L's, less the owner's, allocated pro rata to wages in the block above" : "as the register gives them"}); the average divides it by the year's average FTE, so leavers count for the months they were paid. Names stay on Raw - Payroll; management names reach the CIM only through the intake notes.`);
 
   // Helper block: tenure at the as-of date for those on payroll, months at departure for leavers.
   b.text(empHeader - 1, 2, "Helper: tenure by employee (outside the print area)", { style: "helper" });

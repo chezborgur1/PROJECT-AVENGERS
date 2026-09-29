@@ -8,12 +8,13 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { lintNames, protectedNames } from "../src/cim/copy.ts";
 import { COPY_FIXTURE, draftCimCopy } from "../src/cim/narrative.ts";
+import { CLAUDE_MODEL, fallbackOptions } from "../src/util/claude.ts";
 import { defaultAssumptions } from "../src/model/assumptions.ts";
 import { runModel } from "../src/model/engine.ts";
 import { ridgelineDataset } from "./fixtures/sampleDataset.ts";
 import { REPO, sampleRow } from "./helpers.ts";
 
-const reply: { mode: "throw" | "named" | "cut"; text?: string } = { mode: "throw" };
+const reply: { mode: "throw" | "named" | "cut" | "ok"; text?: string; params: Record<string, unknown>[] } = { mode: "throw", params: [] };
 
 vi.mock("../src/util/claude.ts", async (importOriginal) => {
   const real = await importOriginal<typeof import("../src/util/claude.ts")>();
@@ -23,8 +24,9 @@ vi.mock("../src/util/claude.ts", async (importOriginal) => {
     claude: () => ({
       beta: {
         messages: {
-          stream: () => ({
+          stream: (params: Record<string, unknown>) => ({
             finalMessage: async () => {
+              reply.params.push(params);
               if (reply.mode === "throw") throw new Error("529 overloaded_error");
               if (reply.mode === "cut") return { stop_reason: "max_tokens", content: [{ type: "text", text: "{" }] };
               return { stop_reason: "end_turn", content: [{ type: "text", text: reply.text! }] };
@@ -46,6 +48,23 @@ const draft = () => {
 describe("Claude drafting failures fall back to the reviewed copy", () => {
   beforeEach(() => {
     reply.mode = "throw";
+    reply.params = [];
+  });
+
+  it("asks for structured output with only the server-side fallback beta, and lists row keys the way observations must quote them (QA round 3 F48, F56)", async () => {
+    reply.mode = "ok";
+    const fixture = JSON.parse(fs.readFileSync(path.join(REPO, "samples/project-ridgeline", COPY_FIXTURE), "utf8")) as { copy: unknown };
+    reply.text = JSON.stringify(fixture.copy);
+    const res = await draft().run();
+    expect(res.source).toBe("claude");
+    const params = reply.params[0]!;
+    expect(params.model).toBe(CLAUDE_MODEL);
+    // output_config.format is generally available: no structured-outputs beta header, which an unknown date would make the API reject.
+    expect(params.betas).toEqual(fallbackOptions().betas);
+    expect((params.output_config as { format?: unknown }).format).toBeDefined();
+    const prompt = JSON.stringify(params.messages);
+    expect(prompt).toMatch(/is\.revenue = Total revenue|is\.[a-z_.]+ = [A-Z]/);
+    expect(prompt).not.toMatch(/is\.[a-z_.]+ \([A-Z]/);
   });
 
   it("an API error falls back to the fixture and records why", async () => {

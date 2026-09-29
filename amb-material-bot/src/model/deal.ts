@@ -263,7 +263,8 @@ export function sensitivityGrids(inp: ValuationInputs, detail: ValuationDetail, 
     },
     {
       key: "dscr",
-      title: "DSCR Based on Purchase Price & Interest Rate",
+      // The grid finances the price with the SBA loan alone; the Reference structure's seller note is on Deal Structure.
+      title: "DSCR (SBA Loan Only) Based on Purchase Price & Interest Rate",
       colAxis: { label: "Interest Rate (%)", values: rates, fmt: FMT.rate },
       rowAxis: { label: "Purchase Price ($000s)", values: prices, fmt: FMT.currency },
       body: prices.map((price) => rates.map((r) => {
@@ -272,7 +273,7 @@ export function sensitivityGrids(inp: ValuationInputs, detail: ValuationDetail, 
       })),
       base: mid.financing.dscr,
       bodyFmt: FMT.multiple2,
-      note: `DSCR = cash flow available for debt service ÷ annual debt service on ${pct(1 - a.deal.equityInjectionPct)} of the price over ${a.deal.loanTermYears} years.`,
+      note: `DSCR = cash flow available for debt service ÷ annual debt service on an SBA loan of ${pct(1 - a.deal.equityInjectionPct)} of the price over ${a.deal.loanTermYears} years, no seller note (Deal Structure shows the Reference structure).`,
       hurdle: s.dscrHurdle,
     },
     {

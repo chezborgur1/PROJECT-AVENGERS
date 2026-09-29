@@ -200,7 +200,7 @@ export async function gatherIntake(row: RequestRow, repoRoot: string, log: (msg:
     try {
       log("  Claude: transcribing the intake notes into structured facts");
       const wire = await extractIntakeFacts(notes, { businessName: row.business_name, sourceLabel: noteFiles.join(", ") });
-      intake = { facts: toIntakeFacts(wire), revenueLines: [] };
+      intake = { facts: toIntakeFacts(wire, row.business_name), revenueLines: [] };
       intakeFacts = "claude";
       files.push({ file: noteFiles.join(", "), used: "Structured intake facts (transcribed by Claude; review against the notes)" });
     } catch (err) {

@@ -16,7 +16,7 @@ import { runModel } from "../src/model/engine.ts";
 import { verifyWorkbook } from "../src/model/verifyWorkbook.ts";
 import { writeWorkbook } from "../src/model/workbook.ts";
 import { REPO, tmpDir } from "./helpers.ts";
-import { bankOutsideGrid, juneYearEnd, midYear, type Scenario } from "./scenarios.ts";
+import { annualNewer, annualYears, bankOutsideGrid, juneYearEnd, midYear, mixedOlderAnnual, monthly12, zeroRevenueMonths, type Scenario } from "./scenarios.ts";
 
 const firm = { name: "AMB Advisory Services", contact: "Frank", email: "frank@example.com", phone: "" };
 const date = new Date("2026-09-29T12:00:00Z");
@@ -43,14 +43,14 @@ async function build(s: Scenario) {
   return { ds, model, verification, cim, text: (await slideTexts(cim.pptx)).join("\n") };
 }
 
-function expectDelivered(r: Awaited<ReturnType<typeof build>>): void {
+function expectDelivered(r: Awaited<ReturnType<typeof build>>, minPages = 15): void {
   expect(r.verification.errors).toEqual([]);
   expect(r.verification.mismatches).toEqual([]);
   expect(r.verification.lint).toEqual([]);
   expect(r.cim.log.filter((l) => /could not be built/.test(l))).toEqual([]);
   expect(r.cim.plan.modules.filter((m) => /^Not built/.test(m.reason ?? ""))).toEqual([]);
   expect(r.text).not.toMatch(/\{\{|NaN|undefined|Infinity|\[Confirm: figure/);
-  expect(r.cim.plan.pages.length).toBeGreaterThanOrEqual(15);
+  expect(r.cim.plan.pages.length).toBeGreaterThanOrEqual(minPages);
 }
 
 describe("period shapes beyond the sample (offline)", () => {
@@ -90,6 +90,53 @@ describe("period shapes beyond the sample (offline)", () => {
       for (const c of r.model.columns.filter((x) => x.ref.kind === "ytd" || x.ref.kind === "ltm")) expect(r.model.periods[c.key]!.kpis.revenue_per_customer).toBeUndefined();
     }
   }, 900_000);
+
+  it("reads an older fiscal year from the annual export beside a grid of the two recent years (QA round 3 F44)", async () => {
+    const r = await build(mixedOlderAnnual());
+    expectDelivered(r);
+    expect(r.ds.monthly!.months[0]!.key).toBe("2024-01");
+    expect(r.model.columns.filter((c) => c.ref.kind === "fiscal_year" && !c.projected).map((c) => c.label)).toEqual(["FY2023", "FY2024", "FY2025"]);
+    // FY2023 is the annual export's, in the engine and in the workbook alike (the verifier compares every cell).
+    expect(r.model.periods.FY2023!.pnl.revenue).toBeCloseTo(r.ds.pnl[2023]!.revenue, 6);
+    expect(r.model.periods.FY2023!.revenueLines.reduce((s, l) => s + l.amount, 0)).toBeCloseTo(r.ds.pnl[2023]!.revenue, 6);
+    // C04 ties the fiscal years the grid covers; the annual year has no months to tie.
+    expect(r.model.checks.find((c) => c.id === "C04")!.status).toBe("OK");
+    expect(r.model.masterCheck).not.toMatch(/failing/);
+  }, 600_000);
+
+  it("runs on full fiscal years when the monthly export stops before a year the annual export covers in full (F44)", async () => {
+    const r = await build(annualNewer());
+    expectDelivered(r);
+    expect(r.ds.sourceGranularity).toBe("annual");
+    expect(r.model.columns.some((c) => c.ref.kind === "ltm")).toBe(false);
+    expect(r.model.periods.FY2025!.pnl.revenue).toBeCloseTo(3_040_800, 0);
+    expect(r.ds.warnings.some((w) => /runs to Jun-25, but .* covers FY2025 in full/.test(w))).toBe(true);
+    expect(r.ds.warnings.some((w) => /carried as YTD/.test(w))).toBe(false);
+  }, 600_000);
+
+  it("builds a grid of exactly twelve months, with and without the customer list (F45)", async () => {
+    for (const customers of [true, false]) {
+      const r = await build(monthly12({ customers }));
+      expectDelivered(r, 12);
+      expect(r.ds.monthly!.months).toHaveLength(12);
+      expect(!!r.model.customers).toBe(customers);
+    }
+  }, 900_000);
+
+  it("builds the Summary and the deck from one or two years of annual statements (F46)", async () => {
+    for (const n of [1, 2] as const) {
+      const r = await build(annualYears(n));
+      expectDelivered(r, 12);
+      expect(r.ds.years).toHaveLength(n);
+    }
+  }, 900_000);
+
+  it("prints no peak-to-trough multiple when a month has no revenue (F47)", async () => {
+    const r = await build(zeroRevenueMonths());
+    expectDelivered(r);
+    expect(r.model.monthly!.series.revenue![12]).toBe(0);
+    expect(r.text).not.toMatch(/Infinity|NaN/);
+  }, 600_000);
 
   it("leaves Proof of Cash out when the bank months fall outside the P&L months", async () => {
     const r = await build(bankOutsideGrid());

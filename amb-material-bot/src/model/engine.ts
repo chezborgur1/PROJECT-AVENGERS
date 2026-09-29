@@ -29,8 +29,8 @@ import {
   type MonthKey,
 } from "../domain/financials.ts";
 import type { Assumptions, ScenarioDrivers } from "./assumptions.ts";
-import { customerActiveAt, customerAnalytics, customerListYears, headcountAnalytics, isFieldDepartment, onPayrollAt, touchedYears } from "./analytics.ts";
-import { computeChecks } from "./checks.ts";
+import { customerActiveAt, customerAnalytics, customerListYears, headcountAnalytics, isFieldDepartment, isWageAccount, onPayrollAt, touchedYears } from "./analytics.ts";
+import { computeChecks, realEstateReason } from "./checks.ts";
 import { dealStructure, sensitivityGrids, valuationDetail } from "./deal.ts";
 import { databookTotals } from "./exportTotals.ts";
 import { isPersonalHint } from "../domain/chartOfAccounts.ts";
@@ -43,6 +43,7 @@ import {
   categoryTotals,
   decideModeFor,
   fiscalYearEndKey,
+  fiscalYearMonths,
   gridCovers,
   ltmEqualsFiscalYear,
   pnlLinesFrom,
@@ -348,6 +349,47 @@ function tierTies(ladder: Ladder, amounts: Map<Adjustment, number | null>): Reco
   return Object.fromEntries(ADJUSTMENT_TIERS.map((t) => [t, t === "memo" ? 0 : accepted(t) - rung[t]])) as Record<AdjustmentTier, number>;
 }
 
+/**
+ * Databook rows of a model with a monthly grid: one per grid line, with its
+ * months, and the amounts of any fiscal year the grid does not cover (an
+ * older year read from an annual export or a return) matched to the grid
+ * line of the same account and category. An account that appears only in
+ * those years gets a row of its own with no months (`annualOnly`), after the
+ * grid lines, so every dollar of the annual source lands in exactly one row.
+ */
+function databookRowsWithGrid(
+  ds: FinancialDataset,
+  grid: NonNullable<FinancialDataset["monthly"]>,
+  fye: number,
+  meta: (account: string, category: IsCategory) => Pick<DatabookRow, "summaryLine" | "personal" | "adjustmentRef">,
+): DatabookRow[] {
+  const rows: DatabookRow[] = grid.lines.map((l) => ({
+    account: l.account,
+    section: l.section,
+    category: l.category,
+    ...meta(l.account, l.category),
+    source: l.source,
+    file: path.basename(l.file),
+    mappedBy: l.mappedBy,
+    byMonth: l.amounts,
+    byFiscalYear: Object.fromEntries(ds.years.map((y) => [y, grid.months.filter((m) => m.fiscalYear === y).reduce((s, m) => s + (l.amounts[m.key] ?? 0), 0)])),
+  }));
+  const offGrid = ds.years.filter((y) => !gridCovers(grid, fiscalYearMonths(y, fye)));
+  for (const y of offGrid) {
+    for (const l of ds.lines) {
+      if (l.statement !== "pnl" || l.year !== y) continue;
+      const category = l.category as IsCategory;
+      let row = rows.find((r) => r.account === l.account && r.category === category);
+      if (!row) {
+        row = { account: l.account, section: l.section, category, ...meta(l.account, category), source: l.source, file: path.basename(l.file), mappedBy: l.mappedBy, byFiscalYear: Object.fromEntries(ds.years.map((x) => [x, 0])), annualOnly: true };
+        rows.push(row);
+      }
+      row.byFiscalYear[y] = (row.byFiscalYear[y] ?? 0) + l.amount;
+    }
+  }
+  return rows;
+}
+
 function summaryLineFor(category: IsCategory, account: string, ds: FinancialDataset): string {
   if (category === "revenue") return ds.revenueLines?.find((l) => l.account === account)?.label ?? IS_LABELS.revenue;
   return IS_LABELS[category];
@@ -438,8 +480,15 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
     }
     return out;
   };
+  // A fiscal year the grid does not cover (an older year from an annual export or a return) reads the line's annual amount,
+  // as categoryTotals reads that year's annual P&L; its months would sum to nothing.
   const revenueLinesFor = (c: PeriodColumn) =>
-    (ds.revenueLines ?? []).map((l) => ({ account: l.account, label: l.label, amount: amountInWindow(l, windowMonths(c), fye), recurring: l.recurring }));
+    (ds.revenueLines ?? []).map((l) => ({
+      account: l.account,
+      label: l.label,
+      amount: c.ref.kind === "fiscal_year" && !gridCovers(grid, windowMonths(c)) ? (l.byFiscalYear[c.ref.fiscalYear] ?? 0) : amountInWindow(l, windowMonths(c), fye),
+      recurring: l.recurring,
+    }));
 
   for (const c of hist) {
     if (c.ref.kind === "pf") continue;
@@ -500,14 +549,19 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
         gridMonths,
       })
     : undefined;
+  const ownerTaxRow = schedule.find((r) => r.tier === "owner_compensation" && r.category === "owner_compensation" && r.origin !== "owner_comp");
+  // The P&L wage accounts of the latest fiscal year, the register's independent tie (C13); none when the P&L shows one payroll line.
+  const wageLines = ds.lines.filter((l) => l.statement === "pnl" && l.year === latestFy && l.category === "payroll" && isWageAccount(l.account));
+  const wages = wageLines.length ? { total: wageLines.reduce((s, l) => s + l.amount, 0), accounts: [...new Set(wageLines.map((l) => l.account))] } : undefined;
+  const latestFyKey = periodKey({ kind: "fiscal_year", fiscalYear: latestFy });
   const headcount = ds.payroll
     ? headcountAnalytics({
         register: ds.payroll,
         asOfDate,
         years,
         fye,
-        window: { revenue: latestValues.pnl.revenue, payroll: latestValues.pnl.payroll },
-        fiscalYear: { year: latestFy, revenue: ds.pnl[latestFy]!.revenue, payroll: ds.pnl[latestFy]!.payroll },
+        window: { revenue: latestValues.pnl.revenue, payroll: latestValues.pnl.payroll, ownerPayrollTaxes: ownerTaxRow ? (amountsByColumn.get(latest.key)?.get(ownerTaxRow) ?? 0) : 0 },
+        fiscalYear: { year: latestFy, revenue: ds.pnl[latestFy]!.revenue, payroll: ds.pnl[latestFy]!.payroll, ownerTaxes: ownerTaxRow ? (amountsByColumn.get(latestFyKey)?.get(ownerTaxRow) ?? 0) : 0, ...(wages ? { wages } : {}) },
         // A list with a residual (households, members) counts only part of who the staff serve, so no per-employee ratio is drawn from it.
         customersLatest: ds.customers?.residual ? undefined : customers?.latestCount,
         gridMonths,
@@ -516,7 +570,6 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
 
   // KPIs per column (DATA_CONTRACT §5.9). Labor cost excludes the owner: his employer payroll taxes sit in the P&L payroll
   // line, so they come out with him, on the payroll register's basis (the [S4] row carries the amount).
-  const ownerTaxRow = schedule.find((r) => r.tier === "owner_compensation" && r.category === "owner_compensation" && r.origin !== "owner_comp");
   for (const c of hist) {
     const p = periods[c.key]!;
     const k = p.kpis;
@@ -605,19 +658,7 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
     return refs.length ? refs.join(", ") : undefined;
   };
   const databookPnl: DatabookRow[] = grid
-    ? grid.lines.map((l) => ({
-        account: l.account,
-        section: l.section,
-        category: l.category,
-        summaryLine: summaryLineFor(l.category, l.account, ds),
-        personal: suggested.has(l.account),
-        adjustmentRef: refFor(l.account),
-        source: l.source,
-        file: path.basename(l.file),
-        mappedBy: l.mappedBy,
-        byMonth: l.amounts,
-        byFiscalYear: Object.fromEntries(years.map((y) => [y, grid.months.filter((m) => m.fiscalYear === y).reduce((s, m) => s + (l.amounts[m.key] ?? 0), 0)])),
-      }))
+    ? databookRowsWithGrid(ds, grid, fye, (account, category) => ({ summaryLine: summaryLineFor(category, account, ds), personal: suggested.has(account), adjustmentRef: refFor(account) }))
     : [...new Map(ds.lines.filter((l) => l.statement === "pnl").map((l) => [l.account, l])).values()].map((l) => ({
         account: l.account,
         section: l.section,
@@ -714,7 +755,9 @@ export function runModel(ds: FinancialDataset, a: Assumptions): ModelOutput {
   module("S8.3 Capex and cash conversion", cashFlow.length > 0, "Fewer than two balance sheets");
   module("S9.1 Opportunity sizing", (ds.intake?.growthLevers.length ?? 0) > 0, "No growth levers in the notes");
   module("Proof of Cash", proofOfCash, !ds.depositsByMonth || !grid ? "No bank source or no monthly grid" : "Bank months outside the P&L months");
-  module("Real Estate", !!ds.intake?.locations.some((l) => l.arrangement !== "leased_from_third_party"), "Premises leased from a third party");
+  // No Real Estate tab is built yet (tabs.realEstate below), so the module is never claimed; the reason says what the premises are.
+  const premises = a.deal.premisesArrangement;
+  module("Real Estate", false, realEstateReason(premises));
 
   const draft: Omit<ModelOutput, "checks" | "masterCheck" | "namedOutputs" | "modules"> = {
     ...legacy,

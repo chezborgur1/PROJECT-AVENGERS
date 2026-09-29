@@ -132,14 +132,14 @@ Hard rules:
 3. Figure labels ending "(decline)" are negative; the token prints the absolute value, so choose the verb ("fell", "down") accordingly.
 4. Page references are "{{page:S7.1}}" tokens; use them instead of page numbers.
 5. Titles: one sentence, sentence case, no final stop, a finding with at least one figure token and its period, 60 to 110 characters once resolved (one line is about 85), never over 130. Never a topic label.
-6. Observations key to exhibit rows by the row keys listed for each page. Order does not matter; the deck letters them by row position. Counts follow the evidence and stay inside each field's stated range.
+6. Observations key to exhibit rows by the row keys listed for each page: "row" is the key alone, the part before " = " (for "is.gp = Gross profit", write "is.gp"). Order does not matter; the deck letters them by row position. Counts follow the evidence and stay inside each field's stated range.
 7. Respect every word budget in the schema; the copy fills fixed boxes.
 8. Fill only the pages listed as in this deck; leave every other page out.`;
 
 /** Row keys an observation may point at, per page, from the template plan's exhibits. */
 function rowKeys(plan: DeckPlan): Map<string, string[]> {
   const out = new Map<string, string[]>();
-  const keysOf = (b: Block): string[] => (b.kind === "numTable" ? b.spec.rows.flatMap((r) => (r.key ? [`${r.key} (${r.label})`] : [])) : b.kind === "textTable" ? (b.spec.rowKeys ?? []) : []);
+  const keysOf = (b: Block): string[] => (b.kind === "numTable" ? b.spec.rows.flatMap((r) => (r.key ? [`${r.key} = ${r.label}`] : [])) : b.kind === "textTable" ? (b.spec.rowKeys ?? []) : []);
   for (const p of plan.pages) {
     const spec = p.draft.spec;
     if (!spec) continue;
@@ -171,8 +171,8 @@ async function draftWithClaude(n: NarrativeContext, ctx: CimContext, plan: DeckP
     const stream = claude().beta.messages.stream({
       model: CLAUDE_MODEL,
       max_tokens: 64000,
+      // Structured outputs (output_config.format) need no beta header; only the server-side fallback does, as in aiExtract.ts.
       ...fallbackOptions(),
-      betas: [...fallbackOptions().betas, "structured-outputs-2025-12-15"],
       thinking: { type: "adaptive" },
       output_config: { effort: "high", format: betaZodOutputFormat(CimCopySchema) },
       system: SYSTEM,

@@ -9,6 +9,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import ExcelJS from "exceljs";
 import JSZip from "jszip";
 import { NeedsInfoError, processRequest, type PipelineResult } from "../src/pipeline.ts";
+import { chartFrames, emptyChartFrames } from "../src/cim/render.ts";
 import { REPO, sampleRow, tmpDir } from "./helpers.ts";
 
 const firm = { name: "AMB Advisory Services", contact: "Frank", email: "frank@example.com", phone: "" };
@@ -59,7 +60,7 @@ describe("pipeline on the sample request (offline: no Claude)", () => {
     summary = fs.readFileSync(path.join(result.folder, "run-summary.md"), "utf8");
   }, 600_000);
 
-  it("writes the workbook, the deck with its PDF and page images, and the review files", () => {
+  it("writes the workbook, the deck with its PDF and page images, and the review files", async () => {
     const expected = ["Project Ridgeline - CIM.pptx", "Project Ridgeline - Financial Model v01.xlsx", "open-questions.md", "run-summary.md"];
     if (hasSoffice) expected.push("Project Ridgeline - CIM pages", "Project Ridgeline - CIM.pdf");
     expect(fs.readdirSync(result.folder).sort()).toEqual(expected.sort());
@@ -67,6 +68,11 @@ describe("pipeline on the sample request (offline: no Claude)", () => {
       expect(result.pdf).toBe(path.join(result.folder, "Project Ridgeline - CIM.pdf"));
       expect(result.pngs).toHaveLength(result.pages);
       expect(result.pngs.every((p) => fs.statSync(p).size > 10_000)).toBe(true);
+      // Every chart frame in the deck prints with its drawings: LibreOffice can drop one, and a PDF that does is never delivered (QA round 3 F26).
+      const frames = await chartFrames(result.deck);
+      expect(frames.length).toBeGreaterThanOrEqual(5);
+      expect(emptyChartFrames(result.pdf!, frames).empty).toEqual([]);
+      expect(result.renderError).toBeUndefined();
     } else {
       expect(summary).toMatch(/No PDF: PDF not written/);
     }

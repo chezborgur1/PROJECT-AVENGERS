@@ -6,7 +6,7 @@
 import { monthLabel, type FinancialDataset } from "../../domain/financials.ts";
 import { addr, colLetter, rowOf, SheetBuilder } from "../sheet.ts";
 import { COLOR, FMT, ROW_HEIGHT, WIDTH } from "../styles.ts";
-import type { SensitivityGrid } from "../types.ts";
+import type { ModelOutput, SensitivityGrid } from "../types.ts";
 import { roundTo } from "../deal.ts";
 import { isCreditCard } from "../nwc.ts";
 import { A, A_AT, type TabContext } from "./assumptionsTab.ts";
@@ -71,6 +71,33 @@ export function planOpportunities(ctx: TabContext, ds: FinancialDataset | undefi
 
 // --- Valuation ------------------------------------------------------------------------------------
 
+/** The Valuation tab's Basis / source column, which the Summary links for the DSCR note. */
+export const VALUATION_NOTES_COL = 7;
+
+/** The SBA-only DSCR note: the binding (lowest) case against the hurdle, as the Valuation tab's formula words it. */
+export function sbaDscrNote(model: ModelOutput): string {
+  const hurdle = model.assumptions!.sensitivity.dscrHurdle;
+  const dscrs = (["low", "mid", "high"] as const).map((c) => model.valuationDetail!.cases[c].financing.dscr);
+  const min = Math.min(...dscrs);
+  const binding = ["Low", "Mid", "High"][dscrs.indexOf(min)]!;
+  return `SBA loan only: ${binding} case binds at ${min.toFixed(2)}x, ${min < hurdle ? "below" : "clearing"} the ${hurdle.toFixed(2)}x hurdle`;
+}
+
+/**
+ * The Reference structure's DSCR flag (guide 5.5: below the hurdle is
+ * flagged, never coloured), as a live sentence on the hurdle and the seller
+ * note's term, for the cell beside the DSCR on Valuation, Deal Structure and
+ * the Summary.
+ */
+export function dscrFlag(cell: string, model: ModelOutput): { f: string; expect: string } {
+  const a = model.assumptions!;
+  const dscr = model.deal?.[0]?.debtService.dscr ?? 0;
+  const h = `TEXT(${A("dscrHurdle")},"0.00")`;
+  const f = `IF(ISNUMBER(${cell}),IF(${cell}<${A("dscrHurdle")},"Below the "&${h}&"x hurdle: the seller note amortises inside "&TEXT(${A("sellerNoteTermMonths")},"0")&" months; lengthen the note or lower the price","Clears the "&${h}&"x hurdle, seller note included"),"n.a.")`;
+  const expect = dscr < a.sensitivity.dscrHurdle ? `Below the ${a.sensitivity.dscrHurdle.toFixed(2)}x hurdle: the seller note amortises inside ${a.deal.sellerNoteTermMonths} months; lengthen the note or lower the price` : `Clears the ${a.sensitivity.dscrHurdle.toFixed(2)}x hurdle, seller note included`;
+  return { f, expect };
+}
+
 export function planValuation(ctx: TabContext): SheetBuilder | undefined {
   const { model } = ctx;
   const vd = model.valuationDetail;
@@ -82,8 +109,8 @@ export function planValuation(ctx: TabContext): SheetBuilder | undefined {
   b.width(2, WIDTH.label);
   b.widths(3, 5, 11);
   b.spacerCol(6);
-  b.width(7, WIDTH.notes);
-  const notesCol = 7;
+  const notesCol = VALUATION_NOTES_COL;
+  b.width(notesCol, WIDTH.notes);
   b.anatomy({ subtitle: "Valuation and Financing, Internal ($000s)", lastCol: notesCol, toggleCol: 5, masterToggle: ctx.masterToggle });
   b.text(3, 4, "Print", { align: { horizontal: "right" } });
   b.tier1(5, [{ from: 3, to: 5, label: "Case" }, { from: notesCol, to: notesCol, label: "Basis / source" }]);
@@ -179,25 +206,23 @@ export function planValuation(ctx: TabContext): SheetBuilder | undefined {
   b.cell(b.r("dscr"), 2, { style: "keyRate", align: { horizontal: "left" } });
   // The hurdle claim names the binding (lowest) case, live, so it cannot outlast a change of inputs.
   {
-    const hurdle = model.assumptions!.sensitivity.dscrHurdle;
-    const dscrs = cases.map((c) => vd.cases[c].financing.dscr);
-    const min = Math.min(...dscrs);
-    const binding = ["Low", "Mid", "High"][dscrs.indexOf(min)]!;
     const range = `${addr(b.r("dscr"), 3)}:${addr(b.r("dscr"), 5)}`;
     const h = `TEXT(${A("dscrHurdle")},"0.00")`;
-    b.formula(b.r("dscr"), notesCol, `IFERROR(CHOOSE(MATCH(MIN(${range}),${range},0),"Low","Mid","High")&" case binds at "&TEXT(MIN(${range}),"0.00")&"x, "&IF(MIN(${range})<${A("dscrHurdle")},"below","clearing")&" the "&${h}&"x hurdle","n.a.")`, {
+    b.formula(b.r("dscr"), notesCol, `IFERROR("SBA loan only: "&CHOOSE(MATCH(MIN(${range}),${range},0),"Low","Mid","High")&" case binds at "&TEXT(MIN(${range}),"0.00")&"x, "&IF(MIN(${range})<${A("dscrHurdle")},"below","clearing")&" the "&${h}&"x hurdle","n.a.")`, {
       style: "note",
       role: "text",
       align: { horizontal: "left" },
-      expect: `${binding} case binds at ${min.toFixed(2)}x, ${min < hurdle ? "below" : "clearing"} the ${hurdle.toFixed(2)}x hurdle`,
+      expect: sbaDscrNote(model),
       label: "dscr binding case",
     });
   }
   const refDscr = model.deal?.[0]?.debtService.dscr;
   if (refDscr !== undefined) {
-    row("dscrReference", "DSCR, Reference structure (with seller note)", "line", (i) => (i === 1 ? { f: `${S("deal")}$C$${rowOf("deal", "dscr")}`, expect: refDscr } : undefined), FMT.multiple2, "Deal Structure at the Mid price: SBA loan plus the seller note, year-one service");
+    row("dscrReference", "DSCR, Reference structure (with seller note)", "line", (i) => (i === 1 ? { f: `${S("deal")}$C$${rowOf("deal", "dscr")}`, expect: refDscr } : undefined), FMT.multiple2);
     b.na(b.r("dscrReference"), 3, "n.a.", { style: "line" });
     b.na(b.r("dscrReference"), 5, "n.a.", { style: "line" });
+    const flag = dscrFlag(addr(b.r("dscrReference"), 4), model);
+    b.formula(b.r("dscrReference"), notesCol, flag.f, { style: "note", role: "text", align: { horizontal: "left" }, expect: flag.expect, label: "reference dscr flag" });
   }
   b.spacerRow(r++);
   b.section(r++, "Implied multiples (Total Investment ÷ measure)", spans);
@@ -225,7 +250,7 @@ export function planValuation(ctx: TabContext): SheetBuilder | undefined {
   row("equityValue", "Equity Value to Seller", "keyTotal", (i) => (sheetAt ? { f: `SUM(${addr(b.r("ev"), 3 + i)}:${addr(b.r("nwcVsPeg"), 3 + i)})`, expect: v.equityValue[cases[i]!] / K } : undefined), FMT.currency);
   if (!sheetAt) cases.forEach((_, i) => b.na(b.r("equityValue"), 3 + i, "n.a.", { style: "keyTotal" }));
   r++;
-  b.note(r, 2, `Note: ${mainStreet ? "Main Street mode: SDE × multiple (IBBA basis SBA lenders underwrite)." : "Lower-middle-market mode: Adj. EBITDA × multiple."} Multiples are placeholders until the licensed comps source is applied (Assumptions). DSCR below 1.25x is flagged in the basis column, never coloured. Nothing on this tab enters the CIM.`);
+  b.note(r, 2, `Note: ${mainStreet ? "Main Street mode: SDE × multiple (IBBA basis SBA lenders underwrite)." : "Lower-middle-market mode: Adj. EBITDA × multiple."} Multiples are placeholders until the licensed comps source is applied (Assumptions). A DSCR below the hurdle on Assumptions is flagged in the basis column, never coloured. Nothing on this tab enters the CIM.`);
   b.print({ area: `B2:${addr(r, notesCol)}`, landscape: false, fitToWidth: 1, fitToHeight: 0, titlesRow: "5:6" });
   b.furniture(ctx.codeName, ctx.asOfLabel);
   return b;
@@ -507,7 +532,8 @@ export function planDealStructure(ctx: TabContext): SheetBuilder | undefined {
   b.text(r, 2, "DSCR", { style: "keyRate", align: { horizontal: "left" } });
   b.keyTotalBox([r, r], [[3, 3]]);
   b.formula(r, 3, `IFERROR(${addr(b.r("svcCfa"), 3)}/${addr(b.r("svcTotal"), 3)},"n.a.")`, { style: "keyRate", fmt: FMT.multiple2, expect: ds.dscr, label: "deal dscr" });
-  b.note(r, notesCol, ds.dscr < model.assumptions!.sensitivity.dscrHurdle ? `Below the ${model.assumptions!.sensitivity.dscrHurdle.toFixed(2)}x hurdle with the seller note amortising inside ${model.assumptions!.deal.sellerNoteTermMonths} months; lengthen the note or lower the price` : "Clears the hurdle");
+  const flag = dscrFlag(addr(r, 3), model);
+  b.formula(r, notesCol, flag.f, { style: "note", role: "text", align: { horizontal: "left" }, expect: flag.expect, label: "deal dscr flag" });
   r += 2;
   b.note(r, 2, "Note: one structure column by default (Traditional: cash plus a seller note); add columns for competing LOIs and the Offer Comparison tab builds when two or more exist. Escrow and holdback are formulas on the price, never typed. The indemnity escrow is kept separate from any retention holdback.");
   b.print({ area: `B2:${addr(r, notesCol)}`, landscape: false, fitToWidth: 1, fitToHeight: 0, titlesRow: "5:6" });
@@ -664,8 +690,12 @@ export function planSensitivities(ctx: TabContext): SheetBuilder | undefined {
   }
   const lastPrinted = settings.tie_closingCash! + 1;
   b.text(4, helperCol, "Helper: unrounded grid values (grey; outside the print area)", { style: "helper" });
-  // Four grids to a page (guide 5.5); the settings follow the last grid.
-  b.print({ area: `B2:${addr(lastPrinted, 12)}`, landscape: false, fitToWidth: 1, fitToHeight: 0, titlesRow: "2:4", rowBreaks: grids.length > 4 ? [firstGrid + 4 * gridRows - 1] : [] });
+  // Four grids to a page (guide 5.5). The settings block follows the last grid, on a page of its own once two or more
+  // grids share that page: two grids and the 21 settings rows overrun a portrait page, and a break inside the block
+  // strands its heading or its tie-outs.
+  const gridsOnLastPage = grids.length > 4 ? grids.length - 4 : grids.length;
+  const rowBreaks = [...(grids.length > 4 ? [firstGrid + 4 * gridRows - 1] : []), ...(gridsOnLastPage >= 2 ? [settingsTop - 1] : [])];
+  b.print({ area: `B2:${addr(lastPrinted, 12)}`, landscape: false, fitToWidth: 1, fitToHeight: 0, titlesRow: "2:4", rowBreaks });
   b.furniture(ctx.codeName, ctx.asOfLabel);
   b.plan.toggleRanges = [`B${firstGrid}:L${lastPrinted}`];
   return b;

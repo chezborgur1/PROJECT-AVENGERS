@@ -813,6 +813,8 @@ function scaleToTotal(raw: number[], total: number): number[] {
   return out;
 }
 
+const PAY_BASIS_TEXT: Record<string, string> = { salary: "Salary", hourly: "Hourly", hourly_plus_commission: "Hourly + commission", contractor: "Contractor" };
+
 function buildPayroll(): NonNullable<FinancialDataset["payroll"]> {
   const seeds = employeeSeeds();
   const wages = seeds.map(() => ({ 2023: 0, 2024: 0, 2025: 0 }) as Record<number, number>);
@@ -843,6 +845,12 @@ function buildPayroll(): NonNullable<FinancialDataset["payroll"]> {
     fte: 1,
     wagesByFiscalYear: wages[i]!,
     employerCostsByFiscalYear: costs[i]!,
+    // The text payroll.csv prints for the coded fields, which the raw tab shows as exported.
+    exported: {
+      ...(s.termType ? { terminationType: s.termType === "resignation" ? "Resignation" : "Termination" } : {}),
+      payBasis: PAY_BASIS_TEXT[s.payBasis],
+      ...(s.management ? { management: "yes" } : {}),
+    },
   }));
   employees.unshift({
     id: "E-01",
@@ -856,6 +864,7 @@ function buildPayroll(): NonNullable<FinancialDataset["payroll"]> {
     fte: 1,
     wagesByFiscalYear: byYear([180_000, 190_000, 200_000]),
     employerCostsByFiscalYear: byYear(OWNER_EMPLOYER_TAXES),
+    exported: { payBasis: "Salary", owner: "yes", management: "yes" },
   });
   return {
     employees,

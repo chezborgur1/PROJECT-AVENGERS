@@ -3,14 +3,15 @@
 // Databook (account × period with mapping columns and the tie to the raw
 // export), Mapping, and the Raw tabs (values only, as exported).
 
-import { IS_CATEGORIES, IS_LABELS, SOURCE_LABELS, type FinancialDataset, type IsCategory, type MonthKey } from "../../domain/financials.ts";
-import { addr, colLetter, fitScale, range, rowOf, SheetBuilder, wrappedLines } from "../sheet.ts";
+import path from "node:path";
+import { IS_CATEGORIES, IS_LABELS, SOURCE_LABELS, monthRange, type FinancialDataset, type IsCategory, type MonthKey } from "../../domain/financials.ts";
+import { addr, colLetter, fitScale, range, rowOf, SheetBuilder, textWidthPx, wrappedLines } from "../sheet.ts";
 import { COLOR, FMT, WIDTH } from "../styles.ts";
 import { formationText, totalDifference } from "../exportTotals.ts";
 import { excelSerial } from "../periods.ts";
 import type { DatabookRow, DatabookTotal, ModelOutput, TotalTerm } from "../types.ts";
 import type { TabContext } from "./assumptionsTab.ts";
-import { adjMonthStart, applyPeriodWidths, ASOF, gridMonths, LATEST_FY, FYE, periodLayout, S, SHEET, serialOfMonthStart, sumifsFormula, valueSpans, writeMonthHeaders, writePeriodHelpers, type PeriodLayout } from "./layout.ts";
+import { adjMonthStart, applyPeriodWidths, ASOF, gridMonths, headerLabel, LATEST_FY, offGrid, FYE, periodLayout, S, SHEET, serialOfMonthStart, sumifsFormula, valueSpans, writeMonthHeaders, writePeriodHelpers, type PeriodLayout } from "./layout.ts";
 
 /** Month columns start here on Monthly P&L and Databook so the guide's `SUMIFS(Databook!<month col>, ...)` reads the same letter. */
 export const MONTH_START = 17;
@@ -34,6 +35,12 @@ export interface PnlRowSpec {
   calc?: (at: (key: string) => string) => string;
   /** Engine value in dollars for a period (or month) given the values the row derives from. */
   value?: (v: PnlValues) => number;
+  /** Annual-only P&L Summary (guide 5.2A): an expense line on the AMB Line Banded fill. */
+  banded?: boolean;
+  /** Annual-only P&L Summary: a "% Sales" row, the line above over total revenue. */
+  pctOf?: string;
+  /** Annual-only P&L Summary: a section drawn as an AMB Subsection (underlined, no fill). */
+  subsection?: boolean;
 }
 
 /** What a P&L row can be computed from: the period's lines and ladder, in dollars. */
@@ -286,19 +293,24 @@ export function planMonthly(ctx: TabContext): SheetBuilder | undefined {
       }
       if (f !== undefined) b.formula(rr, col, f, { style: vs.style, fmt: vs.fmt, expect, label: `${spec.key} ${m}` });
     });
-    // Period block: SUMIFS over the month cells, except ratios which recompute.
+    // Period block: SUMIFS over the month cells, except ratios which recompute. A fiscal year the grid does not cover (read
+    // from an annual source on the P&L Summary) has no months here, so it reads n.a., as does growth measured against it.
     for (const { column, col } of l.cols) {
       const colL = colLetter(col);
       const inSheet = (key: string) => `${colL}${b.r(key)}`;
       const pv = model.periods[column.key]!;
       const values: PnlValues = { pnl: pv.pnl, ladder: pv.ladder, revenueLines: pv.revenueLines };
+      const prior = spec.kind === "ratio" ? priorColumn(column, l) : undefined;
+      if (offGrid(model, column) || (prior && offGrid(model, prior.column))) {
+        b.na(rr, col, "n.a.", { style: vs.style });
+        continue;
+      }
       if (spec.kind === "margin") {
         const base = spec.key === "gross_margin" ? "gross_profit" : spec.key === "ebitda_margin" ? "reported_ebitda" : "net_income";
         b.formula(rr, col, `IFERROR(${inSheet(base)}/${inSheet("revenue")},"n.m.")`, { style: vs.style, fmt: vs.fmt, expect: pv.pnl.revenue ? spec.value!(values) : "n.m.", label: `${spec.key} ${column.label}` });
         continue;
       }
       if (spec.kind === "ratio") {
-        const prior = priorColumn(column, l);
         if (!prior) {
           b.na(rr, col, "n.a.", { style: vs.style });
           continue;
@@ -323,6 +335,10 @@ export function planMonthly(ctx: TabContext): SheetBuilder | undefined {
   });
   // Each period's tie is the sum of its months' ties, so a break in any month shows in the period block too.
   for (const { column, col } of l.cols) {
+    if (offGrid(model, column)) {
+      b.na(tieRow, col, "n.a.", { style: "check" });
+      continue;
+    }
     const f = sumifsFormula({ valuesRow: monthRow("tie_out"), monthsRow: monthHeaderRow, startCell: addr(helpers.start, col, { row: true }), endCell: addr(helpers.end, col, { row: true }) });
     b.formula(tieRow, col, f, { style: "check", fmt: FMT.check, expect: 0, tol: 1e-6, label: `tie out ${column.label}` });
   }
@@ -420,9 +436,13 @@ export function planDatabook(ctx: TabContext): SheetBuilder {
   const months = gridMonths(model);
   const n = months.length;
   const rows = model.databook?.pnl ?? [];
+  // Rows with months come first and tie to Raw - P&L row for row; rows of an account seen only in a fiscal year the grid
+  // does not cover follow, with no months, and tie to Raw - P&L Annual by year.
+  const gridRows = rows.filter((x) => !x.annualOnly);
   const bsRows = model.databook?.bs ?? [];
   const bsDates = [...new Set(bsRows.flatMap((x) => Object.keys(x.byMonth)))].sort();
   const hist = model.columns.filter((c) => !c.projected);
+  const annualCols = hist.map((c, i) => ({ c, col: DATABOOK_COL.periodStart + i })).filter((x) => offGrid(model, x.c));
   const { periodStart } = DATABOOK_COL;
   const lastPeriodCol = periodStart + Math.max(hist.length, bsDates.length, 1) - 1;
   const tie = databookTieCols(model);
@@ -464,7 +484,8 @@ export function planDatabook(ctx: TabContext): SheetBuilder {
   ]);
   const header = (r: number, c: number, v: string, left = false) => b.cell(r, c, { style: "header", v, role: "text", align: left ? { horizontal: "left" } : undefined });
   headers.forEach((h, i) => header(6, 2 + i, h, true));
-  hist.forEach((c, i) => header(6, periodStart + i, c.label));
+  // Row 5 names each group (YTD, LTM), so row 6 carries the period's own label ("Dec-24"), as on every period tab.
+  hist.forEach((c, i) => header(6, periodStart + i, headerLabel(c)));
   if (n) writeMonthHeaders(b, 6, MONTH_START, months);
   ["Latest: Databook", "Latest: raw", "Diff, all periods", "Status"].forEach((h, i) => header(6, tie.databook + i, h));
 
@@ -498,9 +519,11 @@ export function planDatabook(ctx: TabContext): SheetBuilder {
   rows.forEach((row, i) => {
     const r = firstRow + i;
     [row.account, SOURCE_LABELS[row.source], row.category, row.summaryLine, row.personal ? "Personal?" : "", refsText(row.adjustmentRef)].forEach((v, k) => b.text(r, 2 + k, v));
-    if (n) months.forEach((m, k) => b.num(r, MONTH_START + k, cents(row.byMonth?.[m] ?? 0), { fmt: FMT.body }));
-    else fyCols.forEach(({ c, col }) => b.num(r, col, cents(row.byFiscalYear[c.fiscalYear!] ?? 0), { fmt: FMT.body }));
-    pnlTie(r, 4 + i, latestOfRow(row), row.account);
+    if (n && !row.annualOnly) months.forEach((m, k) => b.num(r, MONTH_START + k, cents(row.byMonth?.[m] ?? 0), { fmt: FMT.body }));
+    else if (!n) fyCols.forEach(({ c, col }) => b.num(r, col, cents(row.byFiscalYear[c.fiscalYear!] ?? 0), { fmt: FMT.body }));
+    // A fiscal year off the grid is typed as the annual source exports it; the tie rows below prove it against that export.
+    for (const { c, col } of annualCols) b.num(r, col, cents(row.byFiscalYear[c.fiscalYear!] ?? 0), { fmt: FMT.body });
+    if (!row.annualOnly) pnlTie(r, 4 + i, latestOfRow(row), row.account);
   });
 
   // The P&L export's own subtotals, re-formed from the rows above: sections by the export's headings on Raw - P&L (same
@@ -511,7 +534,8 @@ export function planDatabook(ctx: TabContext): SheetBuilder {
   const allTotals = model.databook?.totals ?? [];
   const rawRowOfTotal = (t: DatabookTotal, accounts: number) => rawTotalsFirstRow(accounts) + allTotals.filter((x) => x.statement === t.statement).indexOf(t);
   const escape = (v: string) => v.replace(/[~*?]/g, "~$&").replace(/"/g, '""');
-  const pnlRaw = (c: "A" | "B") => `${S("rawPnl")}$${c}$4:$${c}$${3 + rows.length}`;
+  const pnlRaw = (c: "A" | "B") => `${S("rawPnl")}$${c}$4:$${c}$${3 + gridRows.length}`;
+  const lastGridRow = firstRow + gridRows.length - 1;
   const sourceOf = (file: string) => SOURCE_LABELS[(rows.find((x) => x.file === file) ?? bsRows.find((x) => x.file === file) ?? rows[0] ?? bsRows[0])?.source ?? "quickbooks_export"];
   const totalLabels = (r: number, t: DatabookTotal) => {
     [t.label, sourceOf(t.file), "Export total"].forEach((v, k) => b.text(r, 2 + k, v));
@@ -536,16 +560,39 @@ export function planDatabook(ctx: TabContext): SheetBuilder {
           formula = `${at}*${K}`;
         } else {
           formula = f.terms
-            .map((term, j) => `${term.sign < 0 ? "-" : j ? "+" : ""}SUMIFS(${colL}$${firstRow}:${colL}$${lastRow},${pnlRaw("B")},"${escape(term.section)}"${term.accountPrefix ? `,${pnlRaw("A")},"${escape(term.accountPrefix)}*"` : ""})`)
+            .map((term, j) => `${term.sign < 0 ? "-" : j ? "+" : ""}SUMIFS(${colL}$${firstRow}:${colL}$${lastGridRow},${pnlRaw("B")},"${escape(term.section)}"${term.accountPrefix ? `,${pnlRaw("A")},"${escape(term.accountPrefix)}*"` : ""})`)
             .join("");
         }
         b.formula(r, col, formula, { fmt: FMT.body, expect: t.databook[key] ?? 0, label: `${t.label} ${key}` });
       });
-      pnlTie(r, rawRowOfTotal(t, rows.length), latestOf(t.databook), t.label, t);
+      pnlTie(r, rawRowOfTotal(t, gridRows.length), latestOf(t.databook), t.label, t);
     });
     pnlTotalsLast = sec + pnlTotals.length;
     b.row("pnlTotalsFirst", sec + 1);
     b.row("pnlTotalsLast", pnlTotalsLast);
+  }
+  // Each fiscal year read from an annual source beside the grid: every Databook row's amount against that export's total.
+  if (annualCols.length) {
+    const sec = pnlTotalsLast + 2;
+    b.section(sec, "Fiscal years from the annual source, tied to Raw - P&L Annual ($)", [[2, 7]]);
+    annualCols.forEach(({ c, col }, i) => {
+      const r = sec + 1 + i;
+      const fy = c.fiscalYear!;
+      const total = cents(rows.reduce((s, x) => s + cents(x.byFiscalYear[fy] ?? 0), 0));
+      b.text(r, 2, `${c.label}: every account`);
+      b.text(r, 4, "Annual source");
+      const rawCol = colLetter(RAW_ANNUAL_FIRST + i);
+      writeTie(b, r, tie, {
+        databook: `SUM(${addr(firstRow, col)}:${addr(lastRow, col)})`,
+        raw: `SUM(${S("rawPnlAnnual")}$${rawCol}:$${rawCol})`,
+        expect: total,
+        diff: `${addr(r, tie.databook)}-${addr(r, tie.raw)}`,
+        label: `annual ${c.label}`,
+      });
+    });
+    pnlTotalsLast = sec + annualCols.length;
+    b.row("annualTieFirst", sec + 1);
+    b.row("annualTieLast", pnlTotalsLast);
   }
 
   // Balance-sheet accounts: one row per account, one column per statement date, tied to Raw - Balance Sheet date by date.
@@ -618,9 +665,11 @@ export function planDatabook(ctx: TabContext): SheetBuilder {
     rows.forEach((row, i) => {
       const r = firstRow + i;
       hist.forEach((c, k) => {
+        if (offGrid(model, c)) return;
         const col = periodStart + k;
         const f = sumifsFormula({ valuesRow: `$${colLetter(MONTH_START)}${r}:$${colLetter(MONTH_START + n - 1)}${r}`, monthsRow: monthHeaderRow, startCell: addr(helpers.start, col, { row: true }), endCell: addr(helpers.end, col, { row: true }) });
-        b.formula(r, col, f, { fmt: FMT.body, expect: model.periods[c.key]!.accountLines[row.account] ?? 0, label: `${row.account} ${c.label}` });
+        const expect = monthRange(c.start, c.end).reduce((s, m) => s + cents(row.byMonth?.[m] ?? 0), 0);
+        b.formula(r, col, f, { fmt: FMT.body, expect, label: `${row.account} ${c.label}` });
       });
     });
   }
@@ -748,9 +797,9 @@ const RAW_TEXT_MAX = 60;
 
 /**
  * Raw tabs print landscape, one page wide, over the cells they use (they are
- * values as exported, not output tabs). Their account and section columns
- * widen to the longest label the export holds, up to RAW_TEXT_MAX, and a
- * longer label wraps, so no exported name is cut at the cell edge.
+ * values as exported, not output tabs). Each text column widens to the
+ * longest text the export holds, up to RAW_TEXT_MAX, and a longer text
+ * wraps, so no exported value is cut at the cell edge.
  */
 function printRaw(b: SheetBuilder): SheetBuilder {
   let lastRow = 1;
@@ -760,11 +809,11 @@ function printRaw(b: SheetBuilder): SheetBuilder {
     lastRow = Math.max(lastRow, r);
     lastCol = Math.max(lastCol, c);
   }
-  for (const c of [1, 2]) {
-    const texts = [...b.plan.cells].filter(([k, spec]) => Number(k.split(":")[0]) >= 4 && Number(k.split(":")[1]) === c && typeof spec.v === "string").map(([, spec]) => spec);
+  for (let c = 1; c <= lastCol; c++) {
+    const texts = [...b.plan.cells].filter(([k, spec]) => Number(k.split(":")[0]) >= 4 && Number(k.split(":")[1]) === c && typeof spec.v === "string" && spec.v !== "").map(([, spec]) => spec);
     if (!texts.length) continue;
-    const longest = Math.max(...texts.map((spec) => String(spec.v).length));
-    const width = Math.min(RAW_TEXT_MAX, Math.max(b.plan.widths.get(c) ?? 0, Math.ceil((longest * 5.8 + 4) / 7)));
+    const widest = Math.max(...texts.map((spec) => textWidthPx(String(spec.v))));
+    const width = Math.min(RAW_TEXT_MAX, Math.max(b.plan.widths.get(c) ?? 0, Math.ceil((widest + 4 - 5) / 7) + 1));
     b.width(c, width);
     for (const spec of texts) if (wrappedLines(String(spec.v), width) > 1) spec.align = { ...spec.align, wrap: true };
   }
@@ -772,7 +821,7 @@ function printRaw(b: SheetBuilder): SheetBuilder {
   return b;
 }
 
-function rawSheet(key: "rawPnl" | "rawBs" | "rawBank" | "rawCustomers" | "rawPayroll", title: string, headers: string[], widths: number[]): SheetBuilder {
+function rawSheet(key: "rawPnl" | "rawPnlAnnual" | "rawBs" | "rawBank" | "rawCustomers" | "rawPayroll", title: string, headers: string[], widths: number[]): SheetBuilder {
   const b = new SheetBuilder(key, SHEET[key], { output: false, tabColor: COLOR.rawTab, gridlines: true });
   widths.forEach((w, i) => b.width(1 + i, w));
   b.text(1, 1, title, { font: { bold: true, size: 11 } });
@@ -783,6 +832,9 @@ function rawSheet(key: "rawPnl" | "rawBs" | "rawBank" | "rawCustomers" | "rawPay
 
 /** Cents, as the exports print them, so no binary noise from summing reaches a raw or Databook cell. */
 const cents = (v: number) => Math.round(v * 100) / 100;
+
+/** The raw-tab format (guide 5.10), with cents only where the export prints them. */
+export const rawFormat = (values: number[]): string => (values.some((v) => Math.abs(cents(v) - Math.round(v)) > 0.001) ? FMT.rawCents : FMT.raw);
 
 /** First row of a raw statement tab's totals block: below the accounts (from row 4), a spacer row and the block's heading. */
 export const rawTotalsFirstRow = (accounts: number): number => accounts + 6;
@@ -807,7 +859,7 @@ function writeRawTotals(b: SheetBuilder, totals: DatabookTotal[], accounts: numb
 
 export function planRawPnl(model: ModelOutput): SheetBuilder {
   const months = gridMonths(model);
-  const rows = model.databook?.pnl ?? [];
+  const rows = (model.databook?.pnl ?? []).filter((x) => !x.annualOnly);
   const fyCols = model.columns.filter((c) => c.ref.kind === "fiscal_year" && !c.projected);
   const monthHeaders = months.length ? months : fyCols.map((c) => c.label);
   const b = rawSheet("rawPnl", `Raw - P&L as exported (${rows[0] ? SOURCE_LABELS[rows[0].source] : "no source"}: ${rows[0]?.file ?? ""})`, ["Account", "Section", ...monthHeaders.map((m) => (months.length ? "" : m)), "Total"], [40, 24, ...monthHeaders.map(() => 11), 12]);
@@ -822,6 +874,38 @@ export function planRawPnl(model: ModelOutput): SheetBuilder {
     r++;
   }
   writeRawTotals(b, (model.databook?.totals ?? []).filter((t) => t.statement === "pnl"), rows.length, months.length ? months : fyCols.map((c) => String(c.fiscalYear)), true);
+  return printRaw(b);
+}
+
+/** First fiscal-year column of Raw - P&L Annual: A account, B section, then one column per fiscal year off the grid. */
+export const RAW_ANNUAL_FIRST = 3;
+
+/**
+ * Raw - P&L Annual: the annual export or return a fiscal year off the monthly
+ * grid is read from, as exported (account, section, one column per such
+ * year). The Databook types those years from it and ties each year's total.
+ */
+export function planRawPnlAnnual(model: ModelOutput, ds: FinancialDataset): SheetBuilder | undefined {
+  const years = model.columns.filter((c) => offGrid(model, c)).map((c) => c.fiscalYear!);
+  if (!years.length) return undefined;
+  const lines = ds.lines.filter((l) => l.statement === "pnl" && years.includes(l.year));
+  const files = [...new Set(lines.map((l) => `${SOURCE_LABELS[l.source]}: ${path.basename(l.file)}`))];
+  const b = rawSheet("rawPnlAnnual", `Raw - P&L as exported, fiscal years not on the monthly grid (${files.join("; ")})`, ["Account", "Section", ...years.map((y) => `FY${y}`)], [40, 24, ...years.map(() => 12)]);
+  const byKey = new Map<string, { account: string; section: string; amounts: Record<number, number> }>();
+  for (const l of lines) {
+    const key = `${l.account}|${l.section ?? ""}`;
+    const e = byKey.get(key) ?? { account: l.account, section: l.section ?? "", amounts: {} };
+    e.amounts[l.year] = (e.amounts[l.year] ?? 0) + l.amount;
+    byKey.set(key, e);
+  }
+  const fmt = rawFormat(lines.map((l) => l.amount));
+  let r = 4;
+  for (const e of byKey.values()) {
+    b.text(r, 1, e.account);
+    b.text(r, 2, e.section);
+    years.forEach((y, i) => b.num(r, RAW_ANNUAL_FIRST + i, cents(e.amounts[y] ?? 0), { fmt }));
+    r++;
+  }
   return printRaw(b);
 }
 
@@ -924,33 +1008,61 @@ export function planRawCustomers(ds: FinancialDataset, years: number[]): SheetBu
   return printRaw(b);
 }
 
-export const RAW_PAYROLL_COLS = { id: 1, name: 2, role: 3, department: 4, owner: 5, management: 6, hire: 7, termination: 8, terminationType: 9, payBasis: 10, fte: 11, firstWages: 12 } as const;
+/**
+ * Columns of Raw - Payroll. The export's fields come first, as the file
+ * prints them (names, dates, "Hourly + commission", "Resignation", "yes"),
+ * then its wages by fiscal year and, only when the file has them, its
+ * employer costs. The bot's coded columns follow after a spacer, labelled as
+ * added (the ID other tabs look up, the owner flag, the termination type and
+ * FTE the formulas count on), as Raw - Bank adds its Classification: the
+ * register itself is never restated.
+ */
+export function rawPayrollCols(years: number, fileCosts: boolean) {
+  const firstWages = 10;
+  const firstCosts = firstWages + years;
+  const added = firstCosts + (fileCosts ? years : 0) + 1;
+  return { name: 1, role: 2, department: 3, hire: 4, termination: 5, terminationTypeExported: 6, payBasis: 7, ownerExported: 8, managementExported: 9, firstWages, firstCosts, id: added, owner: added + 1, terminationType: added + 2, fte: added + 3 } as const;
+}
+
+/** Raw - Payroll's columns for this model: its fiscal years, and whether the register brought employer costs. */
+export function rawPayrollColsFor(model: ModelOutput) {
+  return rawPayrollCols(model.columns.filter((c) => c.ref.kind === "fiscal_year" && !c.projected).length, model.headcount?.employerCosts?.from === "file");
+}
 
 /** `years` are the model's fiscal-year columns, so the Headcount tab's column offsets land on the same years. */
 export function planRawPayroll(ds: FinancialDataset, years: number[]): SheetBuilder | undefined {
   const reg = ds.payroll;
   if (!reg) return undefined;
+  const fileCosts = !!reg.employerCostsFromFile;
+  const C = rawPayrollCols(years.length, fileCosts);
+  const exportHeaders = ["Employee", "Role", "Department", "Hire date", "Termination date", "Termination type", "Pay basis", "Owner", "Management", ...years.map((y) => `Wages FY${y}`), ...(fileCosts ? years.map((y) => `Employer costs FY${y}`) : [])];
+  const addedHeaders = ["ID (added)", "Owner? (added)", "Departure type (added)", "FTE (added)"];
   const b = rawSheet(
     "rawPayroll",
-    `Raw - Payroll register (${reg.source}: ${reg.file}). Names stay on this tab only.`,
-    ["ID", "Name", "Role", "Department", "Owner", "Management", "Hire date", "Termination date", "Termination type", "Pay basis", "FTE", ...years.map((y) => `FY${y} wages`), ...years.map((y) => `FY${y} employer costs`)],
-    [7, 22, 24, 16, 8, 11, 11, 13, 14, 20, 6, ...years.map(() => 13), ...years.map(() => 13)],
+    `Raw - Payroll register as exported (${reg.source}: ${reg.file}); the last four columns are added for the formulas. Names stay on this tab only.`,
+    [...exportHeaders, "", ...addedHeaders],
+    [22, 24, 16, 11, 13, 14, 20, 8, 11, ...years.map(() => 12), ...(fileCosts ? years.map(() => 14) : []), 2, 9, 12, 16, 10],
   );
+  b.cell(3, C.id - 1, { v: null });
+  const fmt = rawFormat(reg.employees.flatMap((e) => [...Object.values(e.wagesByFiscalYear), ...(fileCosts ? Object.values(e.employerCostsByFiscalYear) : [])]));
   let r = 4;
   for (const e of reg.employees) {
-    b.text(r, 1, e.id);
-    b.text(r, 2, e.name ?? "");
-    b.text(r, 3, e.role);
-    b.text(r, 4, e.department);
-    b.text(r, 5, e.isOwner ? "Yes" : "No");
-    b.text(r, 6, e.isManagement ? "Yes" : "No");
-    b.cell(r, 7, { v: excelSerialOf(e.hireDate), fmt: FMT.date, role: "input" });
-    b.cell(r, 8, e.terminationDate ? { v: excelSerialOf(e.terminationDate), fmt: FMT.date, role: "input" } : { v: null });
-    b.text(r, 9, e.terminationType ?? "");
-    b.text(r, 10, e.payBasis);
-    b.num(r, 11, e.fte, { fmt: FMT.oneDp });
-    years.forEach((y, i) => b.num(r, RAW_PAYROLL_COLS.firstWages + i, e.wagesByFiscalYear[y] ?? 0, { fmt: FMT.body }));
-    years.forEach((y, i) => b.num(r, RAW_PAYROLL_COLS.firstWages + years.length + i, e.employerCostsByFiscalYear[y] ?? 0, { fmt: FMT.body }));
+    const x = e.exported ?? {};
+    b.text(r, C.name, e.name ?? "");
+    b.text(r, C.role, e.role);
+    b.text(r, C.department, e.department);
+    b.cell(r, C.hire, { v: excelSerialOf(e.hireDate), fmt: FMT.date, role: "input" });
+    b.cell(r, C.termination, e.terminationDate ? { v: excelSerialOf(e.terminationDate), fmt: FMT.date, role: "input" } : { v: null });
+    b.text(r, C.terminationTypeExported, x.terminationType ?? "");
+    b.text(r, C.payBasis, x.payBasis ?? "");
+    b.text(r, C.ownerExported, x.owner ?? "");
+    b.text(r, C.managementExported, x.management ?? "");
+    years.forEach((y, i) => b.num(r, C.firstWages + i, e.wagesByFiscalYear[y] ?? 0, { fmt }));
+    if (fileCosts) years.forEach((y, i) => b.num(r, C.firstCosts + i, e.employerCostsByFiscalYear[y] ?? 0, { fmt }));
+    b.cell(r, C.id, { v: e.id, role: "input" });
+    b.cell(r, C.owner, { v: e.isOwner ? "Yes" : "No", role: "input", align: { horizontal: "center" } });
+    b.cell(r, C.terminationType, { v: e.terminationType ?? "", role: "input" });
+    b.num(r, C.fte, e.fte, { fmt: FMT.oneDp });
     r++;
   }
   b.row("lastEmployee", r - 1);

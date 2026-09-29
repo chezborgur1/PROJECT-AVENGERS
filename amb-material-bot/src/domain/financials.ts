@@ -713,6 +713,8 @@ export interface PayrollRecord {
   wagesByFiscalYear: Record<number, number>;
   /** Employer taxes and benefits allocated to the employee; wages + employer costs tie to the P&L payroll category (check C13). */
   employerCostsByFiscalYear: Record<number, number>;
+  /** The text fields as the file prints them ("Hourly + commission", "Resignation", "yes"), for the raw tab. */
+  exported?: { terminationType?: string; payBasis?: string; owner?: string; management?: string; fte?: string };
 }
 
 export interface PayrollRegister {
@@ -722,6 +724,8 @@ export interface PayrollRegister {
   totalsByFiscalYear: Record<number, number>;
   source: string;
   file: string;
+  /** The file carries employer-cost columns; otherwise the costs are the bot's allocation of the P&L payroll line. */
+  employerCostsFromFile?: boolean;
 }
 
 // --- KPIs --------------------------------------------------------------------
@@ -827,16 +831,17 @@ export interface IntakeFacts {
   };
   management: ManagementFact[];
   owner: {
-    name: string;
-    role: string;
+    /** Undefined when the notes do not name the owner: copy then falls back to a [Confirm: …]. */
+    name?: string;
+    role?: string;
     age?: number;
     hoursPerWeek?: number;
     responsibilities: OwnerResponsibility[];
-    transition: { months?: number; basis?: string; description: string; source: Provenance };
+    transition: { months?: number; basis?: string; description?: string; source: Provenance };
     source: Provenance;
   };
   growthLevers: GrowthLever[];
-  reasonForSale: { text: string; source: Provenance };
+  reasonForSale: { text?: string; source: Provenance };
   transaction: {
     dealFormPreference?: "asset" | "equity" | "either";
     timing?: string;

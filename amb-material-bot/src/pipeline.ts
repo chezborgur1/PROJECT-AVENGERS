@@ -48,6 +48,8 @@ export interface PipelineResult {
   pages: number;
   warnings: string[];
   openQuestions: string[];
+  /** The PDF and page images were withheld (a chart LibreOffice would not draw); the request is not done. */
+  renderError?: string;
 }
 
 export class NeedsInfoError extends Error {}
@@ -131,6 +133,7 @@ export async function processRequest(row: RequestRow, cfg: PipelineConfig): Prom
     pages: cim.plan.pages.length,
     warnings: ds.warnings,
     openQuestions: cim.openQuestions,
+    ...(cim.renderError ? { renderError: cim.renderError } : {}),
   };
 }
 
@@ -164,6 +167,7 @@ function openQuestionsMd(p: { row: RequestRow; ds: FinancialDataset; model: Mode
     "",
     `The CIM is a draft while anything under "Confirm with the seller" is open: each item prints in the deck as a red [Confirm: …] (guide 4.7).`,
     "",
+    ...(cim.renderError ? ["## Rendering failed", `- [ ] ${cim.renderError}`, ""] : []),
     "## Confirm with the seller",
     ...boxes(cim.openQuestions, "None raised by the draft. Still read every page against the source documents."),
     "",
@@ -262,6 +266,7 @@ function summaryMd(p: {
     "",
     `Request ${row.request_id}, ${row.priority}. Generated ${p.now.toISOString().replace("T", " ").slice(0, 16)} UTC.`,
     "",
+    ...(cim.renderError ? [`Status: not OK. ${cim.renderError}`, ""] : []),
     "## Deliverables",
     `- ${path.basename(p.workbook)}: ${p.plan.plans.length} tabs, ${model.masterCheck}.`,
     `- ${path.basename(cim.pptx)}: ${cim.plan.pages.length} pages, ${cim.openQuestions.length ? `a draft until its ${plural(cim.openQuestions.length, "open question")} ${cim.openQuestions.length === 1 ? "is" : "are"} resolved` : "no open questions"}. Copy: ${COPY_SOURCES[draft.source]}.${draft.fallback ? ` ${draft.fallback}` : ""}`,

@@ -75,7 +75,7 @@ describe("department average compensation (F65)", () => {
       years: [2025],
       fye: 12,
       window: { revenue: 1_000_000, payroll: 75_000 },
-      fiscalYear: { year: 2025, revenue: 1_000_000, payroll: 75_000 },
+      fiscalYear: { year: 2025, revenue: 1_000_000, payroll: 75_000, ownerTaxes: 0 },
     });
     const office = hc.byDepartment.find((d) => d.department === "Office")!;
     expect(office.count).toBe(1);

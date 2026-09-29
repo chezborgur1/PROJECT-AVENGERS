@@ -25,7 +25,7 @@ const bool = () => z.boolean().nullable();
 /** The wire form Claude returns: every key present, unknowns null. */
 export const IntakeWireSchema = z.object({
   company: z.object({
-    legalName: z.string(),
+    legalName: str().describe("As the notes give it; null when the notes do not say"),
     tradingName: str(),
     description: str().describe("What the business does, in the notes' words"),
     founded: int(),
@@ -74,16 +74,16 @@ export const IntakeWireSchema = z.object({
     }),
   ),
   owner: z.object({
-    name: z.string(),
-    role: z.string(),
+    name: str().describe("null when the notes do not say"),
+    role: str().describe("null when the notes do not say"),
     age: int(),
     hoursPerWeek: num(),
     responsibilities: z.array(z.object({ responsibility: z.string(), hoursPerWeek: num(), assumedBy: str(), transitionSupport: str(), source: Prov })),
-    transition: z.object({ months: num(), basis: str(), description: z.string(), source: Prov }),
+    transition: z.object({ months: num(), basis: str(), description: str().describe("The transition the owner offers; null when the notes do not say"), source: Prov }),
     source: Prov,
   }),
   growthLevers: z.array(z.object({ lever: z.string(), baseline: str(), target: str(), mechanism: z.string(), proofPoint: str(), source: Prov })),
-  reasonForSale: z.object({ text: z.string(), source: Prov }),
+  reasonForSale: z.object({ text: str().describe("null when the notes do not say"), source: Prov }),
   transaction: z.object({
     dealFormPreference: z.enum(["asset", "equity", "either"]).nullable(),
     timing: str(),
@@ -152,13 +152,18 @@ function fillMissing(schema: z.ZodType, value: unknown, prov: Provenance): unkno
   return value;
 }
 
-/** Nulls become undefined and disappear, so consumers see the contract's optional fields. */
+/**
+ * Nulls and blank strings become undefined and disappear, so consumers see the
+ * contract's optional fields: a transcription that fills a field it has no
+ * fact for with "" reads as absent, never as a name or a reason.
+ */
 export function stripNulls<T>(value: T): T {
-  if (Array.isArray(value)) return value.map(stripNulls) as T;
+  const blank = (v: unknown) => v === null || v === undefined || (typeof v === "string" && !v.trim());
+  if (Array.isArray(value)) return value.filter((v) => !blank(v)).map(stripNulls) as T;
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      if (v === null || v === undefined) continue;
+      if (blank(v)) continue;
       out[k] = stripNulls(v);
     }
     return out as T;
@@ -166,8 +171,11 @@ export function stripNulls<T>(value: T): T {
   return value;
 }
 
-export function toIntakeFacts(wire: IntakeWire): IntakeFacts {
-  return stripNulls(wire) as unknown as IntakeFacts;
+/** The dataset's facts from the wire form; the request's business name stands in when the notes give no legal name. */
+export function toIntakeFacts(wire: IntakeWire, businessName?: string): IntakeFacts {
+  const facts = stripNulls(wire) as unknown as IntakeFacts;
+  if (!facts.company.legalName && businessName) facts.company.legalName = businessName;
+  return facts;
 }
 
 export interface LoadedIntake {
@@ -193,5 +201,5 @@ export function loadIntakeFile(file: string, businessName: string): LoadedIntake
     throw new Error(`${name} does not match the intake facts schema: ${issues.join("; ")}`);
   }
   const { source: _s, evidence: _e, revenueLines, customerTerm, ...facts } = parsed.data;
-  return { facts: toIntakeFacts(facts), revenueLines: stripNulls(revenueLines), customerTerm: customerTerm ?? undefined };
+  return { facts: toIntakeFacts(facts, businessName), revenueLines: stripNulls(revenueLines), customerTerm: customerTerm ?? undefined };
 }

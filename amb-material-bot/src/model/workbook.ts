@@ -18,14 +18,14 @@ import ExcelJS from "exceljs";
 import { SOURCE_LABELS, type FinancialDataset } from "../domain/financials.ts";
 import type { RequestRow } from "../requests/schema.ts";
 import type { Assumptions } from "./assumptions.ts";
-import { dropEmptyNotesColumn, finalizeNotes, fitPrintWidth, freezeWideOnly, holdTitleInTitleColumns, resolveTokens, wrapLongLabels, type CellSpec, type CfRule, type SheetPlan } from "./sheet.ts";
+import { dropEmptyNotesColumn, finalizeNotes, fitPrintWidth, freezeWideOnly, holdTitleInTitleColumns, paginate, resolveTokens, wrapLongLabels, type CellSpec, type CfRule, type SheetPlan } from "./sheet.ts";
 import { COLOR, FONT, MARGINS, ROLE_COLOR, ROW_HEIGHT, STYLES, argb, type FontSpec } from "./styles.ts";
 import type { ModelOutput } from "./types.ts";
 import { planAssumptions, type TabContext } from "./workbook/assumptionsTab.ts";
 import { checkFormulas, planChecks } from "./workbook/checksTab.ts";
 import { injectCharts } from "./charts.ts";
 import { planChartTab } from "./workbook/chartTabs.ts";
-import { customerYears, planDatabook, planDivider, planMapping, planMonthly, planRawBank, planRawBs, planRawCustomers, planRawPayroll, planRawPnl } from "./workbook/data.ts";
+import { customerYears, planDatabook, planDivider, planMapping, planMonthly, planRawBank, planRawBs, planRawCustomers, planRawPayroll, planRawPnl, planRawPnlAnnual } from "./workbook/data.ts";
 import { masterToggleRef, planContents, planCover, planSummary } from "./workbook/front.ts";
 import { type SheetKey } from "./workbook/layout.ts";
 import { planAdjustments, planLadder, planPnlSummary } from "./workbook/statements.ts";
@@ -67,7 +67,7 @@ const TAB_ORDER: SheetKey[] = [
   "customers", "retention", "retentionCharts", "concentration", "cohorts", "headcount", "headcountCharts",
   "bs", "nwc", "debtLike", "cashFlow", "proofOfCash", "projections", "opportunities",
   "valuation", "deal", "sensitivities", "checks", "divider", "monthly", "databook", "mapping",
-  "rawPnl", "rawBs", "rawBank", "rawCustomers", "rawPayroll",
+  "rawPnl", "rawPnlAnnual", "rawBs", "rawBank", "rawCustomers", "rawPayroll",
 ];
 
 function asOfLabel(model: ModelOutput): string {
@@ -128,6 +128,7 @@ export function planWorkbook(model: ModelOutput, opts: PlanOptions): WorkbookPla
     databook: () => planDatabook(ctx),
     mapping: () => planMapping(ctx),
     rawPnl: () => planRawPnl(model),
+    rawPnlAnnual: () => (ds ? planRawPnlAnnual(model, ds) : undefined),
     rawBs: () => planRawBs(model),
     rawBank: () => (ds ? planRawBank(ds) : undefined),
     rawCustomers: () => (ds ? planRawCustomers(ds, ctx.customerYears) : undefined),
@@ -159,6 +160,7 @@ export function planWorkbook(model: ModelOutput, opts: PlanOptions): WorkbookPla
     fitPrintWidth(p);
     freezeWideOnly(p);
     finalizeNotes(p);
+    paginate(p);
   }
   resolveTokens(plans);
   return { plans, byKey };

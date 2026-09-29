@@ -65,7 +65,8 @@ const s10_1: PageModule = {
 
 function fallback101(ctx: CimContext): NonNullable<CimCopy["s10_1"]> {
   const i = ctx.intake;
-  const owner = i?.owner.name ?? "The Seller";
+  // A blank name from a transcription reads as absent, never as an empty subject.
+  const owner = i?.owner.name || "The Seller";
   const offer = ctx.assetSale
     ? `${owner} is offering substantially all of the operating assets of ${ctx.legalName}, free and clear of liens. The Seller retains cash, receivables and payables.`
     : `${owner} is offering 100% of ${ctx.legalName}. Offers should assume a cash-free, debt-free basis, with a normalized level of working capital delivered at close.`;

@@ -37,6 +37,8 @@ export interface PayrollFileRow {
   wagesByFiscalYear: Record<number, number>;
   /** Only when the file carries employer-cost columns. */
   employerCostsByFiscalYear?: Record<number, number>;
+  /** The coded fields as the file prints them, for the raw tab. */
+  exported?: PayrollRecord["exported"];
   line: number;
 }
 
@@ -115,7 +117,8 @@ export async function loadPayrollCsv(file: string, fyEndMonth: number): Promise<
       department = role;
       noDepartment++;
     }
-    let payBasis = parsePayBasis(pickColumn(r, "pay_basis", "basis", "pay_type", "compensation_type", "classification"));
+    const payBasisRaw = pickColumn(r, "pay_basis", "basis", "pay_type", "compensation_type", "classification");
+    let payBasis = parsePayBasis(payBasisRaw);
     if (!payBasis) {
       payBasis = "hourly";
       noBasis++;
@@ -143,20 +146,28 @@ export async function loadPayrollCsv(file: string, fyEndMonth: number): Promise<
       (employerCostsByFiscalYear ??= {})[fy] = (employerCostsByFiscalYear[fy] ?? 0) + v;
     }
 
-    const terminationType = terminationDate ? (parseTerminationType(pickColumn(r, "termination_type", "term_type", "separation_type", "termination_reason", "reason")) ?? "unclassified") : undefined;
+    const terminationTypeRaw = pickColumn(r, "termination_type", "term_type", "separation_type", "termination_reason", "reason");
+    const terminationType = terminationDate ? (parseTerminationType(terminationTypeRaw) ?? "unclassified") : undefined;
+    const ownerRaw = pickColumn(r, "owner", "is_owner", "working_owner");
+    const managementRaw = pickColumn(r, "management", "is_management", "manager", "key_employee");
+    const fteRaw = pickColumn(r, "fte");
+    const exported = Object.fromEntries(
+      Object.entries({ terminationType: terminationTypeRaw, payBasis: payBasisRaw, owner: ownerRaw, management: managementRaw, fte: fteRaw }).filter(([, v]) => v !== undefined && v !== ""),
+    ) as PayrollFileRow["exported"];
     rows.push({
       ...(employee ? { name: employee } : {}),
       ...(sourceId ? { sourceId } : {}),
       role,
       department,
-      isOwner: parseFlag(pickColumn(r, "owner", "is_owner", "working_owner")),
-      isManagement: parseFlag(pickColumn(r, "management", "is_management", "manager", "key_employee")),
+      isOwner: parseFlag(ownerRaw),
+      isManagement: parseFlag(managementRaw),
       hireDate,
       ...(terminationDate ? { terminationDate, terminationType } : {}),
       payBasis,
-      fte: parseAmount(pickColumn(r, "fte")) ?? 1,
+      fte: parseAmount(fteRaw) ?? 1,
       wagesByFiscalYear,
       ...(employerCostsByFiscalYear ? { employerCostsByFiscalYear } : {}),
+      exported,
       line,
     });
   });
@@ -236,6 +247,7 @@ export function buildPayrollRegister(pf: PayrollFile, ctx: PayrollContext): { pa
 
   const employerCosts = kept.map(() => ({}) as Record<number, number>);
   const totalsByFiscalYear: Record<number, number> = {};
+  const employerCostsFromFile = kept.some((r) => r.employerCostsByFiscalYear && Object.keys(r.employerCostsByFiscalYear).length);
 
   for (const y of ctx.years) {
     const wages = kept.map((r) => (r.isOwner ? 0 : (r.wagesByFiscalYear[y] ?? 0)));
@@ -289,6 +301,7 @@ export function buildPayrollRegister(pf: PayrollFile, ctx: PayrollContext): { pa
     fte: r.fte,
     wagesByFiscalYear: Object.fromEntries(ctx.years.map((y) => [y, r.wagesByFiscalYear[y] ?? 0])),
     employerCostsByFiscalYear: Object.fromEntries(ctx.years.map((y) => [y, employerCosts[i]![y] ?? 0])),
+    ...(Object.keys(r.exported ?? {}).length ? { exported: r.exported } : {}),
   }));
 
   const lastYear = Math.max(...kept.flatMap((r) => Object.keys(r.wagesByFiscalYear).map(Number)), 0);
@@ -298,7 +311,7 @@ export function buildPayrollRegister(pf: PayrollFile, ctx: PayrollContext): { pa
   }
 
   return {
-    payroll: { employees, asOfMonth: ctx.asOfMonth, totalsByFiscalYear, source: `Payroll register (${pf.file})`, file: pf.file },
+    payroll: { employees, asOfMonth: ctx.asOfMonth, totalsByFiscalYear, source: `Payroll register (${pf.file})`, file: pf.file, ...(employerCostsFromFile ? { employerCostsFromFile } : {}) },
     warnings,
   };
 }

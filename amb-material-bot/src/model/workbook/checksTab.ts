@@ -10,7 +10,7 @@ import { A, type TabContext } from "./assumptionsTab.ts";
 import { chartCheckCols } from "./chartTabs.ts";
 import { bsDates, nwcLayout } from "./balance.ts";
 import { databookTieCols, MONTH_START } from "./data.ts";
-import { periodLayout, S, SHEET, type SheetKey } from "./layout.ts";
+import { offGrid, periodLayout, S, SHEET, type SheetKey } from "./layout.ts";
 
 /** How a check's difference is computed in the workbook; absent = the engine's value is typed. */
 export interface CheckFormula {
@@ -34,6 +34,9 @@ export function planChecks(ctx: TabContext, built: Set<SheetKey>, formulas: Reco
   let r = 8;
   b.row("first", r);
   for (const c of model.checks) {
+    // The list reads in four groups, each opened by a section row, so a printed page breaks between groups (guide 5.11).
+    const group = CHECK_GROUPS.find((g) => g.from === c.id);
+    if (group) b.section(r++, group.label, [[3, lastCol]]);
     // Tabs that flag against a check's tolerance read it here, so the threshold is one input (Proof of Cash and C14).
     b.row(`check_${c.id}`, r);
     b.text(r, 2, c.id, { align: { horizontal: "center" } });
@@ -72,6 +75,14 @@ export function planChecks(ctx: TabContext, built: Set<SheetKey>, formulas: Reco
   return b;
 }
 
+/** The Checks tab's groups, by the first check of each (guide 5.7 order). */
+const CHECK_GROUPS = [
+  { from: "C01", label: "Data, statements and the ladder" },
+  { from: "C11", label: "Tie-outs to the sources, formula integrity and working capital" },
+  { from: "C21", label: "Charts, offers, scenarios and sensitivities" },
+  { from: "C31", label: "Real estate, LTM strips, deal terms and the render check" },
+];
+
 /** The master check over a range of statuses, worded as masterCheckOf words it. */
 export const masterFormula = (statuses: string): string =>
   `IF(COUNTIF(${statuses},"CHECK")=0,IF(COUNTIF(${statuses},"Pending")=0,"All checks OK","All checks OK (render check pending)"),COUNTIF(${statuses},"CHECK")&IF(COUNTIF(${statuses},"CHECK")=1," check failing"," checks failing"))`;
@@ -98,13 +109,16 @@ export function checkFormulas(model: ModelOutput, plans: Partial<Record<SheetKey
     const diff = colLetter(databookTieCols(model).diff);
     const block = (first: string, last: string) => `${S("databook")}$${diff}$${rowOf("databook", first)}:$${diff}$${rowOf("databook", last)}`;
     // Account rows and the export-total rows alike; the Databook is in dollars and this tab shows $000s.
-    const blocks = [["first", "last"], ["pnlTotalsFirst", "pnlTotalsLast"], ["bsFirst", "bsLast"], ["bsTotalsFirst", "bsTotalsLast"]].filter(([f]) => plans.databook!.rows[f!] !== undefined);
+    const blocks = [["first", "last"], ["pnlTotalsFirst", "pnlTotalsLast"], ["annualTieFirst", "annualTieLast"], ["bsFirst", "bsLast"], ["bsTotalsFirst", "bsTotalsLast"]].filter(([f]) => plans.databook!.rows[f!] !== undefined);
     out.C01 = { f: `SQRT(${blocks.map(([f, l]) => block(f!, l!)).map((x) => `SUMPRODUCT(${x},${x})`).join("+")})/1000` };
   }
   if (has("monthly")) out.C02 = { f: rss(rowRange("monthly", "tie_out", MONTH_START, MONTH_START + monthsN - 1)) };
   if (has("monthly") && has("pnl")) {
-    out.C03 = { f: rss(rowRange("pnl", "check_lines", l.firstCol, l.lastValueCol)) };
-    out.C04 = { f: rss(rowRange("pnl", "check", l.firstCol, l.lastValueCol)) };
+    // Over the columns the grid covers: an older fiscal year read from an annual source reads n.a. on both check rows.
+    const off = new Set(l.cols.filter((c) => offGrid(model, c.column)).map((c) => c.col));
+    const gridCols = Array.from({ length: l.lastValueCol - l.firstCol + 1 }, (_, i) => l.firstCol + i).filter((c) => !off.has(c));
+    out.C03 = { f: rssOver("pnl", "check_lines", gridCols) };
+    out.C04 = { f: rssOver("pnl", "check", gridCols) };
   }
   if (has("ladder")) {
     out.C05 = { f: rss(rowRange("ladder", "check_reported", l.firstCol, l.lastValueCol)) };
@@ -147,12 +161,25 @@ export function checkFormulas(model: ModelOutput, plans: Partial<Record<SheetKey
     out.C29 = { f: `IF(AND(${differs("C")},${differs("E")}),0,1)` };
   }
   if (has("sensitivities")) out.C30 = { f: ["tie_valuation", "tie_dscr", "tie_closingCash"].map((k) => `ABS(${S("sensitivities")}$F$${rowOf("sensitivities", k)})`).join("+") };
-  if (has("revenue") && has("expense")) {
+  // The strips exist only over a monthly grid; the annual-only detail tabs have none (C34 and C35 read n.a.).
+  if (model.monthly && has("revenue") && has("expense")) {
     out.C34 = { f: `ABS(${S("revenue")}$C$${rowOf("revenue", "stripCheck")})+ABS(${S("expense")}$C$${rowOf("expense", "stripCheck")})` };
     out.C35 = { f: `ABS(${S("revenue")}$C$${rowOf("revenue", "stripHeaderCheck")})+ABS(${S("expense")}$C$${rowOf("expense", "stripHeaderCheck")})` };
   }
   out.C36 = { f: `IF(${A("loiDate")}="","n.a.",IF(AND(${A("effectiveDate")}<>"",${A("effectiveDate")}<=${A("loiDate")}+${A("exclusivityDays")}),0,1))` };
   return out;
+}
+
+/** Root-sum-square of one row over some of its columns, each contiguous run of them one range. */
+function rssOver(sheet: SheetKey, key: string, cols: number[]): string {
+  const runs: [number, number][] = [];
+  for (const c of [...cols].sort((a, b) => a - b)) {
+    const last = runs.at(-1);
+    if (last && last[1] === c - 1) last[1] = c;
+    else runs.push([c, c]);
+  }
+  const range = ([a, b]: [number, number]) => `${S(sheet)}$${colLetter(a)}$${rowOf(sheet, key)}:$${colLetter(b)}$${rowOf(sheet, key)}`;
+  return `SQRT(${runs.map((run) => `SUMPRODUCT(${range(run)},${range(run)})`).join("+")})`;
 }
 
 /** `$B$5:$<last col>$<last row>` of the cells a plan writes. */

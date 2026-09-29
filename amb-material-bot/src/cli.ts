@@ -78,12 +78,16 @@ async function main() {
         update(row.request_id, { status: "in_progress", last_error: "" });
         try {
           const result = await processRequest(row, { repoRoot, outputDir, firm, log: console.log });
+          // A PDF withheld for a chart LibreOffice would not draw leaves the request unfinished, with its review files written.
+          if (result.renderError) failures++;
           update(row.request_id, {
-            status: "done",
+            status: result.renderError ? "error" : "done",
             output_folder: path.relative(repoRoot, result.folder),
             last_run: new Date().toISOString().slice(0, 16).replace("T", " "),
+            ...(result.renderError ? { last_error: result.renderError.slice(0, 500) } : {}),
           });
-          console.log(`✓ ${path.relative(repoRoot, result.folder)}`);
+          console.log(`${result.renderError ? "✗" : "✓"} ${path.relative(repoRoot, result.folder)}`);
+          if (result.renderError) console.error(`  ${result.renderError}`);
           console.log(`  Model: ${result.verification.formulas.toLocaleString("en-US")} formulas verified, ${result.masterCheck}`);
           console.log(`  CIM: ${result.pages} pages (copy: ${result.copySource})${result.pdf ? ", PDF" : ", no PDF"}${result.pngs.length ? ` and ${result.pngs.length} page images` : ""}`);
           console.log(`  ${result.openQuestions.length} open questions; ${result.warnings.length} warnings (open-questions.md, run-summary.md)`);

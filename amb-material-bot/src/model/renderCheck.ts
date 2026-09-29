@@ -13,7 +13,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runPyMuPdf, toPdf } from "../util/office.ts";
-import { MIN_PRINTED_PT, type SheetPlan } from "./sheet.ts";
+import { MIN_PRINTED_PT, type CellSpec, type SheetPlan } from "./sheet.ts";
 
 export interface RenderedTab {
   name: string;
@@ -59,6 +59,14 @@ export interface PrintedTab {
   titleColumns?: boolean;
   /** A chart tab: its pages are drawings, which carry little text. */
   charts?: boolean;
+  /** Chart captions, each of which must print whole on one line (guide 5.12). */
+  captions?: string[];
+  /** Section and subsection labels: a block's heading never ends a page. */
+  sections?: string[];
+  /** Texts of the title and header rows (rows 2 to 6), which repeat at the top of every page. */
+  furniture?: string[];
+  /** A data tab behind the divider (Monthly P&L, Databook, Mapping): long lists that run on across pages by design. */
+  data?: boolean;
 }
 
 /**
@@ -75,9 +83,16 @@ export function printedTabsOf(plans: SheetPlan[], title: string): PrintedTab[] {
         const t = typeof spec.v === "string" ? spec.v : typeof spec.expect === "string" ? spec.expect : undefined;
         if (t && t.trim()) texts.add(t.trim());
       }
-      return { name: p.name, texts: [...texts], titleColumns: !!p.print.titlesCol, charts: p.charts.length > 0 };
+      const textOf = (spec: CellSpec) => (typeof spec.v === "string" ? spec.v : String(spec.expect ?? ""));
+      const captions = [...p.cells.values()].filter((spec) => spec.style === "chartTitle").map(textOf).filter(Boolean);
+      const sections = [...p.cells.values()].filter((spec) => spec.style === "section" || spec.style === "subsection").map(textOf).filter(Boolean);
+      const furniture = [title, ...[...p.cells].filter(([k]) => Number(k.split(":")[0]) <= 6).map(([, spec]) => textOf(spec).trim())].filter(Boolean);
+      return { name: p.name, texts: [...texts], titleColumns: !!p.print.titlesCol, charts: p.charts.length > 0, furniture, data: DATA_TABS.has(p.key), ...(captions.length ? { captions } : {}), ...(sections.length ? { sections } : {}) };
     });
 }
+
+/** The data tabs behind the divider, whose lists run on across pages by design (guide 5.1 rows 27-29). */
+const DATA_TABS = new Set(["monthly", "databook", "mapping"]);
 
 /** Nominal body size of every tab (guide 5.8: Arial 9). */
 const BODY_PT = 9;
@@ -210,6 +225,59 @@ export function isEmptyPage(page: Span[], repeated: Set<string>): boolean {
 
 const spanKey = (s: Span) => `${s.t}@${Math.round(s.x0)},${Math.round(s.y0)}`;
 
+/** Fewest body rows a page after a tab's first may print: fewer is a widow (guide 5.11). */
+export const MIN_PAGE_ROWS = 5;
+
+/**
+ * How a page's own rows (the repeated title and header rows set aside) run:
+ * the labels in its left-hand column, top to bottom, and how many lines of
+ * body it prints. A page break's quality is read from these.
+ */
+export function pageFlow(page: Span[], repeated: Set<string>, furniture: Set<string> = new Set()): { labels: string[]; lines: number } {
+  const own = page.filter((s) => !repeated.has(spanKey(s)));
+  // Each printed line's leftmost text is its label (a centred ID sits right of a section heading's left edge); a line
+  // labelled by the tab's title or column headers is furniture, periods and all.
+  const byLine = new Map<number, Span[]>();
+  for (const s of joinLines(own)) {
+    const y = Math.round(s.y0 / 2);
+    byLine.set(y, [...(byLine.get(y) ?? []), s]);
+  }
+  const labels = [...byLine.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, spans]) => spans.reduce((l, s) => (s.x0 < l.x0 ? s : l)).t)
+    .filter((t) => !furniture.has(t));
+  return { labels, lines: labels.length };
+}
+
+/**
+ * Page breaks that split a block (guide 5.11, C37): a key total separated
+ * from its % Margin row; a page that opens inside a block when the page
+ * before held a heading the break could have come at (a block longer than a
+ * page continues, headers repeated, by necessity); a heading left at the foot
+ * of a page; and a page after the first that prints fewer than MIN_PAGE_ROWS
+ * rows. A page of columns (the same rows as the page before, further right)
+ * continues its table by design.
+ */
+export function badBreaks(pages: Span[][], repeated: Set<string>, sections: Set<string>, furniture: Set<string> = new Set()): string[] {
+  const out: string[] = [];
+  const flows = pages.map((p) => pageFlow(p, repeated, furniture));
+  flows.forEach((flow, i) => {
+    const first = flow.labels[0];
+    const last = flow.labels[flow.labels.length - 1];
+    const prev = flows[i - 1];
+    // A page printing the next columns of rows already begun: its lines open on figures (the label column repeats, so it is set aside) or on labels the page before printed.
+    const figures = flow.labels.filter((l) => FIGURE.test(l)).length;
+    const columnPage = !!prev && !!first && (prev.labels.includes(first) || figures * 2 >= flow.labels.length);
+    if (i > 0 && first === "% Margin") out.push(`p${i + 1}: a key total and its % Margin row are split across pages`);
+    else if (prev && !columnPage && first && sections.size && !sections.has(first) && !FIGURE.test(first) && !/^Note:/.test(first) && prev.labels.slice(1).some((l) => sections.has(l))) {
+      out.push(`p${i + 1}: opens inside a block at "${first}"`);
+    }
+    if (i < pages.length - 1 && last && sections.has(last)) out.push(`p${i + 1}: the heading "${last}" ends the page, apart from its block`);
+    if (i > 0 && !columnPage && flow.lines > 0 && flow.lines < MIN_PAGE_ROWS) out.push(`p${i + 1}: prints only ${flow.lines} row${flow.lines === 1 ? "" : "s"} (a widow page)`);
+  });
+  return out;
+}
+
 /**
  * Rows stretched past three lines on a page that shows only single-line text
  * in them: on a tab that repeats its label column, a row's height set by
@@ -278,6 +346,13 @@ export function assess(pages: RenderedPage[], printed: (string | PrintedTab)[]):
       if (own.length > 1 && !tab.charts && isEmptyPage(spans, repeated)) issues.push(`${where}: prints no figures (an empty or orphan page)`);
       if (tab.titleColumns) for (const r of tallRows(spans).slice(0, 3)) issues.push(`${where}: ${r}`);
     });
+    if (own.length > 1 && !tab.charts && !tab.data) for (const bb of badBreaks(own.map((p) => p.spans ?? []), repeated, new Set(tab.sections ?? []), new Set(tab.furniture ?? []))) issues.push(`${name} ${bb}`);
+  }
+  // Every chart caption prints whole on one line: a caption wrapped inside its cell splits (a date cut to "Dec-" / "25").
+  for (const tab of tabsIn) {
+    if (!tab.captions?.length) continue;
+    const lines = new Set((pagesOf.get(tab.name) ?? []).flatMap((p) => joinLines(p.spans ?? []).map((s) => s.t)));
+    for (const c of tab.captions) if (!lines.has(c)) issues.push(`${tab.name}: caption "${c}" does not print on one line`);
   }
   const tabs = tabsIn.map((n) => byTab.get(n.name)).filter((t): t is RenderedTab => !!t);
   const smallest = tabs.reduce((m, t) => Math.min(m, t.bodyPt), Infinity);
@@ -285,6 +360,6 @@ export function assess(pages: RenderedPage[], printed: (string | PrintedTab)[]):
     status: issues.length ? "CHECK" : "OK",
     tabs,
     issues,
-    note: issues.length ? issues.slice(0, 12).join("; ") + (issues.length > 12 ? `; and ${issues.length - 12} more` : "") : `${tabs.length} tabs rendered; smallest body text ${smallest.toFixed(1)} pt; nothing past the margin, cut at a cell edge or overlapping; no empty page; no stretched row`,
+    note: issues.length ? issues.slice(0, 12).join("; ") + (issues.length > 12 ? `; and ${issues.length - 12} more` : "") : `${tabs.length} tabs rendered; smallest body text ${smallest.toFixed(1)} pt; nothing past the margin, cut at a cell edge or overlapping; no empty or widow page, no block split at a break; no stretched row`,
   };
 }

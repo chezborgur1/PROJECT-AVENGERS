@@ -7,6 +7,7 @@ export const EN_DASH = "–";
 
 /** Prose money, whole dollars in: "$3.04M", "$452.9K", "$3.1K", "$850" (guide 4.6; exact salaries use fmtDollars). Negatives use the minus form AMB writes in prose ("–$166K"). */
 export function fmtMoney(v: number): string {
+  if (!Number.isFinite(v)) return "n.a.";
   const sign = v < 0 ? EN_DASH : "";
   // To the cent first: $95,000 × 1.15 computes as 109,249.99…, which would print $109.2K for $109,250.
   const a = Math.round(Math.abs(v) * 100) / 100;
@@ -17,6 +18,7 @@ export function fmtMoney(v: number): string {
 
 /** Money quoted exactly, for salaries and rents: "$95,000". */
 export function fmtDollars(v: number): string {
+  if (!Number.isFinite(v)) return "n.a.";
   const sign = v < 0 ? EN_DASH : "";
   return `${sign}$${Math.round(Math.abs(v)).toLocaleString("en-US")}`;
 }
@@ -74,8 +76,18 @@ export function wholeShares(parts: number[]): number[] {
 /** Whole thousands as a number, for chart values that must match the table's displayed figure. */
 export const toK = (dollars: number): number => Math.round(dollars / 1000);
 
+/**
+ * The article a figure takes as it is read aloud: "an" before 8, 11 and 18
+ * ("an 11.4% margin", "an $80K reserve", "an 18,000-member base"), "a"
+ * otherwise ("a 110-day cycle", "a 1,100-hour year") (guide 4.2).
+ */
+export function indefinite(figure: string): "a" | "an" {
+  return /^\$?(8|1[18](?!\d))/.test(figure.trim()) ? "an" : "a";
+}
+
 /** A count with thousands separators: 1450 -> "1,450". */
 export function fmtCount(v: number): string {
+  if (!Number.isFinite(v)) return "n.a.";
   return Math.round(v).toLocaleString("en-US");
 }
 
@@ -102,6 +114,7 @@ export function fmtGrowth(from: number, to: number, dp = 1): string {
 
 /** A margin change in prose: "up 90 bps", "down 2.6 pts" (guide 4.6: bps under a point, pts otherwise), between the levels as printed at `dp`. */
 export function describeDelta(from: number, to: number, dp = 1): string {
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return "n.a.";
   const pts = (shown(to, dp) - shown(from, dp)) * 100;
   if (Math.round(Math.abs(pts) * 100) === 0) return "flat";
   const dir = pts < 0 ? "down" : "up";

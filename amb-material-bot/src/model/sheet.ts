@@ -580,7 +580,7 @@ export function wrapLongLabels(p: SheetPlan): void {
     const [r, c] = key.split(":").map(Number) as [number, number];
     // A label linked from another tab (a ladder rung on the Summary) wraps by the text it evaluates to.
     const text = typeof spec.v === "string" ? spec.v : typeof spec.expect === "string" ? spec.expect : undefined;
-    if (c !== 2 || r < 7 || text === undefined || ["section", "note", "helper", "header", "headerGroup"].includes(spec.style ?? "")) continue;
+    if (c !== 2 || r < 7 || text === undefined || ["section", "note", "helper", "header", "headerGroup", "chartTitle"].includes(spec.style ?? "")) continue;
     // A label set not to wrap runs on across empty cells on purpose (a grid title, a settings label).
     if (spec.align?.wrap === false || p.merges.some((m) => m.startsWith(`${addr(r, c)}:`))) continue;
     const indent = spec.align?.indent ?? STYLES[spec.style ?? "text"]?.align?.indent ?? 0;
@@ -622,11 +622,12 @@ export function dropEmptyNotesColumn(p: SheetPlan): void {
 }
 
 /**
- * Wrapping text gets the height it needs. A table note ("Note: ..." in
- * column B) is merged across the print width so it prints as a paragraph
- * under the table; a note in a notes or source column, or any cell that
- * wraps, grows its row instead. A row that grows top-aligns its other cells,
- * so figures sit beside the first line. Runs once the print area is known.
+ * Wrapping text wraps and a table note prints as a paragraph. A table note
+ * ("Note: ..." in column B) is merged across the print width and given the
+ * height its lines need, since no app sizes a row to a merged cell. Any other
+ * wrapping cell leaves its row unfixed, so Excel and LibreOffice each size it
+ * to their own layout of the text, and top-aligns the row's other cells, so
+ * figures sit beside the first line. Runs once the print area is known.
  */
 export function finalizeNotes(p: SheetPlan): void {
   const area = p.print.areas[0];
@@ -644,10 +645,14 @@ export function finalizeNotes(p: SheetPlan): void {
       for (let k = 2; k <= lastCol; k++) if (!p.hiddenCols.has(k)) units += widthOf(p, k);
       p.merges.push(`${addr(r, 2)}:${addr(r, lastCol)}`);
     } else units = widthOf(p, c);
-    const lines = wrappedLines(text, units, spec.font?.bold ?? STYLES[spec.style ?? "text"]?.font?.bold ?? false);
+    const bold = spec.font?.bold ?? STYLES[spec.style ?? "text"]?.font?.bold ?? false;
+    const lines = wrappedLines(text, units, bold);
     if (lines === 1) continue;
-    p.heights.set(r, Math.max(p.heights.get(r) ?? 0, lines * 11.5 + 2));
-    if (!tableNote) {
+    // Only a merged note gets a fixed height: neither Excel nor LibreOffice sizes a row to a merged cell. A row whose wrapped
+    // text sits in one cell is left unfixed, so each app sizes it to its own layout of the text; a height fixed from an
+    // estimate printed half-empty rows in the LibreOffice render (QA round 3 F8).
+    if (tableNote) p.heights.set(r, Math.max(p.heights.get(r) ?? 0, lines * 11.5 + 2));
+    else {
       for (const [k2, other] of p.cells) {
         const [r2] = k2.split(":").map(Number) as [number];
         if (r2 === r && other.align?.vertical === undefined) other.align = { ...other.align, vertical: "top" };
@@ -655,6 +660,124 @@ export function finalizeNotes(p: SheetPlan): void {
     }
   }
 }
+
+/** Pixels per width unit as LibreOffice lays a column out (Excel: 7); the paginator plans the rendered pages with it. */
+const LIBREOFFICE_PX_PER_UNIT = 7.45;
+
+/** Letter paper less the 5.11 top and bottom margins, in points, as LibreOffice lays out a page body. */
+const PAGE_BODY_PT = { portrait: (11 - 1.3) * 72, landscape: (8.5 - 1.3) * 72 } as const;
+/** LibreOffice's row pitch in points at full scale: a default row, and each line of a row sized to wrapped text. */
+const RENDERED_ROW_PT = { body: 12.7, line: 11.2 } as const;
+
+/**
+ * Page breaks at block boundaries (guide 5.11, C37). A tab printed one page
+ * wide and as many tall as it needs is laid down page by page from its row
+ * heights at its print scale: when a block would cross the foot of a page,
+ * the break goes before the block's heading (or the spacer that opens it), so
+ * the block starts the next page whole; a block longer than a page breaks
+ * inside it, never between a key total and its % Margin row. A last page left
+ * with fewer than MIN_PAGE_ROWS rows takes the block before it along.
+ * Breaks the planner set stay where they are.
+ */
+export function paginate(p: SheetPlan): void {
+  if (!p.output || p.charts.length || p.print.fitToWidth !== 1 || p.print.scale || p.print.colBreaks.length) return;
+  const scale = printScaleOf(p) / 100;
+  const capacity = (p.print.landscape ? PAGE_BODY_PT.landscape : PAGE_BODY_PT.portrait) / scale;
+  const titles = /^(\d+):(\d+)$/.exec(p.print.titlesRow ?? "");
+  const [t1, t2] = titles ? [Number(titles[1]), Number(titles[2])] : [0, -1];
+  const cellsByRow = new Map<number, [number, CellSpec][]>();
+  for (const [k, spec] of p.cells) {
+    const [r, c] = k.split(":").map(Number) as [number, number];
+    if (!inPrintArea(p, c) || p.hiddenCols.has(c)) continue;
+    cellsByRow.set(r, [...(cellsByRow.get(r) ?? []), [c, spec]]);
+  }
+  const has = (r: number) => (cellsByRow.get(r) ?? []).some(([, s]) => s.f !== undefined || (s.v !== undefined && s.v !== null && s.v !== ""));
+  const styleB = (r: number) => (cellsByRow.get(r) ?? []).find(([c]) => c === 2)?.[1].style;
+  const height = (r: number): number => {
+    const fixed = p.heights.get(r);
+    if (fixed !== undefined) return fixed;
+    let lines = 1;
+    for (const [c, spec] of cellsByRow.get(r) ?? []) {
+      const text = typeof spec.v === "string" ? spec.v : typeof spec.expect === "string" ? spec.expect : undefined;
+      if (spec.align?.wrap !== true || text === undefined) continue;
+      lines = Math.max(lines, wrappedLines(text, widthOf(p, c), spec.font?.bold ?? STYLES[spec.style ?? "text"]?.font?.bold ?? false, LIBREOFFICE_PX_PER_UNIT));
+    }
+    return lines > 1 ? lines * RENDERED_ROW_PT.line : RENDERED_ROW_PT.body;
+  };
+  const titleHeight = Array.from({ length: Math.max(0, t2 - t1 + 1) }, (_, i) => height(t1 + i)).reduce((a, b) => a + b, 0);
+  for (const area of p.print.areas) {
+    const m = /^\$?[A-Z]+\$?(\d+):\$?[A-Z]+\$?(\d+)$/.exec(area);
+    if (!m) continue;
+    const [r1, r2] = [Number(m[1]), Number(m[2])];
+    // A block opens at a heading (section, subsection or table header in column B) or on the first filled row after a gap.
+    const opens = (r: number) => r > r1 && has(r) && (["section", "subsection", "header"].includes(styleB(r) ?? "") || !has(r - 1));
+    // Height of the block that opens at `b`, to the next opening: only a block that fits a page is moved whole to the next.
+    const blockHeight = (b: number) => {
+      let h = height(b);
+      for (let k = b + 1; k <= r2 && !opens(k); k++) h += height(k);
+      return h;
+    };
+    const forced = new Set(p.print.rowBreaks);
+    const bodyRows = (from: number, to: number) => Array.from({ length: Math.max(0, to - from + 1) }, (_, i) => from + i).filter((k) => k > t2 && has(k)).length;
+    const breaks: number[] = [];
+    let pageStart = r1;
+    let used = 0;
+    for (let r = r1; r <= r2; r++) {
+      if (forced.has(r - 1) && r > r1) {
+        pageStart = r;
+        used = titleHeight;
+      }
+      const h = height(r);
+      if (used + h > capacity && r > pageStart) {
+        // The block moves whole to the next page when it fits one and the page it leaves keeps rows of its own.
+        let at = r;
+        for (let b = r; b > pageStart + 1; b--) {
+          if (!opens(b)) continue;
+          if (titleHeight + blockHeight(b) <= capacity && bodyRows(pageStart, b - 1) >= MIN_PAGE_ROWS) at = b;
+          break;
+        }
+        if (at === r && styleB(r) === "margin") at = r - 1;
+        breaks.push(at - 1);
+        pageStart = at;
+        used = titleHeight;
+        for (let k = at; k < r; k++) used += height(k);
+      }
+      used += h;
+    }
+    // A last page of a few rows takes the block before it along, or failing that enough rows of it, when the page before
+    // keeps rows of its own and the last page still fits.
+    const last = breaks[breaks.length - 1];
+    if (last !== undefined) {
+      const tail = bodyRows(last + 1, r2);
+      const prevStart = breaks.length > 1 ? breaks[breaks.length - 2]! + 1 : r1;
+      const fits = (from: number) => {
+        let h = titleHeight;
+        for (let k = from; k <= r2; k++) h += height(k);
+        return h <= capacity;
+      };
+      if (tail < MIN_PAGE_ROWS) {
+        let moved = false;
+        for (let b = last; b > prevStart + 1; b--) {
+          if (!opens(b)) continue;
+          if (fits(b) && bodyRows(prevStart, b - 1) >= MIN_PAGE_ROWS) {
+            breaks[breaks.length - 1] = b - 1;
+            moved = true;
+          }
+          break;
+        }
+        for (let b = last; !moved && b > prevStart + 1; b--) {
+          if (bodyRows(b, r2) < MIN_PAGE_ROWS || styleB(b) === "margin") continue;
+          if (fits(b) && bodyRows(prevStart, b - 1) >= MIN_PAGE_ROWS) breaks[breaks.length - 1] = b - 1;
+          break;
+        }
+      }
+    }
+    p.print.rowBreaks = [...new Set([...p.print.rowBreaks, ...breaks])].sort((a, b) => a - b);
+  }
+}
+
+/** Fewest body rows the paginator leaves on a tab's last page (the render check's widow rule, C37). */
+const MIN_PAGE_ROWS = 5;
 
 /**
  * Printed text longer than its column whose overflow runs into a cell that
@@ -698,26 +821,46 @@ export function clippedTexts(p: SheetPlan): { cell: string; text: string }[] {
   return out;
 }
 
+// Advance widths of Arial (metric twin of Helvetica and Liberation Sans) in 1/1000 em, ASCII 32-126, regular and bold.
+const ARIAL = [278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, 556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556, 1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556, 333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556, 556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584];
+const ARIAL_BOLD = [278, 333, 474, 556, 556, 889, 722, 238, 333, 333, 389, 584, 278, 333, 278, 278, 556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 333, 333, 584, 584, 584, 611, 975, 722, 722, 722, 722, 667, 611, 778, 722, 278, 556, 722, 611, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 333, 278, 333, 584, 556, 333, 556, 611, 556, 611, 556, 333, 611, 611, 278, 278, 556, 278, 889, 611, 611, 611, 611, 389, 556, 333, 611, 556, 778, 556, 556, 500, 389, 280, 389, 584];
+const WIDE: Record<string, number> = { "–": 556, "—": 1000, "‘": 222, "’": 222, "“": 333, "”": 333, "×": 584, "÷": 584, "…": 1000, "•": 350 };
+
+/** Rendered width in pixels at 96 dpi of `text` in Arial 9 (12 px to the em). */
+export function textWidthPx(text: string, bold = false): number {
+  const table = bold ? ARIAL_BOLD : ARIAL;
+  let em = 0;
+  for (const ch of text) {
+    const code = ch.charCodeAt(0);
+    em += code >= 32 && code <= 126 ? table[code - 32]! : (WIDE[ch] ?? 556);
+  }
+  return (em * 12) / 1000;
+}
+
 /**
- * Lines a cell's text wraps to at Arial 9 in a column `units` wide (Excel
- * width units: 7 px each plus 5 px of padding, less 4 px of cell margin),
- * breaking at spaces as Excel does. Arial 9 averages about 5.8 px a
- * character (6.3 in bold); counting whole words keeps a wrapped row from
- * being cut at its last line.
+ * Lines a cell's text wraps to at Arial 9 in a column `units` wide, as Excel
+ * lays it out: a column is width × 7 + 5 pixels at the Arial 10 default
+ * font, less a few pixels of cell padding, and text breaks at spaces. Each
+ * word is measured with Arial's own advance widths. LibreOffice, the QA
+ * renderer, lays the same width out about 6% wider (LIBREOFFICE_PX_PER_UNIT),
+ * so a line that fits in Excel fits there too.
  */
-export function wrappedLines(text: string, units: number, bold = false): number {
-  const perLine = Math.max(1, Math.floor((units * 7 + 1) / (bold ? 6.3 : 5.8)));
+export function wrappedLines(text: string, units: number, bold = false, pxPerUnit = 7): number {
+  const avail = Math.max(1, units * pxPerUnit + 5 - 4);
+  const space = textWidthPx(" ", bold);
   let lines = 0;
   for (const paragraph of text.split("\n")) {
     let used = 0;
     lines += 1;
     for (const word of paragraph.split(/\s+/).filter(Boolean)) {
-      const need = used ? used + 1 + word.length : word.length;
-      if (need <= perLine) used = need;
+      const w = textWidthPx(word, bold);
+      const need = used ? used + space + w : w;
+      if (need <= avail) used = need;
       else {
         lines += used ? 1 : 0;
-        used = Math.min(word.length, perLine);
-        lines += Math.floor(Math.max(0, word.length - 1) / perLine);
+        // A word longer than the line breaks across lines by itself.
+        lines += Math.floor(Math.max(0, w - 0.01) / avail);
+        used = w % avail || avail;
       }
     }
   }

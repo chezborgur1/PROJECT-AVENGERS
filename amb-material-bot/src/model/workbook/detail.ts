@@ -1,7 +1,10 @@
 // Revenue Detail and Expense Detail (guide 5.1 rows 8-9, 5.5 LTM strips):
 // three stacked blocks per group ($000s, % of total revenue, % growth), the
 // summary period block on the left and the twelve-month LTM strip on the
-// right, every strip cell a link to Monthly P&L.
+// right, every strip cell a link to Monthly P&L. Annual-only books have no
+// months: the tabs keep the three blocks over the fiscal years and the Pro
+// Forma Low / Mid / High columns (guide 5.2A), each cell a link to the P&L
+// Summary, and no strip.
 
 import { addMonths, monthRange } from "../../domain/financials.ts";
 import { addr, colLetter, rowOf, SheetBuilder } from "../sheet.ts";
@@ -9,7 +12,7 @@ import { FMT, WIDTH } from "../styles.ts";
 import type { ModelOutput, MonthlySeries } from "../types.ts";
 import type { TabContext } from "./assumptionsTab.ts";
 import { MONTH_START, priorColumn, valueStyle } from "./data.ts";
-import { applyPeriodWidths, ASOF, gridMonths, periodLayout, S, SHEET, serialOfMonthStart, sumifsFormula, valueSpans, writePeriodHelpers } from "./layout.ts";
+import { applyPeriodWidths, ASOF, gridMonths, offGrid, periodLayout, S, SHEET, serialOfMonthStart, sumifsFormula, valueSpans, writePeriodHelpers, yearEarlierMonths, yearEarlierSumifs } from "./layout.ts";
 
 const K = 1000;
 
@@ -63,14 +66,114 @@ function expenseLines(): DetailLine[] {
   ];
 }
 
-export function planRevenueDetail(ctx: TabContext): SheetBuilder | undefined {
-  if (ctx.model.granularity !== "monthly") return undefined;
+export function planRevenueDetail(ctx: TabContext): SheetBuilder {
+  if (!ctx.model.monthly) return planAnnualDetail(ctx, "revenue", SHEET.revenue, "Revenue by Line ($000s)", "Revenue", revenueLines(ctx.model));
   return planDetail(ctx, "revenue", SHEET.revenue, "Revenue by Line ($000s)", "Revenue", revenueLines(ctx.model), "LTM Monthly Revenue");
 }
 
-export function planExpenseDetail(ctx: TabContext): SheetBuilder | undefined {
-  if (ctx.model.granularity !== "monthly") return undefined;
+export function planExpenseDetail(ctx: TabContext): SheetBuilder {
+  if (!ctx.model.monthly) return planAnnualDetail(ctx, "expense", SHEET.expense, "Cost of Revenue and Operating Expenses ($000s)", "Expenses", expenseLines());
   return planDetail(ctx, "expense", SHEET.expense, "Cost of Revenue and Operating Expenses ($000s)", "Expenses", expenseLines(), "LTM Monthly Expenses");
+}
+
+/**
+ * The annual-only detail tab (guide 5.1 status A, 5.2A): the fiscal years and
+ * the Pro Forma cases in three blocks. Dollar cells link to the P&L Summary,
+ * which reads the Databook (years) and applies the scenario methods (cases),
+ * so the tab can never disagree with it; growth in a case is against the
+ * latest fiscal year.
+ */
+function planAnnualDetail(ctx: TabContext, key: "revenue" | "expense", name: string, subtitle: string, group: string, lines: DetailLine[]): SheetBuilder {
+  const { model } = ctx;
+  const b = new SheetBuilder(key, name);
+  const l = periodLayout(model, 3, { deltas: false });
+  // No notes column: every line's basis is on the P&L Summary it links to.
+  applyPeriodWidths(b, l, WIDTH.label, { notes: false });
+  b.anatomy({ subtitle, lastCol: l.lastValueCol, toggleCol: l.lastValueCol, masterToggle: ctx.masterToggle });
+  b.tier1(5, l.groups);
+  b.tier2(6, { from: l.firstCol, to: l.lastValueCol }, [], group);
+  if (l.scenarios) ["Low", "Mid", "High"].forEach((h, i) => b.cell(6, l.scenarios!.low + i, { style: "header", v: h, role: "text" }));
+  const spans = valueSpans(l);
+  const blocks: { title: string; suffix: string; kind: "dollars" | "pct" | "growth" }[] = [
+    { title: `${group} ($000s)`, suffix: "", kind: "dollars" },
+    { title: `${group} % Total Revenue`, suffix: "_pct", kind: "pct" },
+    { title: `${group} % Growth`, suffix: "_growth", kind: "growth" },
+  ];
+  let r = 8;
+  const gaps: number[] = [];
+  for (const bl of blocks) {
+    b.row(`sec${bl.suffix}`, r++);
+    for (const ln of lines) b.row(`${ln.key}${bl.suffix}`, r++);
+    if (bl.kind === "growth") b.row("growth_total", r++);
+    gaps.push(r++);
+  }
+  for (const g of gaps) b.spacerRow(g);
+  const noteRow = r;
+  // The helper rows carry each year's window, from which its row-6 label derives (guide 5.2 D7).
+  writePeriodHelpers(b, l, model, noteRow + 2);
+  const totalKey = lines.find((x) => x.isTotal)!.key;
+  const fy = l.cols.filter((c) => c.column.ref.kind === "fiscal_year");
+  const latest = fy[fy.length - 1]!;
+  const latestLines = model.periods[latest.column.key]!.revenueLines;
+  const recurringKeys = latestLines.filter((x) => x.recurring).map((x) => `rev:${x.account}`);
+  // Each value column: its P&L Summary column, the engine's values for it and the column its growth compares with.
+  const columns = [
+    ...l.cols.map(({ column, col }) => ({ col, label: column.label, values: model.periods[column.key]!, prior: priorColumn(column, l)?.col })),
+    ...(l.scenarios && model.scenarios
+      ? model.scenarios.map((sc, i) => ({
+          col: l.scenarios!.low + i,
+          label: sc.name,
+          values: { ...model.periods[latest.column.key]!, pnl: sc.pnl, revenueLines: latestLines.map((x) => ({ ...x, amount: x.amount * (1 + sc.revenueGrowth) })) },
+          prior: latest.col,
+        }))
+      : []),
+  ];
+  const valueOf = (col: number) => columns.find((c) => c.col === col)!.values;
+  for (const bl of blocks) {
+    b.section(b.r(`sec${bl.suffix}`), bl.title, spans);
+    for (const ln of lines) {
+      const rr = b.r(`${ln.key}${bl.suffix}`);
+      b.text(rr, 2, ln.label, { style: bl.kind === "dollars" ? ln.kind : "ratio", align: { horizontal: "left", indent: 1 } });
+      if (bl.kind === "dollars" && ln.kind === "keyTotal") b.keyTotalBox([rr, rr], spans);
+      const vs = bl.kind === "dollars" ? valueStyle(ln.kind) : { style: "ratio" as const, fmt: FMT.pct };
+      for (const c of columns) {
+        const colL = colLetter(c.col);
+        if (bl.kind === "dollars") {
+          const f = ln.key === "recurring" ? recurringKeys.map((k) => `${colL}${b.r(k)}`).join("+") : `${S("pnl")}${colL}${rowOf("pnl", ln.key)}`;
+          b.formula(rr, c.col, f, { style: vs.style, fmt: vs.fmt, expect: ln.value(c.values) / K, label: `${ln.key} ${c.label}` });
+        } else if (bl.kind === "pct") {
+          const rev = c.values.pnl.revenue;
+          b.formula(rr, c.col, `IFERROR(${colL}${b.r(ln.key)}/${S("pnl")}${colL}${rowOf("pnl", "revenue")},"n.a.")`, { style: vs.style, fmt: vs.fmt, expect: rev ? ln.value(c.values) / rev : "n.a.", label: `${ln.key} pct ${c.label}` });
+        } else if (c.prior === undefined) {
+          b.na(rr, c.col, "n.a.", { style: "ratio" });
+        } else {
+          const prev = ln.value(valueOf(c.prior));
+          b.formula(rr, c.col, `IFERROR(${colL}${b.r(ln.key)}/${colLetter(c.prior)}${b.r(ln.key)}-1,"n.a.")`, { style: vs.style, fmt: vs.fmt, expect: prev ? ln.value(c.values) / prev - 1 : "n.a.", label: `${ln.key} growth ${c.label}` });
+        }
+      }
+    }
+    if (bl.kind === "growth") {
+      const rr = b.r("growth_total");
+      const tot = lines.find((x) => x.isTotal)!;
+      b.text(rr, 2, `${group === "Revenue" ? "Revenue" : "Total Expense"} Growth`, { style: "keyTotal", align: { horizontal: "left" } });
+      b.keyTotalBox([rr, rr], spans);
+      for (const c of columns) {
+        if (c.prior === undefined) {
+          b.na(rr, c.col, "n.a.", { style: "keyTotal", fmt: FMT.pct });
+          continue;
+        }
+        const prev = tot.value(valueOf(c.prior));
+        b.formula(rr, c.col, `IFERROR(${colLetter(c.col)}${b.r(totalKey)}/${colLetter(c.prior)}${b.r(totalKey)}-1,"n.a.")`, { style: "keyTotal", fmt: FMT.pct, expect: prev ? tot.value(c.values) / prev - 1 : "n.a.", label: `growth total ${c.label}` });
+      }
+    }
+  }
+  // The vertical rule between the fiscal years and the cases (guide 5.2A).
+  if (l.ruleCol) for (let rr = 5; rr <= noteRow; rr++) b.cell(rr, l.ruleCol, { border: { right: "thin" } });
+  b.note(noteRow, 2, `Note: full fiscal years only (annual source, no monthly strip). Every figure links to the P&L Summary; the Pro Forma cases apply the scenario methods on Assumptions, and their growth is against ${latest.column.label}.`);
+  b.print({ areas: [`B2:${addr(noteRow, l.lastValueCol)}`], landscape: false, fitToWidth: 1, fitToHeight: 0, titlesRow: "2:6" });
+  b.furniture(ctx.codeName, ctx.asOfLabel);
+  b.freeze(7, 3);
+  return b;
 }
 
 function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, subtitle: string, group: string, lines: DetailLine[], stripTitle: string): SheetBuilder {
@@ -126,8 +229,17 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
   const totalKey = lines.find((x) => x.isTotal)!.key;
   const revenueMonthly = (m: string) => `${S("monthly")}${colLetter(MONTH_START + stripIdx(m))}${rowOf("monthly", "revenue")}`;
   const stripAllMonths = [priorMonth, ...stripMonths];
+  // A 12-month grid (the shortest the merge accepts) starts at the LTM start: the hidden prior month is not on it, so it reads
+  // n.a. and the first visible month has no growth denominator.
+  const priorOnGrid = months.includes(priorMonth);
   const stripColOf = (m: string) => (m === priorMonth ? hiddenCol : stripFirst + stripMonths.indexOf(m));
   const recurringKeys = model.periods[model.columns[0]!.key]!.revenueLines.filter((x) => x.recurring).map((x) => `rev:${x.account}`);
+  // A line's amount over a column's window a year earlier, from the grid (the recurring total sums its lines).
+  const yearEarlierBase = (ln: DetailLine, col: number) => {
+    const header = `${S("monthly")}$${colLetter(MONTH_START)}$6:$${colLetter(MONTH_START + months.length - 1)}$6`;
+    const rowOfKey = (k: string) => `${S("monthly")}$${colLetter(MONTH_START)}$${rowOf("monthly", k)}:$${colLetter(MONTH_START + months.length - 1)}$${rowOf("monthly", k)}`;
+    return (ln.key === "recurring" ? recurringKeys : [ln.monthlyKey]).map((k) => yearEarlierSumifs({ valuesRow: rowOfKey(k), monthsRow: header, startCell: addr(helpers.start, col, { row: true }), endCell: addr(helpers.end, col, { row: true }) })).join("+");
+  };
 
   for (const bl of blocks) {
     b.section(b.r(`sec${bl.suffix}`), bl.title, spans);
@@ -147,6 +259,11 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
             b.formula(rr, col, recurringKeys.map((k) => at(k)).join("+"), { style: vs.style, fmt: vs.fmt, expect: ln.value(pv) / K, label: `${ln.key} ${column.label}` });
             continue;
           }
+          if (offGrid(model, column)) {
+            // A fiscal year off the grid (read from an annual source) has no months: the line links to the P&L Summary's cell.
+            b.formula(rr, col, `${S("pnl")}${colL}${rowOf("pnl", ln.key)}`, { style: vs.style, fmt: vs.fmt, expect: ln.value(pv) / K, label: `${ln.key} ${column.label}` });
+            continue;
+          }
           const monthlyRow = `${S("monthly")}$${colLetter(MONTH_START)}$${rowOf("monthly", ln.monthlyKey)}:$${colLetter(MONTH_START + months.length - 1)}$${rowOf("monthly", ln.monthlyKey)}`;
           const monthlyHeader = `${S("monthly")}$${colLetter(MONTH_START)}$6:$${colLetter(MONTH_START + months.length - 1)}$6`;
           b.formula(rr, col, sumifsFormula({ valuesRow: monthlyRow, monthsRow: monthlyHeader, startCell: addr(helpers.start, col, { row: true }), endCell: addr(helpers.end, col, { row: true }) }), { style: vs.style, fmt: vs.fmt, expect: ln.value(pv) / K, label: `${ln.key} ${column.label}` });
@@ -155,6 +272,12 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
           b.formula(rr, col, `IFERROR(${at(ln.key)}/${S("pnl")}${colL}${rowOf("pnl", "revenue")},"n.a.")`, { style: vs.style, fmt: vs.fmt, expect: rev ? ln.value(pv) / rev : "n.a.", label: `${ln.key} pct ${column.label}` });
         } else {
           const prior = priorColumn(column, l);
+          const earlier = prior ? undefined : yearEarlierMonths(model, column);
+          if (earlier) {
+            const prev = earlier.reduce((sum, m) => sum + ln.month(series, stripIdx(m)), 0);
+            b.formula(rr, col, `IFERROR(${at(ln.key)}/(${yearEarlierBase(ln, col)})-1,"n.a.")`, { style: vs.style, fmt: vs.fmt, expect: prev ? ln.value(pv) / prev - 1 : "n.a.", label: `${ln.key} growth ${column.label}` });
+            continue;
+          }
           if (!prior) {
             b.na(rr, col, "n.a.", { style: "ratio" });
             continue;
@@ -169,6 +292,10 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
         const colL = colLetter(col);
         const i = stripIdx(m);
         const at = (k: string) => `${colL}${b.r(k)}`;
+        if (m === priorMonth && !priorOnGrid) {
+          b.na(rr, col, "n.a.", { style: bl.kind === "dollars" ? vs.style : "ratio" });
+          continue;
+        }
         if (bl.kind === "dollars") {
           const f = ln.key === "recurring" ? recurringKeys.map((k) => at(k)).join("+") : monthlyCell(ln.monthlyKey, m);
           b.formula(rr, col, f, { style: vs.style, fmt: vs.fmt, expect: ln.month(series, i) / K, label: `${ln.key} ${m}` });
@@ -181,6 +308,10 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
             continue;
           }
           const prevM = addMonths(m, -1);
+          if (prevM === priorMonth && !priorOnGrid) {
+            b.na(rr, col, "n.a.", { style: "ratio" });
+            continue;
+          }
           const prev = ln.month(series, stripIdx(prevM));
           b.formula(rr, col, `IFERROR(${at(ln.key)}/${colLetter(stripColOf(prevM))}${b.r(ln.key)}-1,"n.a.")`, { style: vs.style, fmt: vs.fmt, expect: prev ? ln.month(series, i) / prev - 1 : "n.a.", label: `${ln.key} growth ${m}` });
         }
@@ -195,6 +326,12 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
         const prior = priorColumn(column, l);
         const pv = model.periods[column.key]!;
         const tot = lines.find((x) => x.isTotal)!;
+        const earlier = prior ? undefined : yearEarlierMonths(model, column);
+        if (earlier) {
+          const prev = earlier.reduce((sum, m) => sum + tot.month(series, stripIdx(m)), 0);
+          b.formula(rr, col, `IFERROR(${colLetter(col)}${b.r(totalKey)}/(${yearEarlierBase(tot, col)})-1,"n.a.")`, { style: "keyTotal", fmt: FMT.pct, expect: prev ? tot.value(pv) / prev - 1 : "n.a.", label: `growth total ${column.label}` });
+          continue;
+        }
         if (!prior) {
           b.na(rr, col, "n.a.", { style: "keyTotal", fmt: FMT.pct });
           continue;
@@ -209,6 +346,10 @@ function planDetail(ctx: TabContext, key: "revenue" | "expense", name: string, s
           continue;
         }
         const prevM = addMonths(m, -1);
+        if (prevM === priorMonth && !priorOnGrid) {
+          b.na(rr, col, "n.a.", { style: "keyTotal", fmt: FMT.pct });
+          continue;
+        }
         const tot = lines.find((x) => x.isTotal)!;
         const cur = tot.month(series, stripIdx(m));
         const prev = tot.month(series, stripIdx(prevM));

@@ -8,9 +8,9 @@
 // sourced number from an invented one.
 
 import type { FinancialDataset, KpiSeries } from "../domain/financials.ts";
-import { monthLabel } from "../domain/financials.ts";
+import { monthEndDate, monthLabel, parsePeriodKey } from "../domain/financials.ts";
 import type { ModelOutput, PeriodColumn, PeriodValues } from "../model/types.ts";
-import { cagr, describeDelta, fmtCount, fmtDollars, fmtMoney, fmtPct, growth, wholeShares } from "../util/format.ts";
+import { cagr, describeDelta, fmtCount, fmtDollars, fmtMoney, fmtPct, growth, indefinite, wholeShares } from "../util/format.ts";
 
 export interface Figure {
   key: string;
@@ -48,6 +48,12 @@ export class Brief {
   /** The figure's text when the brief has it, else undefined (for figures that exist only with some data blocks). */
   maybe(key: string): string | undefined {
     return this.figures.get(key)?.text;
+  }
+
+  /** "a" or "an" as the figure is read aloud ("an 11.4% margin"), for templates that put an article before a token. */
+  article(key: string): "a" | "an" {
+    const f = this.figures.get(key);
+    return f ? indefinite(f.text) : "a";
   }
 
   value(key: string): number | null | undefined {
@@ -392,13 +398,13 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
 
   // --- Operating KPIs from the sources ---------------------------------------------------------
   for (const k of ds.kpis ?? []) {
-    const v = latestKpi(k);
+    const v = latestKpi(k, out.fiscalYearEndMonth);
     if (v !== undefined) b.add(`kpi.${k.key}`, fmtKpi(k, v), v, `${k.label}${k.evidence === "management_representation" ? " (per management)" : ""}`);
   }
   // Agreement and fleet economics the capacity table derives, so prose can quote them.
   const members = ds.kpis?.find((k) => k.key === "maintenance_members");
   const recurring = P(latest).revenueLines.filter((l) => l.recurring);
-  const memberCount = members ? latestKpi(members) : undefined;
+  const memberCount = members ? latestKpi(members, out.fiscalYearEndMonth) : undefined;
   if (memberCount && recurring.length === 1) {
     b.add("agreement.revenuePerMember", fmtDollars(Math.round(recurring[0]!.amount / memberCount)), recurring[0]!.amount / memberCount, `${latest.label} ${recurring[0]!.label.toLowerCase()} revenue per member`);
     if (/two tune-ups/i.test(members!.definition ?? "")) b.add("agreement.visitsPerYear", fmtCount(memberCount * 2), memberCount * 2, "Tune-up visits a year (two per member)");
@@ -451,9 +457,12 @@ export function buildBrief(out: ModelOutput, ds: FinancialDataset, periods: Brie
       b.add(`month.peakRevenue.${c.key}`, fmtMoney(revs[peak]!), revs[peak]!, `Revenue in the highest month of ${c.label}`);
       b.add(`month.trough.${c.key}`, monthLabel(mo.months[trough]!.key), null, `Lowest revenue month of ${c.label}`);
       b.add(`month.troughRevenue.${c.key}`, fmtMoney(revs[trough]!), revs[trough]!, `Revenue in the lowest month of ${c.label}`);
-      const ratioPT = revs[peak]! / revs[trough]!;
-      // Multiples print at one decimal (spec 4.1).
-      b.add(`month.peakToTrough.${c.key}`, `${ratioPT.toFixed(1)}x`, ratioPT, `Highest month ÷ lowest month, ${c.label}`);
+      // Multiples print at one decimal (spec 4.1). A month with no revenue (a seasonal closure) or net refunds has no
+      // meaningful multiple, so the token is left out and the copy falls back to naming the low month.
+      if (revs[trough]! > 0) {
+        const ratioPT = revs[peak]! / revs[trough]!;
+        b.add(`month.peakToTrough.${c.key}`, `${ratioPT.toFixed(1)}x`, ratioPT, `Highest month ÷ lowest month, ${c.label}`);
+      }
       const neg = idx.filter((i) => adj[i]! < 0).length;
       b.add(`month.adjNegative.${c.key}`, fmtCount(neg), neg, `Months with negative Adj. EBITDA in ${c.label}`);
       const quarters = [0, 1, 2, 3].map((q) => idx.filter((i) => Math.floor((mo.months[i]!.fiscalMonth - 1) / 3) === q).reduce((s, i) => s + revs[i]!, 0));
@@ -536,9 +545,30 @@ export function accountLabel(account: string): string {
 
 const GENERIC_LEAF = /^(taxes|other|fees|benefits|miscellaneous|misc\.?)$/i;
 
-/** The most recent value of a KPI series, whatever its period key. */
-export function latestKpi(k: KpiSeries): number | undefined {
-  const keys = Object.keys(k.values).sort();
+/**
+ * The most recent value of a KPI series, whatever its period keys: ordered by
+ * the date each period ends (a fiscal year at its year-end under `fye`), and
+ * on a tie the point-in-time value, which is the latest reading.
+ */
+export function latestKpi(k: KpiSeries, fye = 12): number | undefined {
+  const ends = (key: string): [string, number] => {
+    const ref = parsePeriodKey(key);
+    switch (ref.kind) {
+      case "point":
+        return [ref.date, 1];
+      case "fiscal_year":
+        return [monthEndDate(`${ref.fiscalYear}-${String(fye).padStart(2, "0")}`), 0];
+      case "month":
+        return [monthEndDate(ref.key), 0];
+      default:
+        return [monthEndDate(ref.end), 0];
+    }
+  };
+  const keys = Object.keys(k.values).sort((a, b) => {
+    const [da, pa] = ends(a);
+    const [db, pb] = ends(b);
+    return da < db ? -1 : da > db ? 1 : pa - pb;
+  });
   const last = keys[keys.length - 1];
   return last === undefined ? undefined : k.values[last];
 }

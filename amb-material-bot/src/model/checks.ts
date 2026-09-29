@@ -6,14 +6,16 @@
 import { IS_CATEGORIES, type FinancialDataset } from "../domain/financials.ts";
 import type { CheckResult, CheckStatus, ModelOutput } from "./types.ts";
 import { totalsDifference } from "./exportTotals.ts";
+import { gridCovers, windowMonths } from "./periods.ts";
 
-export const CHECKS: { id: string; check: string; tab: string }[] = [
+/** Each check with the tab it lives on and, in `also`, the other tabs whose figures it tests (the Contents Check column reads both). */
+export const CHECKS: { id: string; check: string; tab: string; also?: string[] }[] = [
   { id: "C01", check: "Databook ties to each raw export, every subtotal and period", tab: "Databook" },
-  { id: "C02", check: "Monthly P&L category totals equal Databook, every month", tab: "Monthly P&L" },
+  { id: "C02", check: "Monthly P&L category totals equal Databook, every month", tab: "Monthly P&L", also: ["Databook"] },
   { id: "C03", check: "Every P&L Summary line equals the grid's months in its window, recomputed as months to its end less months before its start", tab: "P&L Summary" },
   { id: "C04", check: "P&L Summary Net Income equals Monthly P&L Net Income", tab: "P&L Summary" },
   { id: "C05", check: "Reported EBITDA equals Net Income + D1:D3", tab: "Adj. EBITDA" },
-  { id: "C06", check: "Adjustments schedule totals by tier equal the ladder", tab: "Adj. EBITDA" },
+  { id: "C06", check: "Adjustments schedule totals by tier equal the ladder", tab: "Adj. EBITDA", also: ["Adjustments"] },
   { id: "C07", check: "Balance sheet balances (A = L + E), every period", tab: "Balance Sheet" },
   { id: "C08", check: "NWC lines tie to the balance sheet", tab: "NWC" },
   { id: "C09", check: "Cash flow ending cash equals balance-sheet cash", tab: "Cash Flow" },
@@ -26,28 +28,35 @@ export const CHECKS: { id: string; check: string; tab: string }[] = [
   { id: "C16", check: "Every period label equals its derived value", tab: "P&L Summary" },
   { id: "C17", check: "No volatile functions (TODAY, NOW, OFFSET, INDIRECT) anywhere", tab: "Checks" },
   { id: "C18", check: "No hard-coded number inside a formula grid", tab: "Checks" },
-  { id: "C19", check: "Every debt-like balance is removed from NWC, and only those: none counted twice (deferred revenue and deposits included)", tab: "Debt-Like Items" },
+  { id: "C19", check: "Every debt-like balance is removed from NWC, and only those: none counted twice (deferred revenue and deposits included)", tab: "Debt-Like Items", also: ["NWC"] },
   { id: "C20", check: "NWC peg built from >= 12 month-ends", tab: "NWC" },
-  { id: "C21", check: "Every chart-data row equals its source row for the same months", tab: "Revenue Charts" },
-  { id: "C22", check: "Chart lint: ranges, names, colours, axes", tab: "Revenue Charts" },
+  { id: "C21", check: "Every chart-data row equals its source row for the same months", tab: "Revenue Charts", also: ["Expense Charts", "Retention Charts", "Headcount Charts"] },
+  { id: "C22", check: "Chart lint: ranges, names, colours, axes", tab: "Revenue Charts", also: ["Expense Charts", "Retention Charts", "Headcount Charts"] },
   { id: "C23", check: "Tie Out: Consideration vs. Deal Structure, per Offer Comparison column", tab: "Offer Comparison" },
   { id: "C24", check: "Tie Out: value by source vs. offer equals zero per column", tab: "Offer Comparison" },
   { id: "C25", check: "Every shared-assumption row on Offer Comparison has Variance = 0", tab: "Offer Comparison" },
   { id: "C26", check: "Every IRR helper strip has a negative and a positive flow", tab: "Offer Comparison" },
   { id: "C27", check: "Annual mode: Total Expenses is a sum; Net Income ties to the return", tab: "P&L Summary" },
-  { id: "C28", check: "Loan principal >= 0, every loan and scenario", tab: "Valuation" },
+  { id: "C28", check: "Loan principal >= 0, every loan and scenario", tab: "Valuation", also: ["Deal Structure"] },
   { id: "C29", check: "Low, Mid and High differ on revenue growth and at least one operating driver", tab: "Assumptions" },
-  { id: "C30", check: "Each sensitivity grid's centre cell equals the model's base case", tab: "Sensitivities" },
+  { id: "C30", check: "Each sensitivity grid's centre cell equals the model's base case", tab: "Sensitivities", also: ["Valuation", "Deal Structure"] },
   { id: "C31", check: "Rent roll sq. ft. equals GLA", tab: "Real Estate" },
   { id: "C32", check: "In-place rent equals the P&L rent line for the owner-occupied suite", tab: "Real Estate" },
   { id: "C33", check: "Consolidated value equals Business + Real Estate; no typed constants", tab: "Real Estate" },
-  { id: "C34", check: "Every LTM-strip month equals the Monthly P&L cell for that category and month", tab: "Revenue Detail" },
-  { id: "C35", check: "Strip first visible month = EOMONTH(AsOfDate,-12)+1 and last = EOMONTH(AsOfDate,-1)+1", tab: "Revenue Detail" },
+  { id: "C34", check: "Every LTM-strip month equals the Monthly P&L cell for that category and month", tab: "Revenue Detail", also: ["Expense Detail"] },
+  { id: "C35", check: "Strip first visible month = EOMONTH(AsOfDate,-12)+1 and last = EOMONTH(AsOfDate,-1)+1", tab: "Revenue Detail", also: ["Expense Detail"] },
   { id: "C36", check: "EffectiveDate <= LOIDate + ExclusivityDays; business day; every term string non-empty", tab: "Deal Structure" },
   { id: "C37", check: "Render check: print scale floors, no page cut at the margin", tab: "QA" },
 ];
 
 export const DOLLAR_TOLERANCE = 1;
+
+/** Why there is no Real Estate tab, by the premises arrangement on Assumptions (guide 5.1 row 21a). */
+export function realEstateReason(premises: string): string {
+  if (!premises) return "No Real Estate tab (no premises facts in the sources)";
+  if (premises === "Leased from third party") return "No Real Estate tab (premises leased from a third party)";
+  return `No Real Estate tab: not built yet; premises ${premises.charAt(0).toLowerCase()}${premises.slice(1)}`;
+}
 
 const status = (difference: number, tolerance: number): CheckStatus => (Math.abs(difference) <= tolerance ? "OK" : "CHECK");
 
@@ -101,9 +110,10 @@ export function computeChecks(ctx: CheckContext): { checks: CheckResult[]; maste
   // C03, C04: period columns against the grid.
   if (grid) {
     ok("C03", 0, DOLLAR_TOLERANCE, "Each line's SUMIFS against two SUMIFs of the grid that bound the same window");
+    // Only fiscal years the grid covers: an older year read from an annual source has no months to tie to.
     const c04 = maxAbs(
       hist
-        .filter((c) => c.ref.kind === "fiscal_year")
+        .filter((c) => c.ref.kind === "fiscal_year" && gridCovers(grid, windowMonths(c)))
         .map((c) => {
           const fromGrid = grid.months.filter((m) => m.fiscalYear === c.fiscalYear).reduce((s, m) => s + (out.monthly?.series.net_income?.[grid.months.indexOf(m)] ?? 0), 0);
           return fromGrid - out.periods[c.key]!.pnl.netIncome;
@@ -150,7 +160,9 @@ export function computeChecks(ctx: CheckContext): { checks: CheckResult[]; maste
   // C12-C14: the tie-outs with percentage flags.
   if (out.customers) ok("C12", out.customers.concentration.tieToPnl.variancePct, 0.02, "Difference is the variance as a share of P&L revenue");
   else na("C12", "No customer list");
-  if (out.headcount) ok("C13", out.headcount.tieToPnl.variancePct, 0.05, "Difference is the variance as a share of P&L payroll");
+  const tie = out.headcount?.tieToPnl;
+  if (tie?.basis === "none") na("C13", "No independent tie: the P&L shows one payroll line and the register no employer costs");
+  else if (tie) ok("C13", tie.variancePct, 0.05, tie.basis === "wages" ? "Register staff wages against the P&L wage accounts, as a share of the accounts" : "Register wages and employer costs against the P&L payroll line, as a share of the line");
   else na("C13", "No payroll register");
   if (tabs.proofOfCash && ds.depositsByMonth && grid) {
     const months = Object.keys(ds.depositsByMonth).filter((m) => grid.values[m]).sort();
@@ -239,7 +251,7 @@ export function computeChecks(ctx: CheckContext): { checks: CheckResult[]; maste
   // C31-C33: real estate.
   for (const id of ["C31", "C32", "C33"]) {
     if (tabs.realEstate) ok(id, 0);
-    else na(id, "No Real Estate tab (premises leased from a third party)");
+    else na(id, realEstateReason(out.assumptions?.deal.premisesArrangement ?? ""));
   }
 
   // C34, C35: strips.
