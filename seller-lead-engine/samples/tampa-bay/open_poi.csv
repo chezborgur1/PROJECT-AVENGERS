@@ -1,0 +1,10 @@
+source,source_record_id,name,basic_category,website,phone,street,city,state,zip,date_refreshed,date_closed,data_license
+open_poi,ovr-tb-0001,Gulfside Air Conditioning & Heating,hvac_services,https://gulfsideair.example,813-555-0142,4410 N Armenia Ave Ste 3,Tampa,FL,33612,2026-09-17,,CDLA-Permissive-2.0
+open_poi,ovr-tb-0002,Bayshore Plumbing Company,plumbing,https://bayshoreplumbing.example,727-555-0117,2215 4th St N,St. Petersburg,FL,33704,2026-09-17,,CDLA-Permissive-2.0
+open_poi,ovr-tb-0003,Sunrise Comfort Systems,hvac_services,https://sunrisecomfort.example,813-555-0163,1120 Oakfield Dr,Brandon,FL,33511,2026-09-17,,CDLA-Permissive-2.0
+open_poi,fsq-tb-0004,Harbor Mechanical Services,hvac_services,,727-555-0188,1475 Gulf to Bay Blvd,Clearwater,FL,33755,2026-08-30,2021-06-30,Apache-2.0
+open_poi,ovr-tb-0005,Tarpon Coast Air,hvac_services,https://tarponcoastair.example,727-555-0135,34950 US Highway 19 N,Palm Harbor,FL,34684,2026-09-17,,CDLA-Permissive-2.0
+open_poi,ovr-tb-0006,Northstar Mechanical,hvac_services,https://northstarmechanical-sample.ca,813-555-0156,5402 E Hillsborough Ave,Tampa,FL,33610,2026-09-17,,CDLA-Permissive-2.0
+open_poi,fsq-tb-0007,Clearwater Reliable Plumbing,plumbing,https://clearwaterreliable.example,727-555-0150,1906 Drew St,Clearwater,FL,33765,2026-08-30,,Apache-2.0
+open_poi,fsq-tb-0008,Hector's A/C Service,hvac_services,,813-555-0171,3015 N Tampa St,Tampa,FL,33603,2026-08-30,,Apache-2.0
+open_poi,ovr-tb-0009,Seabreeze Bakery,bakery,https://seabreezebakery.example,813-555-0199,712 S Howard Ave,Tampa,FL,33606,2026-09-17,,CDLA-Permissive-2.0

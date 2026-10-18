@@ -1,0 +1,14 @@
+source,source_record_id,business_name,zip,first_name,last_name,role,email,email_source,email_source_url,website,phone
+csv,C-TB-0001,Gulfside Air Conditioning & Heating,33612,Donald,Holloway,Owner,don.holloway@gulfsideair.example,website,https://gulfsideair.example/contact,https://gulfsideair.example,813-555-0142
+csv,C-TB-0002,Gulfside Air Conditioning & Heating,33612,,,,office@gulfsideair.example,website,https://gulfsideair.example/contact,https://gulfsideair.example,813-555-0142
+csv,C-TB-0003,Bayshore Plumbing Co,33704,,,,info@bayshoreplumbing.example,website,https://bayshoreplumbing.example/,https://bayshoreplumbing.example,727-555-0117
+csv,C-TB-0004,Sunrise Comfort Systems LLC,33511,Eric,Dunn,Service Manager,eric.dunn@sunrisecomfort.example,website,https://sunrisecomfort.example/team,https://sunrisecomfort.example,
+csv,C-TB-0005,Sunrise Comfort Systems LLC,33511,Vikram,Patel,Managing Member,vikram@sunrisecomfort.example,website,https://sunrisecomfort.example/about,https://sunrisecomfort.example,813-555-0163
+csv,C-TB-0006,Pinellas Pipe Works Inc,33771,Thomas,Brennan,President,tom@pinellaspipeworks.example,website,https://pinellaspipeworks.example/contact-us,https://pinellaspipeworks.example,727-555-0124
+csv,C-TB-0007,Frostline Heating & Air of Tampa Bay #214,33634,,,,service@frostlinetampabay.example,website,https://frostlinetampabay.example/,https://frostlinetampabay.example,813-555-0109
+csv,C-TB-0008,Tarpon Coast Air,34684,Ricardo,Santos,Owner,tarponcoastair.fictional@gmail.com,manual,,,727-555-0135
+csv,C-TB-0009,Northstar Mechanical LLC,33610,Jean-Paul,Lefebvre,Manager,jp@northstarmechanical-sample.ca,import,,https://northstarmechanical-sample.ca,813-555-0156
+csv,C-TB-0010,Clearwater Reliable Plumbing,33765,Thanh,Nguyen,President,thanh@clearwaterreliable.example,website,https://clearwaterreliable.example/about,https://clearwaterreliable.example,727-555-0150
+csv,C-TB-0011,Wesley Chapel Comfort Pros LLC,33544,Tyler,Boone,Manager,tyler@comfortpros-wc.example,website,https://comfortpros-wc.example/contact,https://comfortpros-wc.example,813-555-0177
+csv,C-TB-0012,Hector's A/C Service,33603,Hector,Morales,Owner,hector@hectorsac.example,website,https://hectorsac.example/,https://hectorsac.example,813-555-0171
+csv,C-TB-0013,Orange Blossom Plumbing,34471,Philip,Garrison,President,phil@orangeblossomplumbing.example,website,https://orangeblossomplumbing.example/,https://orangeblossomplumbing.example,352-555-0118

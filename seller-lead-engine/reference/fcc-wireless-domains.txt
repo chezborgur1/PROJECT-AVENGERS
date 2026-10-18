@@ -1,0 +1,72 @@
+# FCC wireless domain names (CAN-SPAM s.14; 47 CFR 64.3100)
+#
+# Commercial email to a domain on the FCC's wireless domain list needs the
+# recipient's express prior authorization, which cold outreach never has, so
+# the engine never sends to these domains (src/contacts/verify.ts marks them
+# invalid; src/compliance/jurisdiction.ts blocks them). See
+# docs/research/compliance.md section 1, item 12.
+#
+# STATUS: NOT THE OFFICIAL LIST. Compiled 2026-10-18 from well-known US
+# carrier SMS/MMS gateway domains, because www.fcc.gov was unreachable from
+# the build container (DNS failure and a proxy 403). Before the first send,
+# and then every month, replace this file with the current list from
+# https://www.fcc.gov/consumer-governmental-affairs/policy-divisions/consumer-policy-division/wireless-domain-names
+# (the FCC's downloadable domain list file). A newly listed domain has a
+# 30-day safe harbor, so a monthly refresh keeps the engine inside it.
+#
+# Format: one domain per line, lower case; "#" starts a comment. A listed
+# domain also covers its subdomains.
+
+# Verizon
+vtext.com
+vzwpix.com
+mypixmessages.com
+# AT&T (and legacy Cingular)
+txt.att.net
+mms.att.net
+cingularme.com
+mobile.mycingular.com
+mmode.com
+# T-Mobile and Metro by T-Mobile
+tmomail.net
+mymetropcs.com
+# Sprint and Nextel (legacy)
+messaging.sprintpcs.com
+pm.sprint.com
+sprintpaging.com
+messaging.nextel.com
+page.nextel.com
+# Boost Mobile
+sms.myboostmobile.com
+myboostmobile.com
+# Cricket
+sms.cricketwireless.net
+mms.cricketwireless.net
+sms.mycricket.com
+mms.mycricket.com
+# US Cellular
+email.uscc.net
+mms.uscc.net
+# Virgin Mobile USA (legacy)
+vmobl.com
+vmpix.com
+# Google Fi
+msg.fi.google.com
+# Republic Wireless
+text.republicwireless.com
+# Ting
+message.ting.com
+# Consumer Cellular
+mailmymobile.net
+# Alltel (legacy)
+message.alltel.com
+alltelmessage.com
+# Cellcom
+cellcom.quiktxt.com
+# Cincinnati Bell
+gocbw.com
+mms.gocbw.com
+# Qwest (legacy)
+qwestmp.com
+# Nextech / C Spire
+cspire1.com
