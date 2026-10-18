@@ -1,0 +1,11 @@
+node_modules/
+.env
+
+# Real prospect data never goes in git: imported lists, the pipeline store,
+# the suppression list, outboxes, replies and handoffs. Only the fictional
+# sample is tracked.
+data/
+output/
+.gmail-tokens.json
+
+*.log

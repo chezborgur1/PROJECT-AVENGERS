@@ -1,0 +1,32 @@
+{
+  "name": "seller-lead-engine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AMB Advisory: finds Main Street owners likely to sell, runs compliant cold email offering a free exit-readiness check, qualifies replies and hands warm sellers to the pipeline",
+  "type": "module",
+  "bin": {
+    "lead-engine": "./src/cli.ts"
+  },
+  "scripts": {
+    "engine": "tsx src/cli.ts",
+    "demo": "tsx src/cli.ts demo",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.128.0",
+    "csv-parse": "^7.0.3",
+    "csv-stringify": "^6.9.0",
+    "dotenv": "^18.0.4",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.2"
+  }
+}
