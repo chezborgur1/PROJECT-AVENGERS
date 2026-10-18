@@ -30,7 +30,7 @@ function byId(rows: ProspectRow[]): Record<string, ProspectRow> {
 }
 
 describe("scoreAll", () => {
-  it("rescores only new, scored and hold prospects and leaves the rest untouched", async () => {
+  it("rescores new, scored, hold and excluded prospects and leaves the rest untouched", async () => {
     const stores = tempStores();
     const rows = [
       makeProspect({ prospect_id: "P-00001", status: "new", score: undefined, tier: "" }),
@@ -42,14 +42,35 @@ describe("scoreAll", () => {
     ];
     stores.prospects.upsert(rows);
     const result = await scoreAll(stores, config, { today: TODAY, now: NOW });
-    expect(result).toMatchObject({ scored: 2, excluded: 0, byTier: { A: 2, B: 0, C: 0 }, held: 0, errors: [] });
+    // P-00005 is excluded for "no metro" and still has none, so it is excluded again (with a fresh score stamp).
+    expect(result).toMatchObject({ scored: 2, excluded: 1, byTier: { A: 2, B: 0, C: 0 }, held: 0, errors: [] });
     const after = byId(stores.prospects.rows(true));
     expect(after["P-00001"]).toMatchObject({ status: "scored", score: 81, tier: "A", scored_at: "2026-10-18T14:00:00Z" });
     expect(after["P-00002"]!.status).toBe("scored");
     expect(after["P-00003"]).toEqual(rows[2]);
     expect(after["P-00004"]).toEqual(rows[3]);
-    expect(after["P-00005"]).toEqual(rows[4]);
+    expect(after["P-00005"]).toMatchObject({ status: "excluded", exclude_reason: "no metro" });
     expect(after["P-00006"]).toEqual(rows[5]);
+  });
+
+  it("brings back a prospect whose tenure knock-out has lapsed (REVIEW_R1.md item 28)", async () => {
+    const stores = tempStores();
+    const young = makeProspect({ prospect_id: "P-00010", status: "new", formation_date: "2012-03-01", license_issue_date: "2012-03-01" });
+    stores.prospects.upsert([young]);
+    await scoreAll(stores, config, { today: "2026-10-18", now: NOW });
+    expect(stores.prospects.rows()[0]).toMatchObject({ status: "excluded" });
+    expect(stores.prospects.rows()[0]!.exclude_reason).toMatch(/^tenure 14 years/);
+    await scoreAll(stores, config, { today: "2027-03-02", now: new Date("2027-03-02T14:00:00Z") });
+    // Back in the pool: scored or held by tier, no longer excluded.
+    expect(stores.prospects.rows()[0]!.status).not.toBe("excluded");
+    expect(stores.prospects.rows()[0]!.exclude_reason).toBe("");
+  });
+
+  it("keeps a closure found by an external listing check until that check runs again", async () => {
+    const stores = tempStores();
+    stores.prospects.upsert([makeProspect({ prospect_id: "P-00011", status: "excluded", exclude_reason: "closed (external listing check)" })]);
+    await scoreAll(stores, config, { today: TODAY, now: NOW });
+    expect(stores.prospects.rows()[0]).toMatchObject({ status: "excluded", exclude_reason: "closed (external listing check)" });
   });
 
   it("writes components, reasons, the age band and tenure", async () => {
@@ -197,7 +218,7 @@ describe("scoreAll with Places", () => {
     const { places } = fakePlaces(stores.dir.cache, { details: { businessStatus: "CLOSED_PERMANENTLY" } });
     const result = await scoreAll(stores, config, { today: TODAY, now: NOW, places });
     expect(result.excluded).toBe(1);
-    expect(stores.prospects.rows(true)[0]).toMatchObject({ status: "excluded", exclude_reason: "closed permanently (Places business status)", place_id: "ChIJmatched00000001" });
+    expect(stores.prospects.rows(true)[0]).toMatchObject({ status: "excluded", exclude_reason: "closed (external listing check)", place_id: "ChIJmatched00000001" });
   });
 
   it("does not store an ambiguous match", async () => {

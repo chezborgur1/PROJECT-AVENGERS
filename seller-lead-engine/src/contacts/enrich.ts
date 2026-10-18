@@ -147,11 +147,17 @@ export async function enrichContacts(
             v = await verifyEmail(c.email, verifyOpts(opts));
           }
           tried.push({ c, v });
-          if (isSendableVerification(v.status)) return;
+          // A verifier can call a person-ranked address role-based (jobs@, quotes@): keep trying the other
+          // person addresses before settling for it (REVIEW_R1.md item 30).
+          if (isSendableVerification(v.status) && v.status !== "role_based") return;
         }
       };
       await tryList(persons);
-      let pick = tried.find((t) => isSendableVerification(t.v.status));
+      let pick = tried.find((t) => isSendableVerification(t.v.status) && t.v.status !== "role_based");
+      // A role-based verdict on a person-ranked address counts only when every other person address is dead.
+      if (!pick && persons.length === tried.length && tried.every((t) => t.v.status === "role_based" || DEAD.has(t.v.status))) {
+        pick = tried.find((t) => t.v.status === "role_based");
+      }
       // A role inbox counts only when the business has no person address that could still be good,
       // so a "role_based" verdict (verify.ts) means it is the business's only address.
       if (!pick && persons.length === tried.length && tried.every((t) => DEAD.has(t.v.status))) {

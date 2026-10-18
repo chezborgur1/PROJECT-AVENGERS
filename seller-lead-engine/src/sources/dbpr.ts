@@ -141,7 +141,10 @@ export function dbprRecordToLicense(r: Record<string, string>, snapshotDate: str
   let dbaName = "";
   let personName = "";
   let role: LicenseRow["person_role"] = "unknown";
-  if (isPersonName(licensee)) {
+  // DBPR writes an individual licensee as "LAST, FIRST M"; with no comma, no employer and no
+  // self-proprietor, a name that merely looks like two words is a business (REVIEW_R1.md item 26).
+  const individual = isPersonName(licensee) && (licensee.includes(",") || Boolean(employer) || Boolean(selfProp));
+  if (individual) {
     personName = licensee;
     if (selfProp) {
       role = "owner"; // a self-proprietor owns the business they trade as
@@ -235,7 +238,7 @@ export function importDbpr(file: string, stores: Stores, opts: { snapshotDate: s
     }
     index = Object.fromEntries(DBPR_POSITIONAL_COLUMNS.map((f, i) => [f, i]));
     handle(cells, line);
-  });
+  }, { onError: (line, error) => result.invalid.push({ line, error }) });
 
   stores.licenses.upsert([...rows.values()]);
   result.imported = rows.size;

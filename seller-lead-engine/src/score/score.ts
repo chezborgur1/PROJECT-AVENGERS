@@ -6,7 +6,7 @@ import { isPersonName, splitPersonName, titleCaseName } from "../sources/normali
 import type { Stores } from "../store/index.ts";
 import { addDays, daysBetween, isoStamp, yearsSince } from "../util/dates.ts";
 import { ageBasisYear, ageMidpoint, estimateOwnerAge, type AgeEstimate } from "./age.ts";
-import { MIN_MATCH_CONFIDENCE, type PlacesClient, type PlacesDetails } from "./places.ts";
+import { MIN_MATCH_CONFIDENCE, PlaceNotFound, type PlacesClient, type PlacesDetails } from "./places.ts";
 
 // The likely-to-sell score (0 to 100) from docs/research/data.md §9. The
 // weights are a starting heuristic, not fitted to data; every component's
@@ -51,6 +51,22 @@ export const NEUTRAL = {
 
 /** Statuses `scoreAll` rescoring touches; anything further along the funnel is left alone. */
 export const RESCORE_STATUSES = ["new", "scored", "hold"] as const;
+
+/** The knock-out recorded for a business an external listing check found closed. */
+export const EXTERNAL_CLOSED_REASON = "closed (external listing check)";
+
+/**
+ * Excluded prospects are scored again too: most knock-outs depend on time or
+ * config (tenure grows past the minimum each year, a vertical, metro or
+ * exclusion list changes), so an excluded row is never excluded for good by
+ * a reason that has since lapsed (REVIEW_R1.md item 28). Suppression still
+ * knocks out on every run. The one exception: a closure found by an external
+ * listing check is only re-checked when that check runs again.
+ */
+export function rescorable(p: Pick<ProspectRow, "status" | "exclude_reason">, withPlaces: boolean): boolean {
+  if ((RESCORE_STATUSES as readonly string[]).includes(p.status)) return true;
+  return p.status === "excluded" && (withPlaces || p.exclude_reason !== EXTERNAL_CLOSED_REASON);
+}
 
 /** One prospect's score, every component's points and the plain-English reasons behind them. */
 export interface ScoreResult {
@@ -118,7 +134,8 @@ export function knockoutOf(p: ProspectRow, ctx: ScoreContext, tenureYears: numbe
   if (ctx.suppressedReason) return `suppressed (${ctx.suppressedReason})`;
   if (isInactiveStatus(p.entity_status)) return `inactive entity (status ${p.entity_status})`;
   if (licencesInactive(p.license_status)) return `inactive licence (status ${p.license_status})`;
-  if (ctx.places?.businessStatus === "CLOSED_PERMANENTLY") return "closed permanently (Places business status)";
+  // The stored reason never restates Maps content (Maps Platform terms 3.2.3, REVIEW_R1.md item 34).
+  if (ctx.places?.businessStatus === "CLOSED_PERMANENTLY") return EXTERNAL_CLOSED_REASON;
   const pattern = chainPattern(p, config.targeting.exclude_name_patterns);
   if (pattern) return `franchise or chain name (matches "${pattern}")`;
   const domain = excludedDomain(p, config.targeting.exclude_domains);
@@ -436,7 +453,7 @@ function fatiguePoints(p: ProspectRow, ctx: ScoreContext): { points: number; rea
   }
   if (ctx.places?.businessStatus === "CLOSED_TEMPORARILY") {
     points += 2;
-    reasons.push("Listed as temporarily closed");
+    reasons.push("External listing check suggests a possible closure");
   }
 
   points += unknown * NEUTRAL.fatigueUnknown;
@@ -493,9 +510,14 @@ export async function scoreAll(
   places?.purgeExpired();
 
   for (const p of stores.prospects.rows()) {
-    if (!(RESCORE_STATUSES as readonly string[]).includes(p.status)) continue;
+    if (!rescorable(p, Boolean(places))) continue;
     const refs = splitList(p.sources);
-    const entity = refs.map((r) => entities.get(r)).find((e) => e !== undefined);
+    // The entity the merge would choose: an active one first, then the latest annual report, so a
+    // dissolved predecessor never drives the annual-report signal (REVIEW_R1.md item 31).
+    const entity = refs
+      .map((r) => entities.get(r))
+      .filter((e): e is NonNullable<typeof e> => e !== undefined)
+      .sort((a, b) => Number(isInactiveStatus(a.status)) - Number(isInactiveStatus(b.status)) || b.last_annual_report_date.localeCompare(a.last_annual_report_date))[0];
     const lics = refs.map((r) => licenses.get(r)).filter((l): l is LicenseRow => l !== undefined);
     const ctx: ScoreContext = { config, today, suppressedReason: suppressionReason(p, suppression), ...(entity ? { entity } : {}), licenses: lics };
     const row: ProspectRow = { ...p };
@@ -520,7 +542,11 @@ export async function scoreAll(
           if (details) result = scoreProspect(p, { ...ctx, places: details });
         }
       } catch (err) {
-        errors.push({ prospectId: p.prospect_id, error: (err as Error).message.slice(0, 500) });
+        if (err instanceof PlaceNotFound) {
+          // A retired id: clear it so the next run re-matches, instead of paying a 404 every run for a year (item 29).
+          row.place_id = "";
+          row.place_id_checked_at = "";
+        } else errors.push({ prospectId: p.prospect_id, error: (err as Error).message.slice(0, 500) });
       }
     }
 

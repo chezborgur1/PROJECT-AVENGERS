@@ -262,8 +262,15 @@ export function assertRequiredColumns(label: string, file: string, required: str
  * Call `fn` for every CSV record in the file, reading it in chunks and
  * parsing only complete records (a newline outside quotes ends a record), so
  * large files stream in bounded memory. `line` is the line the record ends on.
+ * A record csv-parse cannot read (a stray quote inside a quoted name) goes
+ * to `onError` with its line and the rest of the file still imports: one bad
+ * row is reported and never blocks the rest (REVIEW_R1.md item 27).
  */
-export function forEachCsvRecord(file: string, fn: (cells: string[], line: number) => void, opts: { chunkBytes?: number } = {}): void {
+export function forEachCsvRecord(
+  file: string,
+  fn: (cells: string[], line: number) => void,
+  opts: { chunkBytes?: number; onError?: (line: number, error: string) => void } = {},
+): void {
   const fd = fs.openSync(file, "r");
   const buf = Buffer.alloc(opts.chunkBytes ?? 1 << 20);
   const decoder = new StringDecoder("utf8");
@@ -274,7 +281,33 @@ export function forEachCsvRecord(file: string, fn: (cells: string[], line: numbe
       linesBefore += countNewlines(text);
       return;
     }
-    const records = parse(text, { bom: true, relax_column_count: true, relax_quotes: true, skip_empty_lines: true, trim: true, info: true }) as unknown as { record: string[]; info: { lines: number } }[];
+    const options = { bom: true, relax_column_count: true, relax_quotes: true, skip_empty_lines: true, trim: true, info: true } as const;
+    type Parsed = { record: string[]; info: { lines: number } }[];
+    let records: Parsed;
+    try {
+      records = parse(text, options) as unknown as Parsed;
+    } catch {
+      // One record csv-parse cannot read (a stray quote inside a quoted name) would lose the whole
+      // batch, and its own skip option swallows the next record too. So parse record by record, split
+      // at the same quote-aware boundaries, and report only the bad ones (REVIEW_R1.md item 27).
+      records = [];
+      let from = 0;
+      let line = 0;
+      for (const cut of [...recordBoundaries(text), text.length - 1]) {
+        if (cut < from) continue;
+        const piece = text.slice(from, cut + 1);
+        from = cut + 1;
+        const pieceLines = countNewlines(piece);
+        if (piece.trim()) {
+          try {
+            for (const r of parse(piece, options) as unknown as Parsed) records.push({ record: r.record, info: { lines: line + r.info.lines } });
+          } catch (err) {
+            opts.onError?.(linesBefore + line + Math.max(1, pieceLines), `unreadable CSV record: ${(err as Error).message}`);
+          }
+        }
+        line += pieceLines;
+      }
+    }
     for (const { record, info } of records) fn(record, linesBefore + info.lines);
     linesBefore += countNewlines(text);
   };
@@ -302,16 +335,45 @@ function countNewlines(s: string): number {
   return n;
 }
 
-/** Index of the last newline that is outside a quoted field, or -1. */
-function lastRecordBoundary(s: string): number {
+/**
+ * Index of the last newline that is outside a quoted field, or -1. Quotes
+ * are read the way csv-parse reads them: a quote opens a quoted field only
+ * at the start of a field, "" inside one is an escaped quote, and a quote
+ * closes the field only before a comma, a line end or the end. So an inch
+ * mark in an unquoted field (ACME 12" PIPE CO) no longer flips the state for
+ * the rest of the file and buffers it all in one string (REVIEW_R1.md item 32).
+ */
+export function lastRecordBoundary(s: string): number {
+  return recordBoundaries(s).at(-1) ?? -1;
+}
+
+/** Every newline outside a quoted field, by the same rules as `lastRecordBoundary`. */
+export function recordBoundaries(s: string): number[] {
   let inQuote = false;
-  let last = -1;
+  let fieldStart = true;
+  const found: number[] = [];
   for (let i = 0; i < s.length; i++) {
     const c = s.charCodeAt(i);
-    if (c === 34) inQuote = !inQuote; // an escaped "" toggles twice
-    else if (c === 10 && !inQuote) last = i;
+    if (inQuote) {
+      if (c !== 34) continue;
+      if (s.charCodeAt(i + 1) === 34) {
+        i++; // escaped ""
+        continue;
+      }
+      const next = s.charCodeAt(i + 1);
+      if (Number.isNaN(next) || next === 44 || next === 10 || next === 13 || next === 32 || next === 9) inQuote = false;
+      continue;
+    }
+    if (c === 34 && fieldStart) {
+      inQuote = true;
+      fieldStart = false;
+    } else if (c === 44) fieldStart = true;
+    else if (c === 10) {
+      found.push(i);
+      fieldStart = true;
+    } else if (c !== 13 && c !== 32 && c !== 9) fieldStart = false;
   }
-  return last;
+  return found;
 }
 
 /** Who a person on a licence is, from the file's own words. Qualifiers and RMEs are hired licence holders, never owners (data.md verification note 7). */
@@ -469,7 +531,7 @@ export function importCsv(preset: string, file: string, stores: Stores, opts: { 
     } catch (err) {
       result.invalid.push({ line, error: (err as Error).message });
     }
-  });
+  }, { onError: (line, error) => result.invalid.push({ line, error }) });
   if (!index) throw new Error(`${file}: the file is empty (no header row)`);
 
   const values = [...rows.values()];

@@ -95,6 +95,13 @@ const DetailsResponseSchema = z.object({
 const PLACE_ID = /^[A-Za-z0-9_-]{10,300}$/;
 
 /** Places API (New) client: free ID-only matching, budgeted and cached details. */
+/** Places reported the id as not found (retired or stale): clear it and re-match. */
+export class PlaceNotFound extends Error {
+  constructor(readonly placeId: string) {
+    super(`Places id ${placeId} was not found (retired or stale)`);
+  }
+}
+
 export class PlacesClient {
   readonly cacheFile: string;
   private readonly apiKey: string;
@@ -154,10 +161,11 @@ export class PlacesClient {
       headers: { "X-Goog-Api-Key": this.apiKey, "X-Goog-FieldMask": DETAILS_FIELD_MASK },
     });
     if (res.status === 404) {
-      // A stale or retired id: drop anything cached and let the next run re-match.
+      // A stale or retired id: drop anything cached and tell the caller, which clears the stored id
+      // so the next run re-matches (REVIEW_R1.md item 29). null means "over budget" only.
       delete cache.details[placeId];
       this.save();
-      return null;
+      throw new PlaceNotFound(placeId);
     }
     if (!res.ok) throw new Error(`Places details failed for ${placeId}: HTTP ${res.status} ${await errorText(res)}`);
     const parsed = DetailsResponseSchema.safeParse(await res.json());

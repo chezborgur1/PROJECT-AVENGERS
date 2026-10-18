@@ -237,7 +237,7 @@ describe("fatigue signals", () => {
       { entity: makeEntity({ last_annual_report_date: "2024-02-01" }), licenses: [makeLicense({ expiration_date: "2026-10-30" })], places: makeDetails({ websiteUri: undefined, businessStatus: "CLOSED_TEMPORARILY" }) },
     );
     expect(r.components.fatigue).toBe(10);
-    expect(r.reasons).toContain("Listed as temporarily closed");
+    expect(r.reasons).toContain("External listing check suggests a possible closure");
   });
 });
 
@@ -269,7 +269,7 @@ describe("knock-outs", () => {
   });
 
   it("excludes a business Places lists as closed permanently", () => {
-    expectKnockout(score({}, { places: makeDetails({ businessStatus: "CLOSED_PERMANENTLY" }) }), /^closed permanently/);
+    expectKnockout(score({}, { places: makeDetails({ businessStatus: "CLOSED_PERMANENTLY" }) }), /^closed \(external listing check\)$/);
     expect(score({}, { places: makeDetails({ businessStatus: "OPERATIONAL" }) }).knockout).toBeUndefined();
   });
 

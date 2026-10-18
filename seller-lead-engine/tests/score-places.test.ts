@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { DETAILS_FIELD_MASK, matchConfidence, PlacesClient, placesQuery, SEARCH_FIELD_MASK } from "../src/score/places.ts";
+import { DETAILS_FIELD_MASK, matchConfidence, PlaceNotFound, PlacesClient, placesQuery, SEARCH_FIELD_MASK } from "../src/score/places.ts";
 import { makeProspect, tmpDir } from "./helpers.ts";
 
 const NOW = new Date("2026-10-18T14:00:00Z");
@@ -135,9 +135,9 @@ describe("Places details", () => {
     await expect(places.details(PLACE)).resolves.toBeNull();
   });
 
-  it("returns null for an id Google no longer knows", async () => {
+  it("reports an id Google no longer knows as not found, so the caller can re-match it", async () => {
     const { places } = client({ handler: () => ({ status: 404, body: { error: { status: "NOT_FOUND" } } }) });
-    expect(await places.details(PLACE)).toBeNull();
+    await expect(places.details(PLACE)).rejects.toThrow(PlaceNotFound);
   });
 
   it("omits optional fields Google leaves out and rejects a malformed body", async () => {

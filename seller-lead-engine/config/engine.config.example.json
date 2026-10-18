@@ -16,7 +16,7 @@
     "verticals.landscaping.license_codes": "None: Florida has no state landscaping licence, so landscapers are found from Sunbiz entity names and open POI categories.",
     "verticals.pest_control.license_codes": "Florida Department of Agriculture and Consumer Services pest control business licences, which use the JB number prefix. Confirm against the FDACS file before importing it with a csv preset.",
     "verticals.dental.license_codes": "Florida Board of Dentistry (Department of Health) dentist licences, which use the DN number prefix. Confirm against the DOH licence file before importing it with a csv preset.",
-    "metros": "Where AMB looks. counties are matched without the word County; zip_prefixes are used only when a record has no county. time_zone sets the recipient-local send window.",
+    "metros": "Where AMB looks. counties are matched without the word County; zip_prefixes are used only when a record has no county (Sunbiz entities never have one). Use a 3-digit prefix only when the whole prefix lies inside the metro's counties (335, 336, 337 do); 338, 342, 346 and 347 also cover Highlands, Hardee, DeSoto, Hernando and the Orlando area, so list those counties' zips as full 5-digit zips instead. time_zone sets today's date and the recipient-local send window.",
     "targeting.min_tenure_years": "Businesses younger than this (by licence or formation date) are knocked out.",
     "targeting.send_tiers": "Score tiers that may enter the email sequence; tier C waits in hold.",
     "targeting.tier_a_min": "Score at or above which a prospect is tier A.",
@@ -111,7 +111,7 @@
       "name": "Tampa Bay",
       "state": "FL",
       "counties": ["Hillsborough", "Pinellas", "Pasco", "Polk", "Manatee", "Sarasota"],
-      "zip_prefixes": ["335", "336", "337", "338", "342", "346", "347"],
+      "zip_prefixes": ["335", "336", "337"],
       "time_zone": "America/New_York"
     }
   },
