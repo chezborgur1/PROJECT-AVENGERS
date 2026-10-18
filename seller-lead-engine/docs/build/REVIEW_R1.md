@@ -1,6 +1,6 @@
 # Review round 1: unverified findings
 
-Three of six review lenses (compliance gate, sending logic, replies, data and scoring) finished before the session usage limit. None of these findings has been independently verified yet. Copy/legal and readiness/report/CLI lenses did not run.
+Four of six review lenses (compliance gate, sending logic, replies, data and scoring) finished before the session usage limit; the copy/legal and readiness/report/CLI lenses did not run. Each finding below was then checked against the code by hand and fixed, with a regression test in `tests/review-r1-replies.test.ts`, `tests/review-r1-sending.test.ts` or `tests/review-r1-data.test.ts`. See "Outcome" at the end.
 
 ## sending-logic
 
@@ -289,3 +289,42 @@ Three of six review lenses (compliance gate, sending logic, replies, data and sc
 **Scenario:** Sunbiz entities never carry a county, and buildProspects takes county only from licences. For entity-led prospects and for the `--metro-only` Sunbiz filter (sunbiz.ts:259), assignMetro therefore falls back to zip prefixes. Prefix 347 covers the Orlando area (Kissimmee 34741, Clermont 34711, Winter Garden 34787). 346 includes Hernando County (Spring Hill 34608, Brooksville 34601). 338 includes Highlands and Hardee (Sebring 33870, Wauchula 33873). 342 includes DeSoto (Arcadia 34266). An entity named KISSIMMEE PLUMBING INC at 34741 with no licence match becomes a tampa_bay prospect and is emailed, even though Osceola is not in the metro's county list.
 
 **Proposed fix:** Use 5-digit zip lists, or 3-digit prefixes only where the whole prefix lies inside the listed counties (335, 336, 337), plus explicit 5-digit zips for the shared prefixes.
+
+## Outcome
+
+Every finding was confirmed against the code and fixed. Where the fix differs from the reviewer's proposal, the note says how.
+
+| # | Outcome |
+|---|---|
+| 1 | Fixed: the planner skips a step that already has a touch; `runSend` first reconciles prospects with their delivered touches (`reconcileProspects`). |
+| 2 | Fixed: a failed touch recorded as drafted or sent moves the prospect forward; it is refused when the step was made again meanwhile. |
+| 3, 12 | Fixed: `preflight` fails and `send` refuses when `sending.unsubscribe_mailbox` is not a sending mailbox. |
+| 4 | Fixed: a new prospect the gate blocks or whose template cannot render goes to `hold` with the reason. |
+| 5 | Fixed: the CLI's today comes from the first metro's time zone; a real send for today waits for the send window. Per-recipient windows across several time zones are not built. |
+| 6 | Fixed: the next year's observed holidays count. |
+| 7 | Fixed: encoded words are 39 bytes, so every line stays under 76 characters. |
+| 8 | Fixed: opt-outs in the subject count, and an "unsubscribe T-..." request is matched to its prospect by the touch id. |
+| 9 | Fixed in the RUNBOOK: the reply search reaches back 7 days, and the daily task copies new mail and qualifies before it sends. |
+| 10 | Fixed: a processing failure resets the reply's class, so it is retried and its inbox file stays. |
+| 11, 17 | Fixed: text below or between ">" quotes is kept; an attribution followed by unquoted history still cuts; opt-out detection also reads the body without ">" lines. |
+| 13 | Fixed: suppression (by reply or by hand) cancels planned touches and renames their outbox files, cancels drafts made after the owner wrote, and lists older drafts for a person to check; `record` refuses a cancelled touch. Drafts in Gmail are not deleted through the API. |
+| 14 | Fixed in the RUNBOOK and the outbox README: set each account's name to `<sender_name>, AMB Advisory Services` and check it in the seed test; the routine stops if a sent message shows another name. |
+| 15, 33 | Fixed: one `excludedTarget` rule (an address entry is exact; a domain entry covers subdomains) in the gate, enrich and scoring. |
+| 16 | Fixed: domain rows are normalized when indexed; a value that is no domain fails closed. |
+| 18 | Fixed: harmless spam and lawyer phrases are removed before the complaint patterns; lawyer patterns need a threat. |
+| 19 | Fixed: "are you a bot?" keeps its class and fixed answer, and the reply is still read for facts. |
+| 20 | Fixed: band fields for SDE, recurring share and largest customer, used by scoring, the readiness check (a band gives a range from both ends) and the handoff; the timeline question's options map one to one. |
+| 21 | Fixed: a full mailbox (X.2.2 or quota wording) is a soft bounce. |
+| 22 | Fixed: the keyword fallback reads negations in the same clause, and only an acceptance marks the check as asked for. |
+| 23 | Fixed: no interested draft when the same reply puts the business outside the size range; next action asks a person to read it. |
+| 24 | Fixed: advisor stages (handed off, meeting, listed) stay put on a decline. |
+| 25 | Fixed: the "how did you get my email" answer is built from the prospect's own records and email source. |
+| 26 | Fixed: trade and industry words mark business names; a DBPR licensee is an individual only in "LAST, FIRST" form or with an employer or self-proprietor. |
+| 27 | Fixed: a batch with an unreadable record is parsed record by record and only the bad record is reported, with its line. |
+| 28 | Fixed: excluded prospects are rescored; a closure found by an external listing check waits for that check. |
+| 29 | Fixed: a 404 throws `PlaceNotFound`; scoring clears the id so the next run re-matches. |
+| 30 | Fixed: a role-based verdict on a person address counts only when every other person address is dead. |
+| 31 | Fixed: scoring uses the active entity with the latest annual report. |
+| 32 | Fixed: record boundaries follow csv-parse's quote rules. |
+| 34 | Fixed: stored reasons say "external listing check" instead of restating Places fields. |
+| 35 | Fixed in the example config: prefixes 335, 336 and 337 only, with a note to list shared-prefix zips in full. |

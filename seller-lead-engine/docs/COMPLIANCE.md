@@ -41,7 +41,11 @@ confirm the items in the last two sections before the first send.
 
 | Rule | Where in the code | Basis |
 |---|---|---|
-| Opt-out wording is caught by fixed patterns before any classifier, errs toward suppressing, and always wins over Claude | `detectOptOut` in `src/compliance/optout.ts`; `classifyByRules` in `src/replies/classify.ts` | 7704(a)(4) (10 business days); Gmail expects 2 days |
+| Opt-out wording is caught by fixed patterns before any classifier, errs toward suppressing, and always wins over Claude. It is looked for in the owner's new text (including text written below or between quoted lines), in the subject (a List-Unsubscribe mailto click arrives as "unsubscribe T-000123", matched to the prospect by that touch id), and in the body without its ">" lines | `detectOptOut` in `src/compliance/optout.ts`; `optOutIn` and `classifyByRules` in `src/replies/classify.ts`; `stripQuoted` and `unsubscribeTouchId` in `src/replies/parse.ts` | 7704(a)(4) (10 business days); Gmail expects 2 days |
+| Header unsubscribes go only to a mailbox the reply loop reads: `sending.unsubscribe_mailbox` is blank or one of `mailboxes`, else `preflight` fails and `send` refuses | `preflight` ("unsubscribe mailbox"); `SEND_BLOCKING_CHECKS` in `src/cli.ts` | 7704(a)(3) (the mechanism must work) |
+| A reply whose processing fails after it is classified is retried on the next run, never filed as done, so an opt-out whose suppression write failed is not lost | `processInbox` resets the class on failure | 7704(a)(4) |
+| Messages already made but not sent are cancelled when the owner opts out, complains, bounces or is suppressed by hand: planned outbox items are withdrawn, drafts made after the owner wrote are cancelled and listed for deletion, and `record` refuses a cancelled touch | `cancelPendingTouches` and `recordDelivery` in `src/sending/run.ts`; `processInbox`; `suppress` | 7704(a)(4) |
+| A complaint needs spam said of the email, a report, harassment, or a lawyer as a threat; "found this in my spam folder" or "my lawyer reviews contracts" is not one (a complaint suppresses for good and pauses sending) | `detectComplaint` in `optout.ts` | Avoids suppressing an interested owner by mistake |
 | Opt-outs, complaints, "not the owner" replies and hard bounces are suppressed in the same run, and the prospect becomes `dnc` | `processInbox` in `src/replies/process.ts`; `Suppression.add` | 7704(a)(4); research/compliance.md section 9 rule 2 |
 | **Suppression is permanent.** Rows are never deleted, purged or expired, and no command removes one. If the file has an unreadable row, `check` treats every address as suppressed until it is fixed | `Suppression` (`add` and `check` only); `SuppressionRowSchema` in `src/domain/schema.ts` | An opt-out never expires without later affirmative consent (7704(a)(4)) |
 | A suppressed or opted-out address is never sold, transferred or exported | `exportLeads` in `src/report/exportLeads.ts` | 7704(a)(4)(A)(iv) |
@@ -84,7 +88,9 @@ The engine is built to make these decisions explicit. It cannot make them.
 1. **The licensing allow-list and Florida 475.** Soliciting business sellers
    for compensation is licensed brokerage in Florida ("directs or assists in
    the procuring of prospects", Fla. Stat. 475.01), California (B&P
-   10131(a)) and roughly 15 other states, and that reaches AMB's own outreach,
+   10131(a)) and, by secondary lists that conflict and come from no regulator,
+   about 15 other states (research/compliance.md lists AK, AZ, CO, GA, ID,
+   MN, NE, NV, OR, SD, UT, WA, WI and WY). That reaches AMB's own outreach,
    as well as lead sales. Counsel confirms which states AMB may solicit in and
    under whose license, and signs `licensing_signoff`. Illinois needs
    business-broker registration (815 ILCS 307).

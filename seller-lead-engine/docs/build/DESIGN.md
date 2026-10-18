@@ -319,3 +319,34 @@ export function sendBlockers(config: EngineConfig, today: string): Promise<Prefl
 Paths: config and data from `engineEnv(deps.cwd)`; templates, `reference/` and samples from the package. `qualify` moves a `data/inbox/*.json` file to `data/inbox/processed/` only when every message in it has a classified `replies.csv` row (or came from an AMB mailbox); an unreadable file or a message whose classification failed stays for the next run. `check` refuses a suppressed or dnc prospect before building anything, writes the check, and drafts `emailBody` plus `aiDisclosure` and `buildFooter` through `assertSendable` (kind reply) as a draft in the owner's latest thread. `suppress` marks prospects whose email the new row matches (`Suppression.lookup`) dnc. `daily` skips the send when sync or qualify did not finish cleanly, because an unprocessed reply may be an opt-out.
 
 `src/demo.ts` (`runDemo(opts: { log; today; now; dataDir? }): Promise<DemoResult>`) runs the whole loop offline on `samples/tampa-bay/` through `runCli` in a temp data folder: config from `config/engine.config.example.json` with fictional mailboxes and FL licensed (postal address and `licensing_signoff` marked DEMO ONLY), a stub verifier and MX resolver, `MemoryTransport` (drafts written to `<data>/drafts/`), and the canned replies in `samples/tampa-bay/replies/*.json` (interested with figures, a question, "are you a bot?", an opt-out, a hard bounce, an out-of-office), delivered into the thread of each step-1 email. Claude is replaced by `standInClassifier`: the rules first, then the `claude_stand_in` answer stored with the one reply the rules cannot decide, else keywords; it never calls Claude. The engine calendar is fixed (build 2026-10-19, send 2026-10-20, replies 2026-10-21), so every run gives the same files; `today` and `now` are only reported. Docs: `README.md`, `CLAUDE.md`, `.env.example`, `config/engine.config.example.json`, `docs/RUNBOOK.md` (setup steps and the Claude scheduled-task prompts that replace the plan's Grok Bot), `docs/COMPLIANCE.md`, `docs/DATA_SOURCES.md`, `docs/PLAN_REVIEW.md` (what the fact-check changed in the plan). Root `README.md` row and `setup.sh` / `setup.bat` blocks.
+
+## Additions from the round-1 review (docs/build/REVIEW_R1.md)
+
+```ts
+// src/sending/run.ts
+export function reconcileProspects(stores: Stores, config: EngineConfig, opts: { today: string; now: Date }): ProspectRow[]   // runSend calls it first: a prospect lagging its drafted/sent touches moves forward
+export function cancelPendingTouches(stores: Stores, prospectId: string, reason: string, now: Date, opts?: { draftedAfter?: string }): { cancelled: TouchRow[]; draftsToDelete: TouchRow[] }   // processInbox and `suppress` call it on every suppression
+// recordDelivery(stores, touchId, result, now, config?): config lets a failed touch recorded as drafted/sent schedule the next step
+
+// src/compliance/gate.ts
+export function excludedTarget(email: string, entries: readonly string[]): boolean   // the one exclude_domains rule (gate, enrich, scoring)
+
+// src/replies/parse.ts, src/replies/classify.ts
+export function unquotedText(text: string): string; export function subjectCore(subject: string): string; export function unsubscribeTouchId(subject: string): string | undefined
+export function optOutIn(msg: InboundMessage, strippedText: string): boolean   // new text, subject, and body without ">" lines
+// ProcessReport.draftsToDelete lists Gmail drafts a person must delete after an opt-out
+
+// src/qualify/score.ts
+export function statedSde(lead: LeadRow): { low: number; high: number } | undefined
+export function parsePercentRange(text: string): { low: number; high: number } | undefined
+export function statedShare(lead: LeadRow, which: "recurring" | "top_customer"): { low: number; high: number } | undefined
+
+// src/score/score.ts, src/score/places.ts
+export const EXTERNAL_CLOSED_REASON: string; export function rescorable(p, withPlaces: boolean): boolean   // excluded prospects are rescored
+export class PlaceNotFound extends Error   // details() throws it on a 404; scoring clears the stored id
+
+// src/cli.ts
+export function engineTimeZone(config?: EngineConfig): string; export function sendWindowBlock(config: EngineConfig, now: Date): string | undefined
+```
+
+`LeadRowSchema` gains `sde_band`, `recurring_revenue_band` and `top_customer_band` (the owner's band as written). `preflight` gains the "unsubscribe mailbox" check, which blocks `send`.

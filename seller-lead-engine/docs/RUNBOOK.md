@@ -46,7 +46,10 @@ A person at AMB Advisory decides each of these. The engine cannot.
    trial. Avoid a new Microsoft 365 tenant for sending (new tenants get 10%
    of the external-recipient quota for 30 days).
 3. Create 2 or 3 mailboxes for real AMB people. Add a profile photo and the
-   person's signature.
+   person's signature. Set each account's name (Gmail Settings > Accounts >
+   Send mail as > edit info) to exactly `<sender_name>, AMB Advisory Services`,
+   the From name the compliance gate checks. In outbox mode the connector
+   sends under the account's own name, so this setting is what owners see.
 4. Publish the DNS records in section 3, turn on DKIM signing in the Admin
    console, and verify the domain in Google Postmaster Tools.
 5. Point the sending domain's website at the AMB site with an HTTPS 301
@@ -63,7 +66,9 @@ A person at AMB Advisory decides each of these. The engine cannot.
 1. Seed-test each mailbox: send a real email to a Gmail address, an
    Outlook.com address and a Microsoft 365 mailbox, open "Show original"
    and confirm `spf=pass`, `dkim=pass` with `d=<sending domain>` (not
-   `gappssmtp.com`) and `dmarc=pass`.
+   `gappssmtp.com`) and `dmarc=pass`. Confirm the From line reads
+   `<sender_name>, AMB Advisory Services <mailbox>`, as in each outbox
+   item's `fromName`.
 2. Download the October Sunbiz quarterly file and the DBPR construction
    licensee files ([DATA_SOURCES.md](DATA_SOURCES.md)). Before importing,
    check `SUNBIZ_LAYOUT` against the official definition and read the DBPR
@@ -258,15 +263,17 @@ Rules for this whole run:
 Steps:
 1. Restore state: if data/.git exists run `git -C data pull --rebase`, otherwise run `git clone "$DATA_REPO_URL" data`. If this fails, stop and report.
 2. Run `npm install`.
-3. Run `npm run engine -- daily`. Keep its output for the summary. If it reports a failed preflight, a compliance block or a paused mailbox, do not work around it.
-4. Today's date in America/New_York is the folder name: data/outbox/<YYYY-MM-DD>/. If that folder does not exist, go to step 6. Otherwise read its README.md and work through every unchecked item in order:
+3. Before anything is sent, copy new mail into data/inbox/ exactly as task (b) steps 3 and 4 describe. Opt-outs that arrived overnight or over the weekend must reach the engine before today's batch: `daily` processes the inbox first and refuses to send if that fails.
+4. Run `npm run engine -- daily`. Keep its output for the summary. If it reports a failed preflight, a compliance block or a paused mailbox, do not work around it.
+5. Today's date in America/New_York is the folder name: data/outbox/<YYYY-MM-DD>/. If that folder does not exist, go to step 6. Otherwise read its README.md and work through every unchecked item in order:
    a. Open <touchId>.json. If its "mailbox" is not the account the Gmail connector is signed in to, leave the item alone.
    b. If connector.tool is "create_draft", call create_draft with exactly connector.args. If connector.tool is "send_message", do not call it (send mode is OFF): run `npm run engine -- record <touchId> failed --error "send mode is off in the routine"` and report it.
    c. Right after create_draft returns, run the item's record command with the returned ids: `npm run engine -- record <touchId> drafted --draft-id <id> --thread-id <threadId>`.
    d. If create_draft fails, run `npm run engine -- record <touchId> failed --error "<the error text>"` and continue.
-5. Do not open, edit, send or delete any other draft or message.
-6. Save state: `git -C data add -A`, `git -C data commit -m "daily <date>"` (skip if nothing changed), `git -C data push`. If the push is rejected, run `git -C data pull --rebase` and push once more. If that fails, or a merge conflict appears, stop and report. Never force-push.
-7. Reply with a short summary: drafts created per mailbox, items failed and why, prospects blocked by the gate and the reasons, handoffs written, paused mailboxes and their reasons, and anything a person must do today (the drafts are waiting in Gmail for a person to send).
+   e. If <touchId>.json is missing and <touchId>.json.cancelled is there, the owner opted out after the item was written: skip it. If `record` refuses an item as cancelled, delete the draft you just created and report it.
+6. Do not open, edit, send or delete any other draft or message, except a draft step 5e or the qualify output tells you to delete.
+7. Save state: `git -C data add -A`, `git -C data commit -m "daily <date>"` (skip if nothing changed), `git -C data push`. If the push is rejected, run `git -C data pull --rebase` and push once more. If that fails, or a merge conflict appears, stop and report. Never force-push.
+8. Reply with a short summary: drafts created per mailbox, items failed and why, prospects blocked by the gate and the reasons, handoffs written, paused mailboxes and their reasons, drafts to delete because the owner opted out, and anything a person must do today (the drafts are waiting in Gmail for a person to send).
 ```
 
 When send mode is approved (section 4), a person changes `Send mode: OFF`
@@ -290,7 +297,7 @@ Rules for this whole run:
 Steps:
 1. Restore state: if data/.git exists run `git -C data pull --rebase`, otherwise run `git clone "$DATA_REPO_URL" data`. If this fails, stop and report.
 2. Run `npm install`.
-3. With the Gmail connector (signed in to the sending mailbox), call search_threads with query `in:inbox newer_than:2d`, then with query `from:(mailer-daemon OR postmaster) newer_than:2d`. Use pageSize 50 and follow pageToken until there are no more pages.
+3. With the Gmail connector (signed in to the sending mailbox), call search_threads with query `in:inbox newer_than:7d`, then with query `from:(mailer-daemon OR postmaster) newer_than:7d`. Use pageSize 50 and follow pageToken until there are no more pages. Seven days reaches back over a weekend and a holiday, so mail that arrived while no task ran (Friday evening to Monday morning) is still found; step 4a skips what is already saved.
 4. For each thread found, call get_thread with messageFormat PLAIN_TEXT (search previews show only the oldest messages, so always read the full thread). For each message in it that the sending mailbox did not send itself:
    a. Skip it if its message id already appears in the reply_id column of data/replies.csv, or as a file in data/inbox/ or data/inbox/processed/.
    b. Otherwise write data/inbox/<message id>.json containing exactly:
@@ -298,7 +305,7 @@ Steps:
 5. Run `npm run engine -- qualify`. Keep its output for the summary.
 6. Today's date in America/New_York is the folder name: data/outbox/<YYYY-MM-DD>/. If it exists, read its README.md and work through every unchecked item whose kind is reply and whose mailbox is the connected account: call create_draft with exactly connector.args (follow the README's rule for threading), then run `npm run engine -- record <touchId> drafted --draft-id <id> --thread-id <threadId>`. On failure run `npm run engine -- record <touchId> failed --error "<the error text>"`. Leave outreach items for the daily task.
 7. Save state: `git -C data add -A`, `git -C data commit -m "replies <timestamp>"` (skip if nothing changed), `git -C data push`. If the push is rejected, run `git -C data pull --rebase` and push once more. If that fails, or a merge conflict appears, stop and report. Never force-push.
-8. Reply with a short summary: messages saved, counts by class from the qualify output, addresses suppressed, mailboxes paused, drafted answers waiting in Gmail for review, and any lead that turned warm.
+8. Reply with a short summary: messages saved, counts by class from the qualify output, addresses suppressed, drafts to delete because the owner opted out (the qualify output lists them: delete each from Drafts), mailboxes paused, drafted answers waiting in Gmail for review, and any lead that turned warm.
 ```
 
 With `sending.transport = "gmail_api"`, steps 3 and 4 become

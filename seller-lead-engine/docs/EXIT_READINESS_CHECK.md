@@ -10,7 +10,7 @@ An owner who replies "yes" to the first email receives, by email and as a short 
 2. **The 3 things to look at first**, taken from the owner's own answers.
 3. **The 25-item checklist buyers use**, with each item marked Met, Gap or Unknown, and a note giving the owner's figure ("60 hours a week (per owner)").
 4. **A rough market range**, only when it can be supported (see "When a range is given" below). Otherwise the check says plainly why there is no number and offers a 20-minute call.
-5. **What would sharpen the picture**: tax returns that match the books, a list of add-backs, the lease, and a customer list. Owners are asked not to email these.
+5. **What would sharpen the picture**: tax returns that match the books, a list of add-backs, the lease, and a customer list. Owners are asked to hold on to these for now; they go in a restricted folder after an NDA if needed.
 6. **One paragraph on buyer financing**: most buyers of a business this size borrow through an SBA 7(a) loan, so earnings a buyer can verify on the tax returns set a ceiling on price.
 7. **The disclaimer** (below), every time.
 8. **One next step**: a 20-minute call with the named sender.
@@ -79,11 +79,11 @@ Each driver's points are the share of its checklist items that are met. An item 
 
 ## The intake questions
 
-The first reply asks for bands, never documents (offer.md §4). The engine asks at most 3 at a time, in this order, and never asks the same question twice (`src/qualify/questions.ts`). Questions 11 to 15 are the checklist facts; the lease question counts as answered when the owner owns the building.
+The first reply asks for bands, never documents (offer.md §4). An answer given as a band is stored as the band the owner wrote (`sde_band`, `recurring_revenue_band`, `top_customer_band`), never turned into a single figure. The engine asks at most 3 at a time, in this order, and never asks the same question twice (`src/qualify/questions.ts`). Questions 11 to 15 are the checklist facts; the lease question counts as answered when the owner owns the building.
 
 1. Revenue last full year: under $500K, $500K to $1M, $1M to $2M, $2M to $5M, or $5M and up.
 2. Owner earnings (SDE), meaning net profit plus your own pay and perks, interest, depreciation and one-time costs: under $100K, $100K to $250K, $250K to $500K, $500K to $1M, or $1M and up.
-3. Timeline: within 12 months, 12 to 24 months, or further out.
+3. Timeline: within 6 months, 6 to 12 months, 1 to 2 years, or further out.
 4. What prompted the interest.
 5. Number of employees, full-time and part-time.
 6. Your hours per week in the business.
@@ -103,10 +103,10 @@ A number reaches an owner only when every one of these holds:
 
 1. `readiness.include_range` is on.
 2. The vertical's row in `reference/multiples.json` is marked `verified: true`, meaning the figures were read from the source itself (FTC Act Section 5, 15 U.S.C. 45; the 1984 Advertising Substantiation statement).
-3. The owner stated SDE (or revenue, for the dental, property management, pest control and accounting revenue rows when SDE is not stated).
-4. SDE is at least $50K and below `readiness.max_sde_for_range` ($1M by default). Above that, buyers price on EBITDA and deal terms, and an advisor prices it directly.
+3. The owner stated SDE as a figure or a band (or revenue, for the dental, property management, pest control and accounting revenue rows when SDE is not stated).
+4. SDE is at least $50K and below `readiness.max_sde_for_range` ($1M by default); for a band, its low end is at least $50K and it has a top. Above that, buyers price on EBITDA and deal terms, and an advisor prices it directly.
 
-The range is the vertical's published middle half (lower to upper quartile of sale price over SDE), placed inside that band by the readiness score, plus or minus 15%, rounded to $25K. It always excludes real estate and working capital. It is never called an appraisal, a valuation or "what your business is worth".
+From a stated figure, the range is the vertical's published middle half (lower to upper quartile of sale price over SDE), placed inside that band by the readiness score, plus or minus 15%, rounded to $25K. From a band, it runs from the lower-quartile multiple on the band's low end to the upper-quartile multiple on its high end: wider, and never built on a point the owner did not state. It always excludes real estate and working capital. It is never called an appraisal, a valuation or "what your business is worth".
 
 The verified rows (BizBuySell valuation benchmarks, businesses sold nationally 2021-2025, read 2026-10-18):
 

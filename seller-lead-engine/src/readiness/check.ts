@@ -536,7 +536,8 @@ export function recordFacts(p: ProspectRow): Fact[] {
 
 /** A file-safe "<prospect_id> <business>" stem for checks and handoffs. */
 export function fileStem(p: Pick<ProspectRow, "prospect_id" | "business_name">): string {
-  const name = p.business_name.replace(/[\\/:*?"<>|\r\n\t]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+  // Trailing dots and spaces are dropped: "Inc." would give "Inc..md", and Windows refuses names ending in a dot.
+  const name = p.business_name.replace(/[\\/:*?"<>|\r\n\t]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80).replace(/[.\s]+$/, "");
   return `${p.prospect_id} ${name}`.trim();
 }
 

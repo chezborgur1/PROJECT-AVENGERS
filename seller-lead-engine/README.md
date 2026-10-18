@@ -217,3 +217,10 @@ classification (the tests mock all of them). Before relying on it:
   `verticals.<key>.prior` by hand).
 - **Score weights are a heuristic.** Refit them once about 50 replies are
   labelled qualified or not ([docs/DATA_SOURCES.md](docs/DATA_SOURCES.md)).
+- **Review coverage.** A first adversarial review
+  ([docs/build/REVIEW_R1.md](docs/build/REVIEW_R1.md)) covered compliance,
+  sending, replies, and data and scoring; its 35 findings were checked and
+  fixed, each with a regression test (`tests/review-r1-*.test.ts`). The copy
+  and legal lens and the readiness, report and CLI lens got only a lighter
+  check (em dashes, documented commands, doc accuracy) and are worth a full
+  pass before launch.
