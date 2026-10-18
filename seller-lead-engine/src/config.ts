@@ -115,7 +115,7 @@ export const EngineConfigSchema = z.object({
     holidays: z.array(ISO_DATE).default([]),
     /** Optional one-click unsubscribe endpoint (RFC 8058). Without it the List-Unsubscribe header carries the mailto only. */
     unsubscribe_url: z.string().default(""),
-    /** Mailbox that receives "unsubscribe" mailto requests; defaults to each sending mailbox. */
+    /** Mailbox that receives "unsubscribe" mailto requests; defaults to each sending mailbox. Must be one of `mailboxes` (preflight refuses others: nothing else is read). */
     unsubscribe_mailbox: z.string().default(""),
     /** Share of a day's new step-1 sends that may go to catch-all addresses. */
     max_catch_all_share: z.number().min(0).max(1).default(0.1),

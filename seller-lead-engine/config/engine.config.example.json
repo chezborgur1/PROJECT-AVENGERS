@@ -35,7 +35,7 @@
     "sending.send_days": "Weekdays that send (1 Monday to 7 Sunday): Tuesday to Thursday by default.",
     "sending.holidays": "Dates nothing is sent: the 2026 and 2027 US federal holidays (and the day after Thanksgiving) plus the December 21 to January 2 lull. Federal holidays are skipped even when missing here; extend the list each year.",
     "sending.unsubscribe_url": "Optional HTTPS one-click unsubscribe endpoint (RFC 8058). Blank: the List-Unsubscribe header carries a mailto only, and the body's reply-unsubscribe line is the opt-out.",
-    "sending.unsubscribe_mailbox": "Mailbox that receives unsubscribe mailto requests. Blank: each sending mailbox receives its own.",
+    "sending.unsubscribe_mailbox": "Mailbox that receives unsubscribe mailto requests. Blank (recommended): each sending mailbox receives its own. If set, it must be one of mailboxes, because the reply loop reads only those; preflight and send refuse anything else.",
     "sending.max_catch_all_share": "Most of a day's new step-1 emails that may go to catch-all addresses.",
     "guardrails": "Circuit breakers that pause a mailbox: hard-bounce rate over the window, hard bounces in one day, any spam complaint (until a person clears it with clear-pause), and the opt-out rate over the last 100 sends (pauses new step-1 emails).",
     "qualify": "The revenue and owner-earnings range AMB serves, the qualification score at which a lead is warm and handed off, and the timeline horizon in months. auto_send_replies is always false: AI-drafted replies are drafts for a person.",

@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { mailboxDomain, type EngineConfig } from "../config.ts";
 import { normalizeEmail, type MailboxLogRow, type ProspectRow, type TouchRow } from "../domain/schema.ts";
 import { adNotice, buildFooter, listUnsubscribeHeaders } from "../compliance/footer.ts";
@@ -68,11 +70,94 @@ export function gapAfter(config: EngineConfig, step: number): number {
   return gaps[step - 1] ?? gaps.at(-1) ?? 5;
 }
 
+/** Statuses whose prospect may be moved forward to match a delivered touch. */
+const RECONCILABLE: readonly ProspectRow["status"][] = ["new", "scored", "hold", "in_sequence"];
+
+/**
+ * Move each prospect forward to match its latest drafted or sent outreach
+ * touch, when the prospect record lags behind it: the prospects write failed
+ * after the transport accepted a message (a file open in Excel, a killed
+ * process), or `record` turned a failed touch into drafted or sent
+ * (REVIEW_R1.md items 1 and 2). Without this the planner would offer that
+ * step again, or never offer the next one. Returns the prospects moved.
+ */
+export function reconcileProspects(stores: Stores, config: EngineConfig, opts: { today: string; now: Date }): ProspectRow[] {
+  const holidays = noSendDates(config, opts.today);
+  const stamp = isoStamp(opts.now);
+  const latest = new Map<string, TouchRow>();
+  for (const t of stores.touches.rows()) {
+    if (t.kind !== "outreach" || (t.status !== "drafted" && t.status !== "sent") || !t.step) continue;
+    const prev = latest.get(t.prospect_id);
+    if (!prev || (prev.step ?? 0) < t.step) latest.set(t.prospect_id, t);
+  }
+  const moved: ProspectRow[] = [];
+  for (const p of stores.prospects.rows()) {
+    const t = latest.get(p.prospect_id);
+    if (!t || !RECONCILABLE.includes(p.status) || (p.sequence_step ?? 0) >= (t.step ?? 0)) continue;
+    const step = t.step ?? 1;
+    moved.push({
+      ...p,
+      status: "in_sequence",
+      sequence_step: step,
+      mailbox: t.mailbox,
+      last_touch_at: t.updated_at || t.created_at,
+      next_touch_date: step < 3 ? addBusinessDays(touchDay(t), gapAfter(config, step), holidays) : "",
+      thread_id: p.thread_id || t.thread_id,
+      updated_at: stamp,
+    });
+  }
+  if (moved.length) stores.prospects.upsert(moved);
+  return moved;
+}
+
+/**
+ * Cancel a prospect's messages that are queued but not sent when the owner
+ * opts out, complains, bounces or is suppressed by hand: the gate ran when
+ * each message was made, not when it leaves (REVIEW_R1.md item 13).
+ *
+ * - A planned touch is cancelled, and its outbox file renamed so the Claude
+ *   routine cannot create it.
+ * - A drafted touch made after the owner wrote (`draftedAfter`, the reply's
+ *   time) is cancelled and listed for a person to delete from Drafts. One made
+ *   before may already have been sent by a person (in draft mode the engine
+ *   never learns), and a reply in its thread suggests it was: it keeps its
+ *   status and is listed as "check Drafts" only. Without `draftedAfter` (a
+ *   suppression by hand), every drafted touch is listed that way.
+ */
+export function cancelPendingTouches(
+  stores: Stores,
+  prospectId: string,
+  reason: string,
+  now: Date,
+  opts: { draftedAfter?: string } = {},
+): { cancelled: TouchRow[]; draftsToDelete: TouchRow[] } {
+  const stamp = isoStamp(now);
+  const mine = stores.touches.rows().filter((t) => t.prospect_id === prospectId);
+  const after = opts.draftedAfter;
+  const cancelNow = mine.filter((t) => t.status === "planned" || (t.status === "drafted" && after !== undefined && (t.created_at || "") > after));
+  const cancelled = cancelNow.map((t) => ({
+    ...t,
+    status: "cancelled" as const,
+    error: `cancelled before sending: ${reason}${t.status === "drafted" ? `; delete Gmail draft ${t.draft_id || "(id not recorded)"} from ${t.mailbox} by hand` : ""}`.slice(0, 500),
+    updated_at: stamp,
+  }));
+  if (cancelled.length) stores.touches.upsert(cancelled);
+  for (const t of cancelNow) {
+    if (t.status !== "planned" || !t.planned_for) continue;
+    const file = path.join(stores.dir.outbox, t.planned_for, `${t.touch_id}.json`);
+    if (fs.existsSync(file)) fs.renameSync(file, `${file}.cancelled`);
+  }
+  const cancelledIds = new Set(cancelled.map((t) => t.touch_id));
+  const stillDrafted = mine.filter((t) => t.status === "drafted" && !cancelledIds.has(t.touch_id) && after === undefined);
+  return { cancelled, draftsToDelete: [...cancelled.filter((t) => cancelNow.find((c) => c.touch_id === t.touch_id)!.status === "drafted"), ...stillDrafted] };
+}
+
 /** Plan, render, gate and deliver today's outreach. */
 export async function runSend(stores: Stores, config: EngineConfig, opts: { today: string; now: Date; transport: Transport; templatesDir: string; dryRun?: boolean }): Promise<SendReport> {
   const { today, now, transport } = opts;
   const dryRun = Boolean(opts.dryRun);
   const mode = config.sending.mode;
+  if (!dryRun) reconcileProspects(stores, config, { today, now });
   const plan = planDay(stores, config, { today });
   const report: SendReport = { date: today, mode, transport: transport.name, delivered: [], blocked: [], failed: [], plan, dryRun, completed: [] };
   const stamp = isoStamp(now);
@@ -99,6 +184,16 @@ export async function runSend(stores: Stores, config: EngineConfig, opts: { toda
     for (const p of finished) prospects.set(p.prospect_id, p);
   }
 
+  // A new prospect the gate blocks (or whose template cannot render) goes to hold with the reason, so it
+  // does not take a send slot again every send day; rescoring or a fix brings it back (REVIEW_R1.md item 4).
+  // Follow-ups stay in sequence: the reply loop or a person settles those.
+  const holdBlocked = (p: ProspectRow, why: string) => {
+    if (p.status !== "scored") return;
+    const held: ProspectRow = { ...p, status: "hold", exclude_reason: why.slice(0, 300), updated_at: stamp };
+    stores.prospects.upsert([held]);
+    prospects.set(p.prospect_id, held);
+  };
+
   for (const item of plan.items) {
     const p = prospects.get(item.prospectId);
     const mailbox = findMailbox(config, item.mailbox);
@@ -111,6 +206,7 @@ export async function runSend(stores: Stores, config: EngineConfig, opts: { toda
       rendered = renderStep(item.step, p, config, mailbox, { templatesDir: opts.templatesDir, today });
     } catch (err) {
       report.failed.push({ prospectId: p.prospect_id, error: `render: ${(err as Error).message}` });
+      if (!dryRun) holdBlocked(p, `render failed: ${(err as Error).message}`);
       continue;
     }
 
@@ -175,7 +271,10 @@ export async function runSend(stores: Stores, config: EngineConfig, opts: { toda
         continue;
       }
       report.blocked.push({ prospectId: p.prospect_id, reasons: err.reasons });
-      if (!dryRun) stores.touches.append([{ ...row, status: "cancelled", error: `blocked: ${err.reasons.join("; ")}` }]);
+      if (!dryRun) {
+        stores.touches.append([{ ...row, status: "cancelled", error: `blocked: ${err.reasons.join("; ")}` }]);
+        holdBlocked(p, `blocked at send: ${err.reasons.join("; ")}`);
+      }
       continue;
     }
     if (dryRun) {
@@ -272,12 +371,25 @@ const ORDER: Record<TouchRow["status"], number> = { planned: 0, failed: 1, draft
  * touch is final. A failed outreach touch steps the prospect back, so the
  * planner offers that step again.
  */
-export function recordDelivery(stores: Stores, touchId: string, result: { status: "drafted" | "sent" | "failed"; messageId?: string; threadId?: string; draftId?: string; error?: string }, now: Date): void {
+export function recordDelivery(
+  stores: Stores,
+  touchId: string,
+  result: { status: "drafted" | "sent" | "failed"; messageId?: string; threadId?: string; draftId?: string; error?: string },
+  now: Date,
+  /** Needed to schedule the next step when a failed touch is recorded as drafted or sent. */
+  config?: EngineConfig,
+): void {
   const touch = stores.touches.rows().find((t) => t.touch_id === touchId);
   if (!touch) throw new Error(`Touch ${touchId} not found in touches.csv`);
   if (touch.status === "sent" || touch.status === "cancelled") {
     if (touch.status === result.status) return;
     throw new Error(`Touch ${touchId} is already ${touch.status}; it cannot move to ${result.status}`);
+  }
+  // A failed touch may be retried only while no other message holds its step: otherwise the owner
+  // would get the same step twice (REVIEW_R1.md item 2).
+  if (touch.status === "failed" && result.status !== "failed" && touch.kind === "outreach") {
+    const rival = stores.touches.rows().find((t) => t.touch_id !== touch.touch_id && t.prospect_id === touch.prospect_id && t.kind === "outreach" && t.step === touch.step && t.status !== "failed" && t.status !== "cancelled");
+    if (rival) throw new Error(`Touch ${touchId} failed and step ${touch.step} has since been made again as ${rival.touch_id} (${rival.status}); record that one instead, and delete any duplicate draft`);
   }
   if (ORDER[result.status] < ORDER[touch.status] && result.status !== "failed") {
     throw new Error(`Touch ${touchId} is ${touch.status}; status only moves forward, not to ${result.status}`);
@@ -310,4 +422,6 @@ export function recordDelivery(stores: Stores, touchId: string, result: { status
     return;
   }
   if (result.threadId && (!p.thread_id || touch.step === 1)) stores.prospects.upsert([{ ...p, thread_id: result.threadId, updated_at: stamp }]);
+  // A failed touch recorded as drafted or sent after all: move the prospect forward with it.
+  if (touch.status === "failed" && config) reconcileProspects(stores, config, { today: stamp.slice(0, 10), now });
 }

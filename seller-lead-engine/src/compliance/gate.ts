@@ -24,6 +24,28 @@ import type { Suppression } from "./suppression.ts";
 // known. Verification is not required: the owner's own address just reached
 // us.
 
+/**
+ * True when an address is excluded by targeting.exclude_domains: an entry
+ * with "@" names one exact address; any other entry (a leading "@" allowed)
+ * names a domain and every subdomain of it, the same rule scoring applies
+ * (REVIEW_R1.md items 15 and 33).
+ */
+export function excludedTarget(email: string, entries: readonly string[]): boolean {
+  const e = normalizeEmail(email);
+  const domain = e.slice(e.lastIndexOf("@") + 1);
+  for (const raw of entries) {
+    const entry = raw.trim().toLowerCase();
+    if (!entry) continue;
+    if (entry.includes("@") && !entry.startsWith("@")) {
+      if (normalizeEmail(entry) === e) return true;
+      continue;
+    }
+    const d = entry.replace(/^@/, "").replace(/\.$/, "");
+    if (d && (domain === d || domain.endsWith(`.${d}`))) return true;
+  }
+  return false;
+}
+
 /** Thrown when a message fails any compliance check; `reasons` lists every one. */
 export class ComplianceError extends Error {
   constructor(readonly reasons: string[]) {
@@ -47,7 +69,7 @@ export function assertSendable(msg: OutgoingMessage, ctx: { config: EngineConfig
     reasons.push(`suppression check failed: ${(err as Error).message}`);
   }
   const domain = emailDomain(msg.to);
-  if (domain && config.targeting.exclude_domains.some((d) => d.trim().toLowerCase().replace(/^.*@/, "") === domain || normalizeEmail(d) === normalizeEmail(msg.to))) {
+  if (domain && excludedTarget(msg.to, config.targeting.exclude_domains)) {
     reasons.push(`recipient ${msg.to} is on targeting.exclude_domains`);
   }
 

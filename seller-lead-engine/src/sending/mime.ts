@@ -46,8 +46,9 @@ export function encodeHeaderText(s: string): string {
   const words: string[] = [];
   let chunk = "";
   for (const ch of s) {
-    // 45 bytes encode to 60 base64 characters, plus the 12 of "=?UTF-8?B?" and "?=".
-    if (Buffer.byteLength(chunk + ch, "utf8") > 45) {
+    // 39 bytes encode to 52 base64 characters, plus the 12 of "=?UTF-8?B?" and "?=": 64, so even the
+    // first word after "Subject: " stays inside RFC 2047's 76-character line (REVIEW_R1.md item 7).
+    if (Buffer.byteLength(chunk + ch, "utf8") > 39) {
       words.push(chunk);
       chunk = "";
     }

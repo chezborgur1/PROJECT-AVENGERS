@@ -61,8 +61,17 @@ export class Suppression {
     if (r.value_type === "email") {
       if (!this.byEmail.has(canonicalEmail(r.value))) this.byEmail.set(canonicalEmail(r.value), r);
     } else if (r.value_type === "domain") {
-      if (!this.byDomain.has(r.value)) this.byDomain.set(r.value, r);
-    } else if (!this.byProspect.has(r.value)) this.byProspect.set(r.value, r);
+      // Rows typed in a spreadsheet ("Acme.com", "@acme.com", "acme.com.") must still suppress (REVIEW_R1.md item 16).
+      // A value that is no domain at all is an unreadable row: check() then fails closed.
+      let d: string;
+      try {
+        d = normalizeValue(r.value, "domain");
+      } catch (err) {
+        this.invalid.push({ line: 0, key: r.value, error: (err as Error).message });
+        return;
+      }
+      if (!this.byDomain.has(d)) this.byDomain.set(d, r);
+    } else if (!this.byProspect.has(r.value.trim())) this.byProspect.set(r.value.trim(), r);
   }
 
   /** The row that suppresses this address (exact, +tag-less, its domain or a parent) or prospect, or undefined. */

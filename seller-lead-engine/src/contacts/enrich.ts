@@ -1,4 +1,5 @@
 import type { EngineConfig } from "../config.ts";
+import { excludedTarget } from "../compliance/gate.ts";
 import { EMAIL_SOURCES, normalizeEmail, type ContactRow, type ProspectRow } from "../domain/schema.ts";
 import { matchKey } from "../sources/normalize.ts";
 import type { Stores } from "../store/index.ts";
@@ -86,7 +87,6 @@ export async function enrichContacts(
 ): Promise<{ found: number; verified: number; byStatus: Record<string, number> }> {
   const stamp = isoStamp(opts.now);
   const suppression = new Suppression(stores.suppression);
-  const excluded = new Set(config.targeting.exclude_domains.map((d) => d.trim().toLowerCase().replace(/^.*@/, "")));
   const contactsByKey = new Map<string, ContactRow[]>();
   for (const c of stores.contacts.rows()) {
     const k = matchKey(c.business_name, c.zip);
@@ -106,7 +106,8 @@ export async function enrichContacts(
       const email = normalizeEmail(raw);
       if (!email.includes("@") || candidates.some((c) => c.email === email)) return;
       const domain = email.slice(email.lastIndexOf("@") + 1);
-      if (excluded.has(domain) || excluded.has(email)) return;
+      // One rule with the gate and scoring: an address entry excludes that address, a domain entry the domain and its subdomains.
+      if (excludedTarget(email, config.targeting.exclude_domains)) return;
       if (suppression.check(email, undefined)) return;
       candidates.push({ email, source, url, rank: emailRank(email, owner), existing });
     };

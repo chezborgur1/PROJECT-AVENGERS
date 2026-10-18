@@ -65,7 +65,9 @@ export function notSendDayReason(config: EngineConfig, date: string): string | u
   const weekday = isoWeekday(date);
   if (!config.sending.send_days.includes(weekday)) return `weekday ${weekday} is not in sending.send_days (${config.sending.send_days.join(", ")})`;
   if (config.sending.holidays.includes(date)) return `${date} is in sending.holidays`;
-  if (usFederalHolidays(Number(date.slice(0, 4))).includes(date)) return `${date} is a US federal holiday`;
+  // The next year too: New Year's Day on a Saturday is observed on Friday December 31 (REVIEW_R1.md item 6).
+  const year = Number(date.slice(0, 4));
+  if ([...usFederalHolidays(year), ...usFederalHolidays(year + 1)].includes(date)) return `${date} is a US federal holiday`;
   return undefined;
 }
 
@@ -154,6 +156,14 @@ export function planDay(stores: Stores, config: EngineConfig, opts: { today: str
     const reply = stoppedBy.get(p.prospect_id);
     if (reply) {
       skip(`replied (${reply.class || "unclassified"} reply ${reply.reply_id}): no follow-up`);
+      continue;
+    }
+    // A touch for this step already exists (a rerun after a partial write, or a record that came in
+    // late): never plan the same step twice (REVIEW_R1.md item 1). runSend's reconcile step moves the
+    // prospect forward to match its touches.
+    const existingStep = (touchesBy.get(p.prospect_id) ?? []).find((t) => t.step === step && occupies(t));
+    if (existingStep) {
+      skip(`step ${step} already has touch ${existingStep.touch_id} (${existingStep.status}): not planned again`);
       continue;
     }
     const prev = (touchesBy.get(p.prospect_id) ?? []).filter((t) => t.step === step - 1 && occupies(t)).at(-1);

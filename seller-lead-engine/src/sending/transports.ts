@@ -84,6 +84,7 @@ function outboxReadmeHeader(today: string): string {
     "5. A follow-up draft carries `replyToMessageId`, so Gmail threads it under step 1 and quotes the earlier email below the new text. That is expected. If an item has a `threadId` but no `replyToMessageId`, call get_thread on the threadId and use the id of the latest message sent from the item's mailbox.",
     "6. Right after the tool returns, run the item's record command with the returned ids, so the engine knows the email exists and can schedule the next step.",
     "7. If the tool fails, run `npm run engine -- record <touchId> failed --error \"<the error>\"` and move on.",
+    "8. If `<touchId>.json` is missing (there is a `<touchId>.json.cancelled` instead), the owner opted out after the item was written: skip it and tick it. If `record` refuses an item as cancelled, delete the draft you just made.",
     "",
   ].join("\n");
 }

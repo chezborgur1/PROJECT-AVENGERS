@@ -6,6 +6,7 @@ import { assertSendable, ComplianceError } from "../compliance/gate.ts";
 import { findMailbox } from "../compliance/lint.ts";
 import { canonicalEmail, Suppression } from "../compliance/suppression.ts";
 import { qualScore, nextStage } from "../qualify/score.ts";
+import { cancelPendingTouches } from "../sending/run.ts";
 import type { Transport } from "../sending/transports.ts";
 import { idAllocator } from "../store/csvTable.ts";
 import type { Stores } from "../store/index.ts";
@@ -57,6 +58,8 @@ export interface ProcessReport {
   ownMessages: number;
   /** Authentication or policy bounces: the mailbox pauses, the recipient is not suppressed. */
   policyBounces: number;
+  /** Gmail drafts made for owners who have since opted out: a person deletes each one so it is never sent. */
+  draftsToDelete: { touchId: string; mailbox: string; draftId: string }[];
 }
 
 /** Classes from a person, as opposed to machine mail. */
@@ -159,7 +162,7 @@ export async function processInbox(
   const { now, today, transport } = opts;
   const classify = opts.classify ?? classifyReply;
   const stamp = isoStamp(now);
-  const report: ProcessReport = { received: opts.messages.length, duplicates: 0, unmatched: 0, byClass: {}, suppressed: 0, drafted: 0, errors: [], ownMessages: 0, policyBounces: 0 };
+  const report: ProcessReport = { received: opts.messages.length, duplicates: 0, unmatched: 0, byClass: {}, suppressed: 0, drafted: 0, errors: [], ownMessages: 0, policyBounces: 0, draftsToDelete: [] };
 
   const suppression = new Suppression(stores.suppression);
   const existing = new Map(stores.replies.rows().map((r) => [r.reply_id, r]));
@@ -317,7 +320,13 @@ export async function processInbox(
 
       // ---- prospect state
       let p: ProspectRow = { ...prospect, updated_at: stamp };
-      if (reason) p = { ...p, status: "dnc", next_touch_date: "" };
+      if (reason) {
+        p = { ...p, status: "dnc", next_touch_date: "" };
+        // Messages already made but not sent (an outbox item, a Gmail draft) are cancelled too:
+        // the gate ran when they were made, not when they would leave (REVIEW_R1.md item 13).
+        const { draftsToDelete } = cancelPendingTouches(stores, p.prospect_id, `${reason} in reply ${msg.id}`, now, { draftedAfter: row.received_at || stamp });
+        report.draftsToDelete.push(...draftsToDelete.map((t) => ({ touchId: t.touch_id, mailbox: t.mailbox, draftId: t.draft_id })));
+      }
       else if (HUMAN_CLASSES.has(cls.class) && p.status !== "dnc") p = { ...p, status: "replied", next_touch_date: "" };
       else if (cls.class === "auto_reply" && p.status === "in_sequence") {
         const resume = addDays(today, AUTO_REPLY_PAUSE_DAYS);

@@ -60,7 +60,7 @@ import { clearPause, mailboxHealth, touchDay } from "./sending/health.ts";
 import { notSendDayReason, planDay, type DayPlan } from "./sending/planner.ts";
 import { preflight, type PreflightItem } from "./sending/preflight.ts";
 import { coldWeek, mailboxDailyCap } from "./sending/ramp.ts";
-import { bodyHash, recordDelivery, runSend } from "./sending/run.ts";
+import { bodyHash, cancelPendingTouches, recordDelivery, runSend } from "./sending/run.ts";
 import { GmailApiTransport, OutboxTransport, type Transport } from "./sending/transports.ts";
 import { importCsv } from "./sources/csvImport.ts";
 import { importDbpr } from "./sources/dbpr.ts";
@@ -68,7 +68,7 @@ import { assignMetro, buildProspects } from "./sources/merge.ts";
 import { entityInMetro, importSunbiz } from "./sources/sunbiz.ts";
 import { openStores, type Stores } from "./store/index.ts";
 import { nextId } from "./store/csvTable.ts";
-import { addDays, isoStamp, localDate } from "./util/dates.ts";
+import { addDays, isoStamp, localDate, localTime } from "./util/dates.ts";
 
 /** The package folder: templates, reference data, samples and the example config live here. */
 export const PACKAGE_ROOT = path.resolve(import.meta.dirname, "..");
@@ -222,7 +222,7 @@ export const cmdPreflight: Command = async (_args, deps) => {
 };
 
 /** The preflight checks whose failure stops `send`: the legal facts and sender identity in config. */
-export const SEND_BLOCKING_CHECKS: readonly string[] = ["postal address", "licensed states", "mailboxes", "sender names", "separate sending domain"];
+export const SEND_BLOCKING_CHECKS: readonly string[] = ["postal address", "licensed states", "mailboxes", "sender names", "separate sending domain", "unsubscribe mailbox"];
 
 /** The failing config and licensing items. DNS is not looked up here (the stub resolver keeps send offline); `preflight` checks DNS. */
 export async function sendBlockers(config: EngineConfig, today: string): Promise<PreflightItem[]> {
@@ -365,6 +365,14 @@ export const cmdSend: Command = async (args, deps) => {
     deps.log("Fix config/engine.config.json, then run: npm run engine -- preflight");
     return 1;
   }
+  // A real send today waits for the send window (daily passes --date today, so it is held too); a dry
+  // run, or a --date other than today (a catch-up or test run), is not.
+  const forToday = (flag(args, "--date") ?? deps.today) === deps.today;
+  const windowBlock = !dryRun && forToday ? sendWindowBlock(config, deps.now) : undefined;
+  if (windowBlock) {
+    deps.log(`Not sending now: ${windowBlock}. Run again inside the window.`);
+    return 1;
+  }
   const stores = storesOf(deps);
   warnInvalid(deps, stores);
   const transport = transportFor(deps, config, stores, today);
@@ -405,6 +413,7 @@ export const cmdRecord: Command = async (args, deps) => {
     touchId,
     { status: status as (typeof RECORD_STATUSES)[number], ...(draftId ? { draftId } : {}), ...(messageId ? { messageId } : {}), ...(threadId ? { threadId } : {}), ...(error ? { error } : {}) },
     deps.now,
+    configOf(deps),
   );
   deps.log(`Recorded ${touchId} as ${status}.`);
   return 0;
@@ -497,6 +506,7 @@ export const cmdQualify: Command = async (_args, deps) => {
   deps.log(`Suppressed ${r.suppressed}, drafted ${r.drafted} answer(s), duplicates ${r.duplicates}, unmatched ${r.unmatched}, own messages ${r.ownMessages}, authentication bounces ${r.policyBounces}.`);
   if (r.policyBounces) deps.log("An authentication bounce paused its mailbox: check SPF, DKIM and DMARC, run preflight, then clear-pause.");
   for (const e of r.errors) deps.log(`  ${e.replyId}: ${e.error}`);
+  for (const d of r.draftsToDelete) deps.log(`  Delete the Gmail draft ${d.draftId || `for ${d.touchId}`} in ${d.mailbox}: the owner opted out, so it must not be sent.`);
   const moved = moveProcessed(stores, config);
   deps.log(`Moved ${moved.length} file(s) to ${shown(deps, path.join(stores.dir.inbox, "processed"))}.`);
   if (transport instanceof OutboxTransport && r.drafted) deps.log(`Reply drafts: ${shown(deps, transport.dir)} (a person reviews and sends each one).`);
@@ -655,6 +665,12 @@ export const cmdSuppress: Command = async (args, deps) => {
   const hits = stores.prospects.rows().filter((p) => p.status !== "dnc" && p.email && suppression.lookup(p.email));
   stores.prospects.upsert(hits.map((p) => ({ ...p, status: "dnc" as const, next_touch_date: "", updated_at: stamp })));
   deps.log(`Suppressed ${valueType} ${value} (${reason}). ${hits.length} prospect(s) marked dnc${hits.length ? `: ${hits.map((p) => p.prospect_id).join(", ")}` : ""}.`);
+  // Queued messages for those prospects must not go out later (REVIEW_R1.md item 13).
+  for (const p of hits) {
+    const { cancelled, draftsToDelete } = cancelPendingTouches(stores, p.prospect_id, `suppressed by hand (${reason})`, deps.now);
+    if (cancelled.length) deps.log(`  ${p.prospect_id}: cancelled ${cancelled.map((t) => t.touch_id).join(", ")}.`);
+    for (const t of draftsToDelete) deps.log(`  Check Drafts in ${t.mailbox}: if the draft for ${t.touch_id}${t.draft_id ? ` (${t.draft_id})` : ""} is still there, delete it; it must not be sent.`);
+  }
   return 0;
 };
 
@@ -829,10 +845,34 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
   return fn(args, deps);
 }
 
-/** The only clock read: today in the machine's own time zone, and now. */
+/**
+ * The engine's time zone: the first target metro's, else Eastern. "Today"
+ * is the recipients' date, not the machine's: a UTC cloud container at 9pm
+ * Eastern on Monday must not run Tuesday's batch (REVIEW_R1.md item 5).
+ */
+export function engineTimeZone(config: EngineConfig | undefined): string {
+  return (config && Object.values(config.metros)[0]?.time_zone) || "America/New_York";
+}
+
+/** Why a real send (mode "send") must wait for the recipient-local send window, or undefined inside it. Drafts are not held: a person sends them. */
+export function sendWindowBlock(config: EngineConfig, now: Date): string | undefined {
+  if (config.sending.mode !== "send") return undefined;
+  const tz = engineTimeZone(config);
+  const at = localTime(now, tz);
+  const { window_start: start, window_end: end } = config.sending;
+  return at >= start && at < end ? undefined : `it is ${at} in ${tz}, outside the send window ${start} to ${end} (sending.window_start / window_end)`;
+}
+
+/** The only clock read: now, and today in the engine's time zone. */
 async function main(): Promise<void> {
   const now = new Date();
-  const today = localDate(now, Intl.DateTimeFormat().resolvedOptions().timeZone);
+  let config: EngineConfig | undefined;
+  try {
+    config = loadConfig(engineEnv(process.cwd()).configFile);
+  } catch {
+    config = undefined; // commands that need the config report the problem themselves
+  }
+  const today = localDate(now, engineTimeZone(config));
   process.exitCode = await runCli(process.argv.slice(2), { cwd: process.cwd(), env: process.env, today, now, log: (line) => console.log(line) });
 }
 

@@ -124,6 +124,21 @@ export async function preflight(
     onPrimary.length ? `${onPrimary.map((m) => m.email).join(", ")} send from the firm's primary domain ${primary}: cold email must use a separate sending domain` : `sending domains: ${[...new Set(config.mailboxes.map((m) => mailboxDomain(m.email)))].join(", ") || "none"}`,
   );
 
+  // Header unsubscribes are mailed to sending.unsubscribe_mailbox; the reply loop reads only the sending
+  // mailboxes, so a requests box outside them would never be read and those opt-outs never honoured
+  // (REVIEW_R1.md items 3 and 12; CAN-SPAM 15 U.S.C. 7704(a)(4)).
+  const unsub = config.sending.unsubscribe_mailbox.trim().toLowerCase();
+  const unsubRead = !unsub || config.mailboxes.some((m) => m.email.toLowerCase() === unsub);
+  add(
+    "unsubscribe mailbox",
+    unsubRead,
+    !unsub
+      ? "header unsubscribes go to each sending mailbox, which the reply loop reads"
+      : unsubRead
+        ? `${unsub} is a sending mailbox the reply loop reads`
+        : `sending.unsubscribe_mailbox ${unsub} is not one of config.mailboxes, so nothing reads the unsubscribe requests sent there: leave it blank or use a sending mailbox`,
+  );
+
   // DNS per sending domain.
   for (const domain of [...new Set(config.mailboxes.map((m) => mailboxDomain(m.email)).filter(Boolean))]) {
     const spf = await txt(resolve, domain);
