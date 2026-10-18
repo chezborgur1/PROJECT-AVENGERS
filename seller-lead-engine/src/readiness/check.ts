@@ -4,6 +4,7 @@ import type { EngineConfig } from "../config.ts";
 import type { LeadRow, ProspectRow } from "../domain/schema.ts";
 import type { Stores } from "../store/index.ts";
 import { pickMultiple, pickRevenueMultiple, type MultipleRow } from "./multiples.ts";
+import { parseMoneyRange, statedShare } from "../qualify/score.ts";
 
 // The free exit-readiness check an interested owner receives: a 0-100
 // readiness score over 8 drivers, a 25-item checklist of what buyers and SBA
@@ -90,7 +91,12 @@ const ITEMS: readonly ItemDef[] = [
   {
     driver: "Financial records",
     item: "You know your owner earnings (SDE) for the last full year",
-    evaluate: (l) => (l.sde !== undefined ? { status: "met", note: `SDE about ${money(l.sde)} (per owner).` } : unknown("Unknown: SDE not stated yet.")),
+    evaluate: (l) =>
+      l.sde !== undefined
+        ? { status: "met", note: `SDE about ${money(l.sde)} (per owner).` }
+        : l.sde_band.trim()
+          ? { status: "met", note: `SDE ${l.sde_band.trim()} (per owner).` }
+          : unknown("Unknown: SDE not stated yet."),
   },
   {
     driver: "Financial records",
@@ -133,11 +139,13 @@ const ITEMS: readonly ItemDef[] = [
     driver: "Customer concentration",
     item: "No single customer is more than 15% of revenue",
     evaluate: (l) => {
-      const c = l.top_customer_pct;
-      if (c === undefined) return unknown("Unknown: largest customer share not stated yet.");
-      return c <= 15
-        ? { status: "met", note: `Largest customer about ${c}% of revenue (per owner).` }
-        : { status: "gap", note: `Largest customer about ${c}% of revenue (per owner). Buyers discount for the risk of losing that customer.` };
+      const c = statedShare(l, "top_customer");
+      if (!c) return unknown("Unknown: largest customer share not stated yet.");
+      const said = shareWords(l.top_customer_pct, l.top_customer_band);
+      // A band counts by its high end: "10% to 20%" may be above 15%.
+      if (c.high <= 15) return { status: "met", note: `Largest customer ${said} of revenue (per owner).` };
+      if (c.low > 15) return { status: "gap", note: `Largest customer ${said} of revenue (per owner). Buyers discount for the risk of losing that customer.` };
+      return unknown(`Largest customer ${said} of revenue (per owner): above or below 15% is not clear yet.`);
     },
   },
   { driver: "Customer concentration", item: "Customer agreements are in writing and can be assigned to a buyer", evaluate: () => unknown() },
@@ -146,18 +154,24 @@ const ITEMS: readonly ItemDef[] = [
     driver: "Recurring revenue",
     item: "At least 30% of revenue repeats (maintenance plans, contracts, routes)",
     evaluate: (l) => {
-      const r = l.recurring_revenue_pct;
-      if (r === undefined) return unknown("Unknown: recurring share not stated yet.");
-      return r >= 30 ? { status: "met", note: `About ${r}% recurring (per owner).` } : { status: "gap", note: `About ${r}% recurring (per owner).` };
+      const r = statedShare(l, "recurring");
+      if (!r) return unknown("Unknown: recurring share not stated yet.");
+      const said = shareWords(l.recurring_revenue_pct, l.recurring_revenue_band);
+      if (r.low >= 30) return { status: "met", note: `${said} recurring (per owner).` };
+      if (r.high < 30) return { status: "gap", note: `${said} recurring (per owner).` };
+      return unknown(`${said} recurring (per owner): above or below 30% is not clear yet.`);
     },
   },
   {
     driver: "Recurring revenue",
     item: "More than 60% of revenue repeats",
     evaluate: (l) => {
-      const r = l.recurring_revenue_pct;
-      if (r === undefined) return unknown("Unknown: recurring share not stated yet.");
-      return r > 60 ? { status: "met", note: `About ${r}% recurring (per owner).` } : { status: "gap", note: `About ${r}% recurring (per owner), below 60%.` };
+      const r = statedShare(l, "recurring");
+      if (!r) return unknown("Unknown: recurring share not stated yet.");
+      const said = shareWords(l.recurring_revenue_pct, l.recurring_revenue_band);
+      if (r.low >= 60 && !(r.low === 60 && r.high === 60)) return { status: "met", note: `${said} recurring (per owner).` };
+      if (r.high <= 60) return { status: "gap", note: `${said} recurring (per owner), not above 60%.` };
+      return unknown(`${said} recurring (per owner): above or below 60% is not clear yet.`);
     },
   },
   // Team depth (offer.md §2, item 6).
@@ -269,6 +283,9 @@ function computeRange(lead: LeadRow, p: ProspectRow, config: EngineConfig, score
   const key = config.verticals[p.vertical]?.multiples_key ?? "";
   if (!key) return { rangeWithheld: "No benchmark is set up for this kind of business yet." };
   const sde = lead.sde;
+  // A band ("$250K to $500K") gives a range from both ends of the band: wider, and never a point the owner did not state.
+  const band = sde === undefined && lead.sde_band.trim() ? parseMoneyRange(lead.sde_band) : undefined;
+  if (band) return rangeFromBand(lead, band, key, config, score, multiples);
   if (sde !== undefined && sde >= config.readiness.max_sde_for_range) {
     return { rangeWithheld: `Owner earnings of ${money(sde)} (per owner) are at a size where buyers price on EBITDA and deal terms, so an advisor prices it with you directly.` };
   }
@@ -307,6 +324,35 @@ function computeRange(lead: LeadRow, p: ProspectRow, config: EngineConfig, score
       high,
       method: `${row.method === "sde" ? "Multiple of owner earnings (SDE)" : "Multiple of annual revenue"}, excluding real estate`,
       basis: `The middle half of ${row.vertical} sold on BizBuySell (${row.as_of}) sold for ${fmtX(row.low)} to ${fmtX(row.high)} times ${what}, with a median of ${fmtX(row.mid)}. Applied to ${baseLabel}, placed within that band by the readiness score of ${score}.`,
+      source: `${row.source}, ${row.as_of} (${row.source_url})`,
+    },
+  };
+}
+
+/** How the owner put a share: "about 25%" for a figure, the band as written otherwise. */
+function shareWords(figure: number | undefined, band: string): string {
+  return figure !== undefined ? `About ${figure}%` : band.trim();
+}
+
+/** The range from an owner-stated SDE band: the benchmark's low multiple on the band's low end to its high multiple on the high end. */
+function rangeFromBand(lead: LeadRow, band: { low: number; high: number }, key: string, config: EngineConfig, score: number, multiples: MultipleRow[]): Pick<ReadinessCheck, "range" | "rangeWithheld"> {
+  const said = lead.sde_band.trim();
+  if (!Number.isFinite(band.high) || band.low >= config.readiness.max_sde_for_range) {
+    return { rangeWithheld: `Owner earnings of ${said} (per owner) are at a size where buyers price on EBITDA and deal terms, so an advisor prices it with you directly.` };
+  }
+  if (band.low < MIN_SDE_FOR_RANGE) return { rangeWithheld: `Owner earnings of ${said} (per owner) span too wide a range for a rule of thumb to be useful; a figure would let me give one.` };
+  const row = pickMultiple(multiples, key, band.low);
+  if (!row) return { rangeWithheld: "No checked market benchmark is on file for this kind of business yet, so I would rather not put a number on it." };
+  let low = round25k(row.low * band.low);
+  let high = round25k(row.high * band.high);
+  if (low < 25_000) low = 25_000;
+  if (high <= low) high = low + 25_000;
+  return {
+    range: {
+      low,
+      high,
+      method: "Multiple of owner earnings (SDE), excluding real estate",
+      basis: `The middle half of ${row.vertical} sold on BizBuySell (${row.as_of}) sold for ${fmtX(row.low)} to ${fmtX(row.high)} times SDE, with a median of ${fmtX(row.mid)}. Applied to both ends of the owner earnings band of ${said} (per owner); a single figure would narrow it. Readiness score ${score}.`,
       source: `${row.source}, ${row.as_of} (${row.source_url})`,
     },
   };
@@ -414,7 +460,7 @@ export function buildReadinessCheck(lead: LeadRow, p: ProspectRow, config: Engin
     md.push("");
   }
   md.push("## What would sharpen this", "");
-  md.push("Three years of tax returns and matching profit and loss statements, a list of add-backs (owner pay, personal and one-time costs), the lease with its options, and a customer list with each customer's share of revenue. Please do not email these: if they are needed later, they go in a restricted folder after an NDA.", "");
+  md.push("Three years of tax returns and matching profit and loss statements, a list of add-backs (owner pay, personal and one-time costs), the lease with its options, and a customer list with each customer's share of revenue. Please hold on to these for now: if they are needed later, they go in a restricted folder after an NDA.", "");
   md.push("## How buyer financing affects price", "");
   md.push("Most buyers of a business this size borrow through an SBA 7(a) loan. The lender sizes the loan to the cash flow the tax returns show, so earnings a buyer can verify set a ceiling on what most buyers can pay. Under the SBA's current lending rules (SOP 50 10 8), an SBA-financed purchase cannot include an earnout, and the seller can stay on for a transition of up to 12 months.", "");
   md.push("## Next step", "");
@@ -461,12 +507,12 @@ export function toldFacts(lead: LeadRow): Fact[] {
   const yn = (v: "Y" | "N" | "") => (v === "Y" ? "Yes" : v === "N" ? "No" : undefined);
   return [
     fact("Annual revenue", num(lead.revenue, money) ?? (lead.revenue_band || undefined)),
-    fact("Owner earnings (SDE)", num(lead.sde, money)),
+    fact("Owner earnings (SDE)", num(lead.sde, money) ?? (lead.sde_band || undefined)),
     fact("Employees", num(lead.employees, String)),
     fact("Years owned", num(lead.years_owned, String)),
     fact("Owner hours a week", num(lead.owner_hours_per_week, String)),
-    fact("Recurring revenue", num(lead.recurring_revenue_pct, (n) => `${n}%`)),
-    fact("Largest customer", num(lead.top_customer_pct, (n) => `${n}% of revenue`)),
+    fact("Recurring revenue", num(lead.recurring_revenue_pct, (n) => `${n}%`) ?? (lead.recurring_revenue_band || undefined)),
+    fact("Largest customer", num(lead.top_customer_pct, (n) => `${n}% of revenue`) ?? (lead.top_customer_band ? `${lead.top_customer_band} of revenue` : undefined)),
     fact("Premises", lead.owns_real_estate === "Y" ? "Owned" : lead.owns_real_estate === "N" ? "Leased" : undefined),
     fact("Licence held by", lead.license_holder || undefined),
     fact("Timeline", TIMELINE_WORDS[lead.timeline]),

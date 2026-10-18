@@ -4,15 +4,14 @@ import type { InboundMessage, OutgoingMessage } from "../domain/messages.ts";
 import { normalizeEmail, type LeadRow, type ProspectRow, type ReplyRow, type SuppressionRow, type TouchRow } from "../domain/schema.ts";
 import { assertSendable, ComplianceError } from "../compliance/gate.ts";
 import { findMailbox } from "../compliance/lint.ts";
-import { detectOptOut } from "../compliance/optout.ts";
 import { canonicalEmail, Suppression } from "../compliance/suppression.ts";
 import { qualScore, nextStage } from "../qualify/score.ts";
 import type { Transport } from "../sending/transports.ts";
 import { idAllocator } from "../store/csvTable.ts";
 import type { Stores } from "../store/index.ts";
 import { addDays, isoStamp } from "../util/dates.ts";
-import { classifyByRules, classifyReply, withoutOwnText, type Classification, type ReplyFacts } from "./classify.ts";
-import { addressOf, detectBounce, POLICY_SNIPPET_PREFIX, stripQuoted, type BounceType } from "./parse.ts";
+import { classifyByRules, classifyReply, optOutIn, type Classification, type ReplyFacts } from "./classify.ts";
+import { addressOf, detectBounce, POLICY_SNIPPET_PREFIX, stripQuoted, unsubscribeTouchId, type BounceType } from "./parse.ts";
 import { draftResponse, withQuestionsAsked } from "./respond.ts";
 
 // The reply loop: every received message is matched to a prospect,
@@ -125,6 +124,9 @@ export function newLead(p: ProspectRow): LeadRow {
     manager_in_place: "",
     runs_without_owner: "",
     lease_years_left: undefined,
+    sde_band: "",
+    recurring_revenue_band: "",
+    top_customer_band: "",
     updated_at: "",
   };
 }
@@ -173,6 +175,7 @@ export async function processInbox(
   for (const p of prospects.values()) if (p.thread_id && !byThread.has(p.thread_id)) byThread.set(p.thread_id, p.prospect_id);
   const byEmail = new Map<string, string>();
   for (const p of prospects.values()) if (p.email) byEmail.set(canonicalEmail(p.email), p.prospect_id);
+  const byTouch = new Map(touches.filter((t) => t.prospect_id).map((t) => [t.touch_id, t.prospect_id]));
 
   // Oldest first, so a later "please stop" after an earlier "yes" is the decision that stands.
   const ordered = [...opts.messages].sort((a, b) => (stampOf(a.date) || a.date).localeCompare(stampOf(b.date) || b.date));
@@ -193,8 +196,14 @@ export async function processInbox(
 
     const stripped = stripQuoted(msg.text);
     const bounce = detectBounce(msg);
+    // A List-Unsubscribe mailto click arrives in a new thread, possibly from another address than the
+    // one mailed (a forwarded info@ inbox); its subject names the touch, and so the prospect.
+    const unsubTouch = unsubscribeTouchId(msg.subject);
     const prospectId =
-      byThread.get(msg.threadId) ?? byEmail.get(canonicalEmail(from)) ?? (bounce?.recipient ? byEmail.get(canonicalEmail(bounce.recipient)) : undefined);
+      byThread.get(msg.threadId) ??
+      byEmail.get(canonicalEmail(from)) ??
+      (bounce?.recipient ? byEmail.get(canonicalEmail(bounce.recipient)) : undefined) ??
+      (unsubTouch ? byTouch.get(unsubTouch) : undefined);
     const prospect = prospectId ? prospects.get(prospectId) : undefined;
 
     const row: ReplyRow = {
@@ -232,8 +241,9 @@ export async function processInbox(
       report.errors.push({ replyId: msg.id, error: row.error });
       continue;
     }
-    // A rule-detected opt-out wins over any classifier, injected ones included.
-    if (cls.class !== "bounce" && detectOptOut(withoutOwnText(stripped)) && !cls.optOut) cls = { ...cls, class: "unsubscribe", optOut: true };
+    // A rule-detected opt-out wins over any classifier, injected ones included: the new text, the
+    // subject (a List-Unsubscribe mailto click) and the body without its ">" lines all count.
+    if (cls.class !== "bounce" && !cls.optOut && optOutIn(msg, stripped)) cls = { ...cls, class: "unsubscribe", optOut: true };
 
     row.class = cls.class;
     row.classifier = cls.classifier;
@@ -340,7 +350,15 @@ export async function processInbox(
         stores.replies.upsert([row]);
         continue;
       }
-      let draft = draftResponse(cls, { prospect: p, lead, config, mailbox: replyMailbox(config, msg, p), subject: msg.subject });
+      // A reply that also puts the business outside the size AMB serves closes the lead: no draft
+      // promising a check nobody will prepare; a person reads it (REVIEW_R1.md item 23).
+      // The truthful "are you a bot?" answer and the "not interested" apology still go out.
+      const fit = qualScore(lead, config).fit;
+      const outOfRange =
+        (cls.class === "interested" || cls.class === "question") &&
+        (fit === "too_small" || fit === "too_large") &&
+        nextStage(lead, cls.class, qualScore(lead, config), config) === "lost";
+      let draft = outOfRange ? null : draftResponse(cls, { prospect: p, lead, config, mailbox: replyMailbox(config, msg, p), subject: msg.subject });
       if (draft && row.response_touch_id) draft = null; // a draft was already made for this message on an earlier run
 
       let delivered = false;
@@ -411,7 +429,7 @@ export async function processInbox(
         ...lead,
         qual_score: q.score,
         stage,
-        next_action: nextAction(cls, stage, delivered),
+        next_action: outOfRange ? `Read the reply: outside the size AMB serves (${q.fit.replace("_", " ")}); answer by hand if at all` : nextAction(cls, stage, delivered),
         nurture_date: stage === "nurture" ? addDays(today, NURTURE_DAYS[lead.timeline] ?? 180) : lead.nurture_date,
         updated_at: stamp,
       };
@@ -419,8 +437,19 @@ export async function processInbox(
       stores.leads.upsert([lead]);
       stores.replies.upsert([row]);
     } catch (err) {
-      row.error = `processing failed: ${(err as Error).message}`.slice(0, 500);
-      stores.replies.upsert([row]);
+      // The class goes back to blank so the next run processes the message again (and its inbox file
+      // stays put): an opt-out whose suppression write failed, say on a file open in Excel, must be
+      // retried, never filed as done (REVIEW_R1.md item 10). Suppression.add is idempotent, and the
+      // response_touch_id kept on the row stops a second draft.
+      row.error = `processing failed (will retry): ${(err as Error).message}`.slice(0, 500);
+      row.class = "";
+      row.classifier = "";
+      row.opt_out = "";
+      try {
+        stores.replies.upsert([row]);
+      } catch {
+        // The replies table itself is unwritable; with no row the message is retried anyway.
+      }
       report.errors.push({ replyId: msg.id, error: row.error });
     }
   }

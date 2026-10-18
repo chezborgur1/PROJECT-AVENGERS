@@ -84,6 +84,11 @@ function sinceYear(p: ProspectRow): string {
 
 const VENDOR_NAMES: Record<string, string> = { hunter: "Hunter", snov: "Snov.io", apollo: "Apollo" };
 
+/** "a", "a and b", "a, b and c". */
+function joinAnd(items: readonly string[]): string {
+  return items.length <= 1 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
 interface FaqCtx {
   prospect: ProspectRow;
   config: EngineConfig;
@@ -97,14 +102,27 @@ const FAQ: readonly { key: string; re: RegExp; answer: (c: FaqCtx) => string }[]
     key: "source",
     re: /\bhow did you (get|find|obtain|come across)\b|\bwhere did you (get|find)\b|\bgot my (e-?mail|address|info|information|name)\b|\b(e-?mail|address|info|name) from\b|\bwho gave you\b/i,
     answer: ({ prospect }) => {
-      // True for this engine: prospects come from licence-board and Secretary of State files, emails from the business's own site.
+      // Built from the prospect's own provenance so it is true for this owner: the records it was
+      // found in, and where the address came from (REVIEW_R1.md item 25: never name a website that
+      // was not a source).
+      const records: string[] = [];
+      if (prospect.license_numbers.trim()) records.push("public licence records");
+      if (prospect.formation_date || prospect.entity_status || /\b(sunbiz|csv):/.test(prospect.sources)) records.push("state business filings");
+      if (/\bopen_poi:/.test(prospect.sources)) records.push("a public business listing dataset");
+      const found = records.length ? `I found ${prospect.business_name} through ${joinAnd(records)}.` : `I found ${prospect.business_name} in public business records.`;
       const vendor = VENDOR_NAMES[prospect.email_source];
       const address = vendor
         ? ` Your email address came from ${vendor}, a business contact directory.`
-        : prospect.email_source === "website" || prospect.email_source === ""
+        : prospect.email_source === "website"
           ? " Your email address is the one listed on the business's website."
-          : "";
-      return `I found ${prospect.business_name} through the business's public licence and state filing records and the business's website.${address}`;
+          : prospect.email_source === "import"
+            ? " Your email address came from a business contact list."
+            : prospect.email_source === "manual"
+              ? ` Your email address was added by hand by our team.`
+              : prospect.email_source === "reply"
+                ? " Your email address is the one you wrote from."
+                : "";
+      return `${found}${address}`;
     },
   },
   {

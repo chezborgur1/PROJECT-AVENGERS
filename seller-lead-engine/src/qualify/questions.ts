@@ -44,7 +44,7 @@ export const INTAKE_QUESTIONS: readonly IntakeQuestion[] = [
   {
     key: "timeline",
     field: "timeline",
-    text: "If you did sell, when might that be: within 12 months, 12 to 24 months, or further out?",
+    text: "If you did sell, when might that be: within 6 months, 6 to 12 months, 1 to 2 years, or further out?",
     priority: 3,
   },
   {
@@ -123,9 +123,13 @@ export const INTAKE_QUESTIONS: readonly IntakeQuestion[] = [
   },
 ];
 
-/** True when the lead already has the fact a question asks for (revenue counts as answered by a figure or a band; the lease question by owning the premises). */
+/** True when the lead already has the fact a question asks for (revenue, SDE and the two shares count as answered by a figure or a band; the lease question by owning the premises). */
 export function isAnswered(lead: LeadRow, q: IntakeQuestion): boolean {
   if (q.key === "revenue") return lead.revenue !== undefined || lead.revenue_band.trim() !== "";
+  // The band questions are answered by a figure or a band.
+  if (q.key === "sde") return lead.sde !== undefined || lead.sde_band.trim() !== "";
+  if (q.key === "recurring") return lead.recurring_revenue_pct !== undefined || lead.recurring_revenue_band.trim() !== "";
+  if (q.key === "top_customer") return lead.top_customer_pct !== undefined || lead.top_customer_band.trim() !== "";
   // An owner who owns the building has no lease to ask about.
   if (q.key === "lease_years" && lead.owns_real_estate === "Y") return true;
   const v = lead[q.field];

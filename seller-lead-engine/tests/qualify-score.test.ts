@@ -122,10 +122,19 @@ describe("nextStage", () => {
     expect(nextStage(makeLead(p), "interested", qualScore(makeLead(p), config), config)).toBe("engaged");
   });
 
-  it("closes the lead on an opt-out, a complaint, wrong person or a decline, even from an advisor stage", () => {
+  it("closes the lead on an opt-out, a complaint or wrong person, even from an advisor stage", () => {
     const lead = full({ stage: "meeting" });
     const q = qualScore(lead, config);
-    for (const cls of ["unsubscribe", "complaint", "wrong_person", "not_interested"] as const) expect(nextStage(lead, cls, q, config)).toBe("lost");
+    for (const cls of ["unsubscribe", "complaint", "wrong_person"] as const) expect(nextStage(lead, cls, q, config)).toBe("lost");
+    expect(nextStage(full({ stage: "engaged" }), "not_interested", q, config)).toBe("lost");
+  });
+
+  it("leaves a decline from an advisor stage for a person to read", () => {
+    // "No thanks on the questionnaire, see you Tuesday" must not drop a booked meeting.
+    for (const stage of ["handed_off", "meeting", "listed"] as const) {
+      const lead = full({ stage });
+      expect(nextStage(lead, "not_interested", qualScore(lead, config), config)).toBe(stage);
+    }
   });
 
   it("leaves advisor stages alone on other replies, and machine mail never moves a lead", () => {

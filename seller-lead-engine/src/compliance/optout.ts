@@ -52,6 +52,23 @@ export function detectOptOut(text: string): boolean {
   return OPT_OUT_PATTERNS.some((re) => re.test(t));
 }
 
+// A complaint suppresses the owner for good and pauses the mailbox, so,
+// unlike an opt-out, it must not fire on an interested owner's harmless
+// words: "found this in my spam folder", "is this spam?" (a question, which
+// the question class answers), or "my lawyer will look it over first"
+// (docs/build/REVIEW_R1.md item 18). Spam counts when it is said OF the
+// email; a lawyer counts only as a threat aimed at AMB. Claude's own
+// complaint flag still applies on top of these rules.
+
+/** Harmless phrases removed before the complaint patterns run. */
+const BENIGN_SPAM: readonly RegExp[] = [
+  /\b(in|to|into|from|out of|check(ed|ing)?) (my|the|your|our) (spam|junk)( (folder|filter|box|bin|tab|mail|section))?\b/g,
+  /\b(went|go|goes|going|landed|ended up|got sent|was sent|caught) (in|to|into) (my |the |our )?(spam|junk)\b/g,
+  /\bspam (folder|filter|box|bin|tab|section|check)\b/g,
+  /\b(is|was) (this|it|that) (a |an )?(spam|scam)( email| message)?\s*\?/g,
+  /\bnot (a )?spam\b/g,
+];
+
 const COMPLAINT_PATTERNS: readonly RegExp[] = [
   /\bspam(med|ming|mer|mers|my)?\b/,
   /\breport(ed|ing)? (you|this|your|it|the email|this email)\b/,
@@ -59,7 +76,11 @@ const COMPLAINT_PATTERNS: readonly RegExp[] = [
   /\bharass(ed|es|ing|ment)?\b/,
   /\bcease and desist\b/,
   /\battorney general\b/,
-  /\blawyers?\b/,
+  // A lawyer or attorney as a threat to AMB, not as someone who reviews paperwork.
+  /\b(lawyers?|attorneys?)\b[^.?!]{0,40}\b(contact|call|sue|suing|letter|hear from|deal with|going after) (you|your|amb)\b/,
+  /\byou('ll| will) (be )?hear(ing)? from (my|our) (lawyers?|attorneys?)\b/,
+  /\b(my|our) (lawyers?|attorneys?) (will|is going to|are going to|shall) (hear about|be in touch|be contacting|contact|call|deal with)\b/,
+  /\b(contact|contacting|call|calling|calling in|get|getting) (my|our|a) (lawyers?|attorneys?)( on you| about (you|this|your))\b/,
   /\blegal action\b/,
   /\bsue (you|your)\b/,
   /\bftc\b/,
@@ -68,7 +89,8 @@ const COMPLAINT_PATTERNS: readonly RegExp[] = [
 
 /** True when the reply is hostile or threatens a report or legal action; it also suppresses and can pause the mailbox. */
 export function detectComplaint(text: string): boolean {
-  const t = normalize(text);
+  let t = normalize(text);
   if (!t) return false;
+  for (const re of BENIGN_SPAM) t = t.replace(re, " ");
   return COMPLAINT_PATTERNS.some((re) => re.test(t));
 }

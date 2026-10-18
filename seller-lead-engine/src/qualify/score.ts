@@ -68,6 +68,38 @@ export function statedRevenue(lead: LeadRow): { low: number; high: number } | un
 
 const usd = (n: number) => (n >= 1e6 ? `$${+(n / 1e6).toFixed(2)}M` : `$${Math.round(n / 1e3)}K`);
 
+/** The owner-earnings (SDE) range a lead states: the figure when given, else the band, else undefined. */
+export function statedSde(lead: LeadRow): { low: number; high: number } | undefined {
+  if (lead.sde !== undefined) return { low: lead.sde, high: lead.sde };
+  return lead.sde_band.trim() ? parseMoneyRange(lead.sde_band) : undefined;
+}
+
+/**
+ * A percent range from an owner's words: "10% to 30%" -> 10..30, "under
+ * 10%" -> 0..10, "over 60%" -> 60..100, "about 25%" -> 25..25. Undefined
+ * when no percentage is found.
+ */
+export function parsePercentRange(text: string): { low: number; high: number } | undefined {
+  const t = text.toLowerCase().replace(/\s+/g, " ").trim();
+  const nums = [...t.matchAll(/(\d+(?:\.\d+)?)\s?(%|percent|pct)?/g)].map((m) => ({ n: Number(m[1]), at: m.index }));
+  const pcts = nums.filter((x) => x.n >= 0 && x.n <= 100);
+  if (!pcts.length || !/%|percent|pct/.test(t)) return undefined;
+  const first = pcts[0]!;
+  const before = t.slice(0, first.at).trim();
+  if (/(under|below|less than|up to|<)$/.test(before)) return { low: 0, high: first.n };
+  if (/(over|above|more than|at least|>)$/.test(before) || /\+/.test(t.slice(first.at, first.at + 6))) return { low: first.n, high: 100 };
+  if (pcts.length >= 2) return { low: Math.min(first.n, pcts[1]!.n), high: Math.max(first.n, pcts[1]!.n) };
+  return { low: first.n, high: first.n };
+}
+
+/** A share the lead states (recurring revenue or the largest customer): the figure when given, else the band. */
+export function statedShare(lead: LeadRow, which: "recurring" | "top_customer"): { low: number; high: number } | undefined {
+  const figure = which === "recurring" ? lead.recurring_revenue_pct : lead.top_customer_pct;
+  if (figure !== undefined) return { low: figure, high: figure };
+  const band = which === "recurring" ? lead.recurring_revenue_band : lead.top_customer_band;
+  return band.trim() ? parsePercentRange(band) : undefined;
+}
+
 /** Upper bound in months of a timeline band. */
 const TIMELINE_MONTHS: Record<string, number> = { "0-6m": 6, "6-12m": 12, "12-24m": 24, "24m+": Number.POSITIVE_INFINITY };
 const TIMELINE_POINTS: Record<string, number> = { "0-6m": 30, "6-12m": 25, "12-24m": 15 };
@@ -99,8 +131,9 @@ export function sizeFit(lead: LeadRow, config: EngineConfig): QualResult["fit"] 
   const rev = statedRevenue(lead);
   if (rev && rev.high < min_revenue) return "too_small";
   if (rev && rev.low > max_revenue) return "too_large";
-  if (lead.sde !== undefined && lead.sde < min_sde) return "too_small";
-  if (rev || lead.sde !== undefined) return "in_range";
+  const sde = statedSde(lead);
+  if (sde && sde.high < min_sde) return "too_small";
+  if (rev || sde) return "in_range";
   return "unknown";
 }
 
@@ -125,7 +158,8 @@ export function qualScore(lead: LeadRow, config: EngineConfig): QualResult {
   const fit = sizeFit(lead, config);
   const rev = statedRevenue(lead);
   if (!rev) missing.push("revenue");
-  if (lead.sde === undefined) missing.push("sde");
+  const sde = statedSde(lead);
+  if (!sde) missing.push("sde");
   if (fit === "too_small" || fit === "too_large") {
     reasons.push(`Size ${fit === "too_small" ? "below" : "above"} AMB's range (${usd(config.qualify.min_revenue)} to ${usd(config.qualify.max_revenue)} revenue, ${usd(config.qualify.min_sde)}+ owner earnings) (+0)`);
   } else {
@@ -133,9 +167,9 @@ export function qualScore(lead: LeadRow, config: EngineConfig): QualResult {
       score += 15;
       reasons.push(`Revenue ${lead.revenue_band.trim() || usd(rev.low)}, inside AMB's range, per owner (+15)`);
     }
-    if (lead.sde !== undefined) {
+    if (sde) {
       score += 10;
-      reasons.push(`Owner earnings ${usd(lead.sde)}, at or above ${usd(config.qualify.min_sde)}, per owner (+10)`);
+      reasons.push(`Owner earnings ${lead.sde !== undefined ? usd(lead.sde) : lead.sde_band.trim()}, at or above ${usd(config.qualify.min_sde)}, per owner (+10)`);
     }
   }
 
@@ -163,9 +197,12 @@ export function qualScore(lead: LeadRow, config: EngineConfig): QualResult {
   let ready = 0;
   if (lead.owner_hours_per_week !== undefined && lead.owner_hours_per_week <= 40) ready += 3;
   else if (lead.owner_hours_per_week !== undefined && lead.owner_hours_per_week <= 50) ready += 1;
-  if (lead.recurring_revenue_pct !== undefined && lead.recurring_revenue_pct >= 30) ready += 3;
-  else if (lead.recurring_revenue_pct !== undefined && lead.recurring_revenue_pct >= 10) ready += 1;
-  if (lead.top_customer_pct !== undefined && lead.top_customer_pct <= 15) ready += 2;
+  // A band counts by its conservative end: the low end of the recurring share, the high end of the largest customer.
+  const recurring = statedShare(lead, "recurring");
+  const top = statedShare(lead, "top_customer");
+  if (recurring && recurring.low >= 30) ready += 3;
+  else if (recurring && recurring.low >= 10) ready += 1;
+  if (top && top.high <= 15) ready += 2;
   if (lead.license_holder.trim() && !/^(the )?owner$|\b(me|my name|myself|i do)\b/i.test(lead.license_holder.trim())) ready += 2;
   if (ready) {
     score += ready;
@@ -185,10 +222,12 @@ export function nextStage(lead: LeadRow, cls: ReplyClass, q: QualResult, config:
   const current = lead.stage;
   // An opt-out, a complaint or "not the owner" ends the conversation for good (CAN-SPAM 7704(a)(4)).
   if (cls === "unsubscribe" || cls === "complaint" || cls === "wrong_person") return "lost";
+  // A lead the advisor is working (handed off, meeting, listed) stays where the advisor put it: a
+  // "no thanks on the questionnaire" from an owner with a meeting booked is for a person to read.
+  if (ADVISOR_STAGES.includes(current)) return current;
   if (cls === "not_interested") return "lost";
   // Machine mail says nothing about the owner.
   if (cls === "bounce" || cls === "auto_reply") return current;
-  if (ADVISOR_STAGES.includes(current)) return current;
   if (cls === "not_now") return "nurture";
   // A referral names someone else to talk to; the owner's own stage does not move.
   if (cls === "referral") return current === "lost" || current === "nurture" ? current : FORWARD.includes(current) ? current : "engaged";

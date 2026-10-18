@@ -58,6 +58,7 @@ export function handoffSummary(lead: LeadRow, p: ProspectRow, config: EngineConf
   if (lead.revenue !== undefined) size.push(`revenue about ${money(lead.revenue)}`);
   else if (lead.revenue_band) size.push(`revenue ${lead.revenue_band}`);
   if (lead.sde !== undefined) size.push(`SDE about ${money(lead.sde)}`);
+  else if (lead.sde_band) size.push(`SDE ${lead.sde_band}`);
   if (lead.employees !== undefined) size.push(`${lead.employees} employees`);
   parts.push(size.length ? `Size stated: ${size.join(", ")} (per owner).` : "Size not stated yet.");
 

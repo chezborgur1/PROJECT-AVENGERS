@@ -72,14 +72,24 @@ describe("draftResponse", () => {
     expect(draft(cls("interested"), { lead: done })!.questionKeys).toEqual([]);
   });
 
-  it("says where the address came from: public licence and state filing records and the business's website", () => {
+  it("says where the business and the address came from, from the prospect's own records", () => {
     const d = draft(cls("question", { question: "How did you get my email?" }))!;
-    expect(d.body).toContain("the business's public licence and state filing records and the business's website");
+    expect(d.body).toContain("through public licence records and state business filings.");
     expect(d.body).toContain("Your email address is the one listed on the business's website.");
     // A directory-sourced address is named honestly.
     const vendor = draftResponse(cls("question", { question: "Where did you get my address?" }), { prospect: { ...prospect, email_source: "hunter" }, lead, config, mailbox })!;
-    expect(vendor.body).toContain("public licence and state filing records");
+    expect(vendor.body).toContain("public licence records");
     expect(vendor.body).toContain("Hunter, a business contact directory");
+    // An imported address never claims a website it did not come from (REVIEW_R1.md item 25).
+    const imported = draftResponse(cls("question", { question: "Where did you get my email?" }), {
+      prospect: { ...prospect, email_source: "import", website: "", license_numbers: "", sources: "open_poi:fsq-1", formation_date: "", entity_status: "" },
+      lead,
+      config,
+      mailbox,
+    })!;
+    expect(imported.body).toContain("through a public business listing dataset.");
+    expect(imported.body).toContain("Your email address came from a business contact list.");
+    expect(imported.body).not.toMatch(/website/);
   });
 
   it("answers cost, confidentiality, who and why from the fixed FAQ", () => {

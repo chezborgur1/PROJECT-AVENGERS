@@ -360,6 +360,11 @@ export const LeadRowSchema = z.object({
   manager_in_place: z.enum(["Y", "N", ""]), // a manager or lead person runs day-to-day work
   runs_without_owner: z.enum(["Y", "N", ""]), // the business runs for about 4 weeks without the owner
   lease_years_left: optNum, // years left on the lease, as the owner states it
+  // The intake questions offer bands ("$100K to $250K", "10% to 30%"); an owner who answers with a
+  // band has stated a band, never a figure, so the band is kept as written (no invented point value).
+  sde_band: z.string(),
+  recurring_revenue_band: z.string(),
+  top_customer_band: z.string(),
   updated_at: optStamp,
 });
 export type LeadRow = z.infer<typeof LeadRowSchema>;

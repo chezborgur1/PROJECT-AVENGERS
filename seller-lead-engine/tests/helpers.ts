@@ -121,6 +121,9 @@ export function makeLead(p: ProspectRow, overrides: Partial<LeadRow> = {}): Lead
     manager_in_place: "",
     runs_without_owner: "",
     lease_years_left: undefined,
+    sde_band: "",
+    recurring_revenue_band: "",
+    top_customer_band: "",
     updated_at: "",
     ...overrides,
   };

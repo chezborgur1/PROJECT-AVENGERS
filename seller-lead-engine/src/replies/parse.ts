@@ -33,15 +33,27 @@ export function addressOf(value: string): string {
   return bare ? normalizeEmail(bare[0]) : "";
 }
 
-/** Lines that start the quoted history; everything from the first one down is dropped. */
+/**
+ * Lines after which the quoted history is NOT marked with ">" (Outlook,
+ * forwards): everything from the first one down is dropped, because the
+ * lines below are our own message, unprefixed.
+ */
 const CUT_LINES: readonly RegExp[] = [
   /^-{2,}\s*original message\s*-{2,}$/i, // Outlook and many desktop clients
   /^-{2,}\s*forwarded message\s*-{2,}$/i,
   /^_{10,}$/, // Outlook's rule above a "From:" header block
   /^begin forwarded message:?$/i, // Apple Mail
-  /^on .{3,200}\bwrote:$/i, // Gmail, Apple Mail: "On Mon, Oct 12, 2026 at 9:00 AM Frank <f@x> wrote:"
-  /^(le|am|el) .{3,200}(a écrit|schrieb|escribió)\s*:$/i, // the same line from French, German and Spanish clients
 ];
+
+/**
+ * Attribution lines ("On Mon, Oct 12, 2026 at 9:00 AM Frank <f@x> wrote:"),
+ * from Gmail, Apple Mail and the French, German and Spanish clients. The
+ * history below them is ">"-quoted, and an owner who bottom-posts or answers
+ * inline writes BELOW them, so they do not end the new text: the ">" lines
+ * are dropped and the owner's own lines kept (docs/build/REVIEW_R1.md items
+ * 11 and 17: an opt-out under the quote was lost).
+ */
+const ATTRIBUTION_LINES: readonly RegExp[] = [/^on .{3,200}\bwrote:$/i, /^(le|am|el) .{3,200}(a écrit|schrieb|escribió)\s*:$/i];
 
 /** An Outlook header block ("From: ..." followed within two lines by "Sent:" or "Date:"). */
 function isHeaderBlock(lines: readonly string[], i: number): boolean {
@@ -49,26 +61,73 @@ function isHeaderBlock(lines: readonly string[], i: number): boolean {
   return lines.slice(i + 1, i + 4).some((l) => /^\*?(sent|date|to|subject):\*?\s/i.test(l.trim()));
 }
 
-/** Drop the quoted history: "On ... wrote:", ">" lines, "-----Original Message-----", Outlook header blocks, the signature after "-- ". */
+/** Lines an attribution spans: 1, or 2 when Gmail wraps it ("On Mon ... Frank Example <" then "frank@x> wrote:"); 0 when line i is not one. */
+function attributionAt(lines: readonly string[], i: number): number {
+  const line = lines[i]!.trim();
+  if (ATTRIBUTION_LINES.some((re) => re.test(line))) return 1;
+  const next = lines[i + 1]?.trim() ?? "";
+  if (/^on\s.{3,200}$/i.test(line) && /\bwrote:$/i.test(next) && line.length + next.length < 300) return 2;
+  return 0;
+}
+
+/**
+ * The owner's new words: drops ">" lines, attribution lines, everything below
+ * "-----Original Message-----", a forward marker or an Outlook header block,
+ * and the signature after "-- ". Text the owner writes below or between the
+ * quoted lines (bottom-posting, inline answers) is kept. An attribution whose
+ * history is not ">"-quoted is treated like an Outlook header: the cut.
+ */
 export function stripQuoted(text: string): string {
   const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  const trimmed = lines.map((l) => l.trim());
   const kept: string[] = [];
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i]!;
-    const line = raw.trim();
+    const line = trimmed[i]!;
     // A signature delimiter is "-- " by convention (RFC 3676 4.3); many clients trim it to "--".
     if (raw === "-- " || line === "--") break;
     if (CUT_LINES.some((re) => re.test(line))) break;
-    // Gmail wraps a long attribution: "On Mon, Oct 12, 2026 at 9:00 AM Frank Example <" then "frank@x> wrote:".
-    if (/^on\s.{3,200}$/i.test(line) && i + 1 < lines.length && /\bwrote:$/i.test(lines[i + 1]!.trim()) && line.length + lines[i + 1]!.trim().length < 300) break;
-    if (isHeaderBlock(lines.map((l) => l.trim()), i)) break;
+    if (isHeaderBlock(trimmed, i)) break;
+    const span = attributionAt(lines, i);
+    if (span) {
+      const nextText = trimmed.slice(i + span).find((l) => l !== "");
+      if (nextText !== undefined && !nextText.startsWith(">")) break; // unquoted history follows: our own message
+      i += span - 1;
+      continue;
+    }
     if (line.startsWith(">")) continue;
     kept.push(raw.replace(/\s+$/, ""));
   }
   // Mobile clients' stock sign-offs carry no meaning for classification.
   while (kept.length && (/^sent from my \w+/i.test(kept[kept.length - 1]!.trim()) || !kept[kept.length - 1]!.trim())) kept.pop();
   while (kept.length && !kept[0]!.trim()) kept.shift();
-  return kept.join("\n").trim();
+  // Dropped quote blocks between inline answers leave runs of blank lines; one is enough.
+  return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
+ * The whole body with only ">"-quoted lines removed: a second place to look
+ * for an opt-out when stripQuoted cut too early (an unusual client layout).
+ * It can contain our own unprefixed message, so callers remove our text with
+ * `withoutOwnText` and use it for opt-out detection only, never for facts.
+ */
+export function unquotedText(text: string): string {
+  return text
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .filter((l) => !l.trim().startsWith(">"))
+    .join("\n")
+    .trim();
+}
+
+/** A subject without its reply and forward prefixes ("Re: Fwd: unsubscribe T-000123" -> "unsubscribe T-000123"). */
+export function subjectCore(subject: string): string {
+  return subject.replace(/^\s*((re|fwd?|aw|wg|sv|tr)\s*(\[\d+\])?\s*:\s*)+/i, "").trim();
+}
+
+/** The touch id in a List-Unsubscribe mailto request's subject ("unsubscribe T-000123"), or undefined. */
+export function unsubscribeTouchId(subject: string): string | undefined {
+  return /\bunsubscribe\s+(T-\d{6,})\b/i.exec(subject)?.[1]?.toUpperCase();
 }
 
 // ---------------------------------------------------------------- bounces
@@ -82,6 +141,8 @@ const DSN_SUBJECT = /\b(delivery status notification|undeliverable|undelivered m
 
 /** Wording that makes a delivery report temporary (Gmail "(Delay)", "will retry"). */
 const SOFT_WORDS = /\b(delay(ed)?|will (retry|continue trying|keep trying)|temporar(y|ily)|try again later|still trying|mailbox (is )?full|over (its |the )?quota|quota exceeded|insufficient (system )?storage)\b/i;
+/** A full mailbox or exhausted quota: the address is alive, the bounce is soft whatever code comes with it. */
+const QUOTA_WORDS = /\b(mailbox (is )?full|over (its |the |their )?(storage )?quota|quota exceeded|exceeded (its |the |their )?(storage )?quota|insufficient (system )?storage|out of storage space)\b/i;
 /** Wording that makes it permanent when the report carries no status code. */
 const HARD_WORDS = /\b(address not found|does ?n[o']t exist|no such (user|mailbox|recipient)|user unknown|unknown user|recipient (address )?rejected|mailbox (unavailable|not found|does not exist)|invalid (recipient|address|mailbox)|account (has been )?(disabled|deleted|closed)|permanent(ly)? (failure|error)|access denied|wasn't delivered|was not delivered|couldn't be delivered)\b/i;
 
@@ -171,9 +232,13 @@ export function detectBounce(msg: InboundMessage): { type: BounceType; recipient
   const policy = policyBounceCode(text);
   if (policy) return result("policy", policy);
 
+  // A full mailbox (X.2.2, "over quota") is a live address that cannot take mail today: soft, never
+  // suppressed, even when the server reports it with a permanent 5.x.x code (Gmail sends "552-5.2.2").
+  const quota = (code: string | undefined) => (code !== undefined && /^[45]\.2\.2$/.test(code)) || QUOTA_WORDS.test(text);
+
   // 2. A machine-readable DSN "Status:" field (RFC 3464) is authoritative.
   const status = /^status:\s*([245]\.\d{1,3}\.\d{1,3})/im.exec(text)?.[1];
-  if (status?.startsWith("5")) return result("hard", status);
+  if (status?.startsWith("5")) return result(quota(status) ? "soft" : "hard", status);
   if (status?.startsWith("4")) return result("soft", status);
 
   // 3. Enhanced status codes in the prose (RFC 3463); a "(Delay)" subject makes the report temporary whatever it quotes.
@@ -181,12 +246,12 @@ export function detectBounce(msg: InboundMessage): { type: BounceType; recipient
   const permanent = codes.find((c) => c.startsWith("5"));
   const temporary = codes.find((c) => c.startsWith("4"));
   if (SOFT_WORDS.test(msg.subject)) return result("soft", temporary);
-  if (permanent) return result("hard", permanent);
+  if (permanent) return result(quota(permanent) ? "soft" : "hard", permanent);
   if (temporary) return result("soft", temporary);
 
   // 4. Bare SMTP reply codes ("550 User unknown", "452 Mailbox full").
   const smtp = /\b(4[25]\d|5[05]\d)(?=[\s-])/.exec(text)?.[1];
-  if (smtp) return result(smtp.startsWith("5") ? "hard" : "soft", smtp);
+  if (smtp) return result(smtp.startsWith("5") && !quota(undefined) ? "hard" : "soft", smtp);
 
   // 5. Wording, then the default: a failure report with no code and no temporary wording is permanent,
   //    erring toward never mailing a dead address again.
