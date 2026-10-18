@@ -65,16 +65,17 @@ describe("weeklyReport", () => {
       meetings: 1,
       listingsSigned: 1,
     });
-    expect(metrics.replyRate).toBeCloseTo(5 / 40);
-    expect(metrics.bounceRate).toBeCloseTo(1 / 40);
+    // Rates are over sent or drafted (40 sent and 1 draft), the guardrail's basis.
+    expect(metrics.replyRate).toBeCloseTo(5 / 41);
+    expect(metrics.bounceRate).toBeCloseTo(1 / 41);
     expect(metrics.byMailbox[MB1]).toEqual({ sent: 30, bounces: 1, paused: false });
     expect(metrics.byMailbox[MB2]).toEqual({ sent: 10, bounces: 0, paused: false });
   });
 
   it("raises an alarm when the hard bounce rate is above the guardrail", () => {
     const { metrics } = weeklyReport(busyWeek(), config, { today: TODAY });
-    // 1 hard bounce in 40 sends is 2.5%, above the 2% default.
-    expect(metrics.alarms.some((a) => a.startsWith("Hard bounce rate 2.5% is above the 2.0% guardrail"))).toBe(true);
+    // 1 hard bounce in 41 sent or drafted is 2.4%, above the 2% default.
+    expect(metrics.alarms.some((a) => a.startsWith("Hard bounce rate 2.4% is above the 2.0% guardrail"))).toBe(true);
   });
 
   it("raises alarms for a complaint, a paused mailbox, failures, reply errors and too many bounces in a day", () => {
@@ -85,16 +86,26 @@ describe("weeklyReport", () => {
       ...["b1", "b2", "b3"].map((id) => makeReply({ reply_id: id, class: "bounce", bounce_type: "hard", mailbox: MB2, received_at: "2026-10-17T09:00:00Z" })),
     ]);
     stores.touches.upsert([makeTouch({ touch_id: "T-900001", status: "failed", error: "quota" })]);
-    stores.mailboxLog.append([makeMailboxLog({ date: "2026-10-17", mailbox: MB2, paused: "Y", pause_reason: "bounces" })]);
     const { metrics } = weeklyReport(stores, config, { today: TODAY });
     const text = metrics.alarms.join("\n");
     expect(text).toContain("1 spam complaint this week: sending stays paused");
-    expect(text).toContain(`${MB2} is paused.`);
+    // The pause and its reason come from the sender's circuit breakers (mailboxHealth).
+    expect(text).toMatch(new RegExp(`${MB2.replace(/\./g, "\\.")} is paused\\. .*3 hard bounces on 2026-10-17 \\(limit 3 a day\\)`));
     expect(text).toContain(`${MB2} had 3 hard bounces on 2026-10-17`);
     expect(text).toContain("1 message failed to deliver");
     expect(text).toContain("1 reply could not be processed");
     expect(metrics.byMailbox[MB2]!.paused).toBe(true);
     expect(metrics.complaints).toBe(1);
+  });
+
+  it("reads pauses from mailbox health, so a stale log row does not pause and a cleared pause does not either", () => {
+    const stores = busyWeek();
+    stores.mailboxLog.append([makeMailboxLog({ date: "2026-10-17", mailbox: MB2, paused: "Y", pause_reason: "old sender row" })]);
+    expect(weeklyReport(stores, config, { today: TODAY }).metrics.byMailbox[MB2]!.paused).toBe(false);
+    stores.replies.upsert(["b1", "b2", "b3"].map((id) => makeReply({ reply_id: id, class: "bounce", bounce_type: "hard", mailbox: MB2, received_at: "2026-10-16T09:00:00Z" })));
+    expect(weeklyReport(stores, config, { today: TODAY }).metrics.byMailbox[MB2]!.paused).toBe(true);
+    stores.mailboxLog.append([makeMailboxLog({ date: "2026-10-17", mailbox: MB2, paused: "N", pause_reason: "cleared: list re-verified" })]);
+    expect(weeklyReport(stores, config, { today: TODAY }).metrics.byMailbox[MB2]!.paused).toBe(false);
   });
 
   it("raises an alarm when the opt-out rate is above the guardrail", () => {
@@ -103,6 +114,18 @@ describe("weeklyReport", () => {
     stores.replies.upsert([makeReply({ reply_id: "u1", class: "unsubscribe", opt_out: "Y" })]);
     const { metrics } = weeklyReport(stores, config, { today: TODAY });
     expect(metrics.alarms.some((a) => a.startsWith("Opt-out rate 10.0% is above the 5.0% guardrail"))).toBe(true);
+  });
+
+  it("computes rates over drafts in draft mode, so bounces still raise the alarm when nothing is marked sent", () => {
+    const stores = tempStores();
+    stores.touches.upsert(Array.from({ length: 10 }, (_, i) => makeTouch({ prospect_id: `P-7000${i}`, status: "drafted", mode: "draft" })));
+    stores.replies.upsert([makeReply({ reply_id: "d1", class: "interested" }), makeReply({ reply_id: "d2", class: "bounce", bounce_type: "hard" })]);
+    const { metrics, markdown } = weeklyReport(stores, config, { today: TODAY });
+    expect(metrics).toMatchObject({ sent: 0, drafted: 10, humanReplies: 1, bounces: 1 });
+    expect(metrics.replyRate).toBeCloseTo(0.1);
+    expect(metrics.bounceRate).toBeCloseTo(0.1);
+    expect(metrics.alarms.some((a) => a.startsWith("Hard bounce rate 10.0% is above the 2.0% guardrail"))).toBe(true);
+    expect(markdown).toContain("| Hard bounce rate (over sent or drafted) | 10.0% |");
   });
 
   it("flags drafts waiting to be sent and a config that blocks sending", () => {
@@ -138,7 +161,7 @@ describe("weeklyReport", () => {
     expect(markdown).toContain("# Weekly report 2026-W42");
     expect(markdown).toContain("The 7 days from 2026-10-12 to 2026-10-18.");
     expect(markdown).toContain("| Outreach emails sent | 40 |");
-    expect(markdown).toContain("| Reply rate | 12.5% |");
+    expect(markdown).toContain("| Reply rate (over sent or drafted) | 12.2% |");
     expect(markdown).toContain("| Listings signed | 1 |");
     expect(markdown).toContain(`| ${MB1} | 30 | 1 | No |`);
     expect(markdown).toContain("| Outreach emails sent | 41 |"); // funnel includes last week's send

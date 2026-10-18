@@ -27,7 +27,7 @@ describe("footer copy", () => {
   });
 
   it("says plainly that a reply was drafted with an AI assistant and a named person reviews it", () => {
-    expect(aiDisclosure(config, mailbox)).toBe("This reply was drafted with an AI assistant. Frank Example of AMB Advisory Services reviews every message before it is sent.");
+    expect(aiDisclosure(config, mailbox)).toBe("This reply was drafted with an AI assistant. Frank Example of AMB Advisory Services reviews every reply before it is sent.");
   });
 
   it("passes the house-style lint itself: no em dashes, no exclamation marks, no banned words", () => {

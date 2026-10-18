@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { credentialsFor, GmailApiInbox, htmlToText, readInboxFolder, toInboundFromGmail } from "../src/replies/inbox.ts";
+import { GmailApiInbox, htmlToText, readInboxFolder, toInboundFromGmail } from "../src/replies/inbox.ts";
 import { tmpDir } from "./helpers.ts";
 
 const NOW = new Date("2026-10-18T14:00:00Z");
@@ -42,21 +42,6 @@ describe("readInboxFolder", () => {
     readInboxFolder(dir);
     readInboxFolder(dir);
     expect(fs.readdirSync(dir)).toEqual(["a.json"]);
-  });
-});
-
-describe("Gmail API credentials", () => {
-  const cred = { client_id: "cid", client_secret: "sec", refresh_token: "rt" };
-  it("finds a mailbox's credentials in every supported layout, case-insensitively", () => {
-    expect(credentialsFor({ "Frank@X.example": cred }, "frank@x.example")).toEqual(cred);
-    expect(credentialsFor({ mailboxes: { "frank@x.example": cred } }, "frank@x.example")).toEqual(cred);
-    expect(credentialsFor({ client_id: "cid", client_secret: "sec", mailboxes: { "frank@x.example": { refresh_token: "rt" } } }, "frank@x.example")).toEqual(cred);
-    expect(credentialsFor([{ email: "frank@x.example", ...cred }], "frank@x.example")).toEqual(cred);
-  });
-
-  it("names the mailbox when credentials are missing or incomplete", () => {
-    expect(() => credentialsFor({}, "frank@x.example")).toThrow(/No Gmail credentials for frank@x.example/);
-    expect(() => credentialsFor({ "frank@x.example": { refresh_token: "rt" } }, "frank@x.example")).toThrow(/need client_id/);
   });
 });
 
@@ -145,7 +130,7 @@ describe("GmailApiInbox", () => {
   it("fails with the OAuth error when the refresh token is revoked", async () => {
     const { fetchImpl } = fakeGmail({ tokenStatus: 400 });
     const inbox = new GmailApiInbox({ tokensFile: tokensFile(), fetchImpl, now: NOW });
-    await expect(inbox.fetchSince("frank@x.example", "2026-10-16")).rejects.toThrow(/OAuth refresh for frank@x.example failed \(400\): Token has been expired or revoked/);
+    await expect(inbox.fetchSince("frank@x.example", "2026-10-16")).rejects.toThrow(/OAuth refresh for frank@x.example failed \(HTTP 400\): invalid_grant: Token has been expired or revoked/);
   });
 
   it("fails with the API status when a list call is refused", async () => {

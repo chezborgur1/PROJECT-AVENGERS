@@ -15,6 +15,15 @@ import { normalizeEmail } from "../domain/schema.ts";
 // first job of the reply loop. Microsoft's authentication rejections arrive
 // as "550 5.7.515" and, after its revised announcement, "550; 5.7.515"
 // (deliverability.md section 1 and verification row 5): both forms match.
+//
+// Bounces come in three kinds. "hard": the recipient's address is dead
+// (5.1.1 user unknown, 5.1.10, 5.2.1 disabled, 5.4.1 no such domain), so the
+// address is suppressed. "soft": a temporary failure (4.x.x, a full
+// mailbox). "policy": the receiver refused OUR domain or sending setup
+// (5.7.515, 5.7.509, the RFC 7372 authentication codes, or any 5.7.x that
+// names SPF, DKIM or DMARC). That says nothing about the recipient, so it
+// must never suppress them; it is a mailbox-health event that pauses the
+// sending mailbox until a person fixes DNS and clears it.
 
 /** The bare address in a From or To value ("John <john@x.com>" -> "john@x.com"), lower-cased; "" when none. */
 export function addressOf(value: string): string {
@@ -76,6 +85,36 @@ const SOFT_WORDS = /\b(delay(ed)?|will (retry|continue trying|keep trying)|tempo
 /** Wording that makes it permanent when the report carries no status code. */
 const HARD_WORDS = /\b(address not found|does ?n[o']t exist|no such (user|mailbox|recipient)|user unknown|unknown user|recipient (address )?rejected|mailbox (unavailable|not found|does not exist)|invalid (recipient|address|mailbox)|account (has been )?(disabled|deleted|closed)|permanent(ly)? (failure|error)|access denied|wasn't delivered|was not delivered|couldn't be delivered)\b/i;
 
+/**
+ * Enhanced status codes that mean the receiver rejected our sending domain or
+ * setup, not the recipient: Microsoft 5.7.515 (authentication level) and
+ * 5.7.509 (DMARC), RFC 7372 5.7.20 to 5.7.27 (DKIM, SPF, reverse DNS,
+ * multiple authentication failures, null MX on the sender), which Gmail uses
+ * for its sender requirements, and Microsoft's 5.7.705, 5.7.708 and 5.7.750
+ * (tenant or sending IP blocked).
+ */
+export const POLICY_BOUNCE_CODES: ReadonlySet<string> = new Set([
+  "5.7.515", "5.7.509", "5.7.20", "5.7.21", "5.7.22", "5.7.23", "5.7.24", "5.7.25", "5.7.26", "5.7.27", "5.7.705", "5.7.708", "5.7.750",
+]);
+/** Wording that turns any other 5.7.x rejection into an authentication failure on our side. */
+const AUTH_WORDS = /\b(spf|dkim|dmarc|unauthenticated|not authenticated|authentication (level|fail(ed|ure|s)?|required|requirements?|check)|sender policy framework|domainkeys|does not pass (spf|dkim|dmarc)|sending domain)\b/i;
+
+/** How replies.csv marks a policy bounce's snippet ("Authentication bounce 5.7.515: ..."), so health checks can read it back. */
+export const POLICY_SNIPPET_PREFIX = "Authentication bounce";
+
+/** True for a replies.csv bounce row from a policy (authentication) rejection: the snippet leads with the marker or carries a policy code. */
+export function isPolicyBounceSnippet(snippet: string): boolean {
+  return snippet.startsWith(POLICY_SNIPPET_PREFIX) || policyBounceCode(snippet) !== undefined;
+}
+
+/** The 5.7.x code when a report says the receiver refused our domain's authentication or sending policy, else undefined. */
+export function policyBounceCode(text: string): string | undefined {
+  const codes = [...text.matchAll(/(?<![\d.])5\.7\.\d{1,3}(?![\d.])/g)].map((m) => m[0]);
+  const listed = codes.find((c) => POLICY_BOUNCE_CODES.has(c));
+  if (listed) return listed;
+  return codes.length && AUTH_WORDS.test(text) ? codes[0] : undefined;
+}
+
 /** The failed recipient a report names, or undefined. */
 function bounceRecipient(msg: InboundMessage, text: string): string | undefined {
   const header = msg.headers["x-failed-recipients"];
@@ -101,15 +140,18 @@ function bounceRecipient(msg: InboundMessage, text: string): string | undefined 
   return undefined;
 }
 
+/** hard: the recipient is dead (suppress). soft: temporary. policy: the receiver refused our domain (pause the mailbox, never suppress). */
+export type BounceType = "hard" | "soft" | "policy";
+
 /**
  * A delivery failure notice, or null. Decided by the sender
  * (mailer-daemon, postmaster), the subject or the DSN headers; a person's
- * reply that happens to quote "550 5.1.1" is never a bounce. 5.x.x (and a
- * bare 5xx reply code) is hard, 4.x.x is soft; "550 5.7.515" and
- * "550; 5.7.515" are hard, so the recipient is suppressed and the mailbox
- * health check sees the authentication failure.
+ * reply that happens to quote "550 5.1.1" is never a bounce. An
+ * authentication or sending-policy rejection ("550 5.7.515",
+ * "550; 5.7.515", 5.7.26, any 5.7.x naming SPF, DKIM or DMARC) is "policy";
+ * otherwise 5.x.x (and a bare 5xx reply code) is hard and 4.x.x is soft.
  */
-export function detectBounce(msg: InboundMessage): { type: "hard" | "soft"; recipient?: string; code?: string } | null {
+export function detectBounce(msg: InboundMessage): { type: BounceType; recipient?: string; code?: string } | null {
   const from = addressOf(msg.from);
   const contentType = msg.headers["content-type"] ?? "";
   const isReport =
@@ -122,11 +164,12 @@ export function detectBounce(msg: InboundMessage): { type: "hard" | "soft"; reci
 
   const text = msg.text.replace(/\r\n?/g, "\n");
   const recipient = bounceRecipient(msg, text);
-  const result = (type: "hard" | "soft", code?: string) => ({ type, ...(recipient ? { recipient } : {}), ...(code ? { code } : {}) });
+  const result = (type: BounceType, code?: string) => ({ type, ...(recipient ? { recipient } : {}), ...(code ? { code } : {}) });
 
-  // 1. Microsoft's authentication rejection, both punctuations.
-  const msAuth = /\b550;?\s+(5\.7\.(515|509))\b/.exec(text) ?? /(?<![\d.])(5\.7\.(515|509))(?![\d.])/.exec(text);
-  if (msAuth) return result("hard", msAuth[1]);
+  // 1. Our domain failed the receiver's authentication or sending policy (both of Microsoft's punctuations match):
+  //    a mailbox-health event, not a dead address.
+  const policy = policyBounceCode(text);
+  if (policy) return result("policy", policy);
 
   // 2. A machine-readable DSN "Status:" field (RFC 3464) is authoritative.
   const status = /^status:\s*([245]\.\d{1,3}\.\d{1,3})/im.exec(text)?.[1];
@@ -169,7 +212,33 @@ const AUTO_PHRASES: readonly RegExp[] = [
   /\bfor (urgent|immediate) (matters|assistance|issues|requests),? please (contact|call|email)\b/i,
 ];
 
-/** True for an out-of-office or other automatic reply: Auto-Submitted other than "no", X-Autoreply, Precedence auto_reply/bulk/junk, OOO subjects and phrases. */
+/**
+ * Words that only a person answering us writes. An owner on vacation who
+ * still says "yes, I'm interested" has answered: the phrase "I'm on
+ * vacation" alone must not file that reply as an auto-reply and lose it.
+ * "if you are interested" is left out because business autoresponders say it.
+ */
+const HUMAN_ANSWER = /\b(yes|yeah|yep|(?<!\bif you('re| are) )interested|call me|give me a call|send (it|me|them|the questions|over)|sounds (good|interesting)|tell me more|i'?d (like|love)|i would (like|love)|let'?s talk|please do|go ahead|not interested|no thanks|no thank you)\b/i;
+/** A question to us: a sentence ending in "?" that mentions the sender, the offer or the cost. */
+const QUESTION_TO_US = /\b(you|your|amb|this|it|what|how|who|why|cost|price|check)\b[^.!?]*\?/i;
+/** More new words than this, outside the out-of-office sentences, reads as a person writing. */
+export const HUMAN_TEXT_WORDS = 40;
+
+/** True when the new text holds a clear human answer alongside any out-of-office wording. */
+export function hasHumanAnswer(text: string): boolean {
+  if (HUMAN_ANSWER.test(text) || QUESTION_TO_US.test(text)) return true;
+  const sentences = text.replace(/\s+/g, " ").split(/(?<=[.!?])\s+/);
+  const own = sentences.filter((sentence) => !AUTO_PHRASES.some((re) => re.test(sentence)));
+  return own.join(" ").split(/\s+/).filter((w) => /[a-z]/i.test(w)).length > HUMAN_TEXT_WORDS;
+}
+
+/**
+ * True for an out-of-office or other automatic reply. Headers decide first
+ * (Auto-Submitted other than "no", X-Autoreply, Precedence auto_reply, bulk,
+ * junk or list), then an OOO subject. Body phrases alone decide only when the
+ * new text holds no clear human answer ("yes", "interested", "call me", a
+ * question to us, or more than HUMAN_TEXT_WORDS words of its own).
+ */
 export function detectAutoReply(msg: InboundMessage): boolean {
   const h = msg.headers;
   const autoSubmitted = (h["auto-submitted"] ?? "").trim().toLowerCase();
@@ -178,5 +247,5 @@ export function detectAutoReply(msg: InboundMessage): boolean {
   if (/^(auto_reply|bulk|junk|list)$/i.test((h["precedence"] ?? "").trim())) return true;
   if (AUTO_SUBJECT.test(msg.subject.replace(/^\s*(re|fwd?|aw|wg)\s*:\s*/i, ""))) return true;
   const text = stripQuoted(msg.text);
-  return AUTO_PHRASES.some((re) => re.test(text));
+  return AUTO_PHRASES.some((re) => re.test(text)) && !hasHumanAnswer(text);
 }

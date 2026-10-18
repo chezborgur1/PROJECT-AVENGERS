@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { parse } from "csv-parse/sync";
 import { describe, expect, it } from "vitest";
-import { EXPORT_COLUMNS, ExportBlockedError, exportLeads, suppressionHit } from "../src/report/exportLeads.ts";
+import { ComplianceError } from "../src/compliance/gate.ts";
+import { EXPORT_COLUMNS, exportLeads } from "../src/report/exportLeads.ts";
 import { makeProspect, tempStores, testConfig, tmpDir } from "./helpers.ts";
 import { makeSuppression } from "./fixtures/report/rows.ts";
 
@@ -34,7 +35,7 @@ describe("exportLeads gate", () => {
   it("throws when lead sales are disabled, and writes nothing", () => {
     const stores = seeded();
     const out = outFile();
-    expect(() => exportLeads(stores, testConfig(), { partner: "Partner Brokers", now: NOW, prospectIds: ALL, outFile: out })).toThrow(ExportBlockedError);
+    expect(() => exportLeads(stores, testConfig(), { partner: "Partner Brokers", now: NOW, prospectIds: ALL, outFile: out })).toThrow(ComplianceError);
     expect(() => exportLeads(stores, testConfig(), { partner: "Partner Brokers", now: NOW, prospectIds: ALL, outFile: out })).toThrow(/lead_sales\.enabled is false/);
     expect(fs.existsSync(out)).toBe(false);
     expect(stores.exports.rows()).toEqual([]);
@@ -110,15 +111,17 @@ describe("exportLeads", () => {
   });
 });
 
-describe("suppressionHit", () => {
-  const rows = [makeSuppression("a@x.example", "email"), makeSuppression("corp.example", "domain"), makeSuppression("P-00001", "prospect")];
-
-  it("matches an email in any case, a domain and its subdomains, and a prospect id", () => {
-    expect(suppressionHit(rows, " A@X.example ")?.value).toBe("a@x.example");
-    expect(suppressionHit(rows, "b@corp.example")?.value).toBe("corp.example");
-    expect(suppressionHit(rows, "b@mail.corp.example")?.value).toBe("corp.example");
-    expect(suppressionHit(rows, "b@notcorp.example")).toBeUndefined();
-    expect(suppressionHit(rows, "", "P-00001")?.value_type).toBe("prospect");
-    expect(suppressionHit(rows, "z@y.example", "P-00002")).toBeUndefined();
+describe("export suppression matching", () => {
+  it("uses the sender's suppression rules: +tags, parent domains and prospect ids all block an export", () => {
+    const stores = tempStores();
+    stores.prospects.upsert([
+      makeProspect({ prospect_id: "P-00201", email: "owner+sales@tagged.example" }),
+      makeProspect({ prospect_id: "P-00202", email: "b@mail.corp.example" }),
+      makeProspect({ prospect_id: "P-00203", email: "b@notcorp.example" }),
+    ]);
+    stores.suppression.append([makeSuppression("owner@tagged.example", "email"), makeSuppression("corp.example", "domain")]);
+    const r = exportLeads(stores, open, { partner: "A", now: NOW, prospectIds: ["P-00201", "P-00202", "P-00203"], outFile: outFile() });
+    expect(r.exported).toBe(1);
+    expect(r.skipped.map((x) => x.prospectId)).toEqual(["P-00201", "P-00202"]);
   });
 });

@@ -6,7 +6,7 @@ import type { Stores } from "../store/index.ts";
 import { pickMultiple, pickRevenueMultiple, type MultipleRow } from "./multiples.ts";
 
 // The free exit-readiness check an interested owner receives: a 0-100
-// readiness score over 8 drivers, a 23-item checklist of what buyers and SBA
+// readiness score over 8 drivers, a 25-item checklist of what buyers and SBA
 // lenders look at, and (only when it can be supported) a rough market range.
 //
 // Every fact comes from the owner's own words (leads.csv, "per owner") or a
@@ -63,6 +63,13 @@ interface ItemDef { driver: (typeof DRIVERS)[number]["name"]; item: string; eval
 
 const unknown = (note = NOT_STATED): Eval => ({ status: "unknown", note });
 
+/** A Y/N fact as met, gap or unknown with the matching note. */
+const yesNo = (v: "Y" | "N" | "", notes: { yes: string; no: string; unknown: string }): Eval =>
+  v === "Y" ? { status: "met", note: notes.yes } : v === "N" ? { status: "gap", note: notes.no } : unknown(notes.unknown);
+
+/** The usual SBA 7(a) term for a business acquisition, which the lease should cover (offer.md §2 item 8, §6 item 13). */
+export const SBA_LOAN_YEARS = 10;
+
 /** "$475K", "$1.25M": HOUSE_STYLE §4.6 money in prose. */
 export function money(n: number): string {
   if (Math.abs(n) >= 1_000_000) return `$${(n / 1_000_000).toFixed(3).replace(/\.?0+$/, "")}M`;
@@ -85,7 +92,16 @@ const ITEMS: readonly ItemDef[] = [
     item: "You know your owner earnings (SDE) for the last full year",
     evaluate: (l) => (l.sde !== undefined ? { status: "met", note: `SDE about ${money(l.sde)} (per owner).` } : unknown("Unknown: SDE not stated yet.")),
   },
-  { driver: "Financial records", item: "Three years of profit and loss statements match the filed tax returns", evaluate: () => unknown("Unknown: not discussed yet. SBA lenders underwrite from the tax returns.") },
+  {
+    driver: "Financial records",
+    item: "Three years of profit and loss statements match the filed tax returns",
+    evaluate: (l) =>
+      yesNo(l.books_match_returns, {
+        yes: "The books match the filed returns (per owner). A lender still checks this against the returns themselves.",
+        no: "The books and the filed returns do not match (per owner). SBA lenders underwrite from the tax returns, so a buyer's loan is sized to what the returns show.",
+        unknown: "Unknown: not discussed yet. SBA lenders underwrite from the tax returns.",
+      }),
+  },
   { driver: "Financial records", item: "Personal and one-time expenses run through the business are listed and documented", evaluate: () => unknown() },
   { driver: "Financial records", item: "A bookkeeper or CPA closes the books every month", evaluate: () => unknown() },
   // Owner dependence: the first thing a buyer tests (offer.md §2, item 1).
@@ -100,8 +116,17 @@ const ITEMS: readonly ItemDef[] = [
         : { status: "gap", note: `${h} hours a week (per owner). A buyer reads long owner hours as a job they must fill or hire for.` };
     },
   },
-  { driver: "Owner dependence", item: "The business runs for 4 weeks without you", evaluate: () => unknown() },
-  { driver: "Owner dependence", item: "Staff, not only you, hold the main customer relationships", evaluate: () => unknown() },
+  {
+    driver: "Owner dependence",
+    item: "The business runs for 4 weeks without you",
+    evaluate: (l) =>
+      yesNo(l.runs_without_owner, {
+        yes: "It runs for about 4 weeks without you (per owner).",
+        no: "It does not run for 4 weeks without you yet (per owner). This is the first thing a buyer tests.",
+        unknown: "Unknown: not discussed yet.",
+      }),
+  },
+  { driver: "Owner dependence", item: "Staff as well as you hold the main customer relationships", evaluate: () => unknown() },
   { driver: "Owner dependence", item: "Pricing, processes and job checklists are written down", evaluate: () => unknown() },
   // Customer concentration: above about 15% in one customer is a red flag (offer.md §2, item 2).
   {
@@ -136,7 +161,18 @@ const ITEMS: readonly ItemDef[] = [
     },
   },
   // Team depth (offer.md §2, item 6).
-  { driver: "Team depth", item: "A manager or lead person runs day-to-day work and would stay after a sale", evaluate: () => unknown() },
+  // Split in two so a stated manager does not also claim they would stay: the owner can say the first, only the manager the second.
+  {
+    driver: "Team depth",
+    item: "A manager or lead person runs day-to-day work",
+    evaluate: (l) =>
+      yesNo(l.manager_in_place, {
+        yes: "A manager or lead person runs day-to-day work (per owner).",
+        no: "No manager or lead person runs day-to-day work yet (per owner). A buyer would have to hire or fill that role.",
+        unknown: "Unknown: not discussed yet.",
+      }),
+  },
+  { driver: "Team depth", item: "That manager or lead person would stay after a sale", evaluate: () => unknown() },
   {
     driver: "Team depth",
     item: "The business has 5 or more employees",
@@ -148,7 +184,18 @@ const ITEMS: readonly ItemDef[] = [
   },
   { driver: "Team depth", item: "Workers are classified correctly (W-2 or 1099) and payroll taxes are current", evaluate: () => unknown() },
   // Growth: 3-year trend and scale (offer.md §2, item 5; size bands in config.qualify).
-  { driver: "Growth", item: "Revenue and profit are flat or growing over the last 3 years", evaluate: () => unknown() },
+  // Revenue and profit trend are separate items: an owner who says "revenue is growing" has not said profit is.
+  {
+    driver: "Growth",
+    item: "Revenue is flat or growing over the last 3 years",
+    evaluate: (l) => {
+      if (!l.revenue_trend) return unknown("Unknown: revenue trend not stated yet.");
+      return l.revenue_trend === "declining"
+        ? { status: "gap", note: "Revenue has been declining (per owner). Buyers and lenders price on the recent trend." }
+        : { status: "met", note: `Revenue has been ${l.revenue_trend} (per owner).` };
+    },
+  },
+  { driver: "Growth", item: "Profit is flat or growing over the last 3 years", evaluate: () => unknown("Unknown: profit trend not discussed yet.") },
   {
     driver: "Growth",
     item: "Annual revenue is at or above the size most buyers in this market finance",
@@ -191,6 +238,13 @@ const ITEMS: readonly ItemDef[] = [
     item: "You own the premises, or the lease runs long enough (with options) to cover a 10-year buyer loan",
     evaluate: (l) => {
       if (l.owns_real_estate === "Y") return { status: "met", note: "You own the property (per owner). It is valued separately and is not in any range here." };
+      const years = l.lease_years_left;
+      if (years !== undefined) {
+        const y = `About ${years} ${years === 1 ? "year" : "years"} left on the lease (per owner)`;
+        return years >= SBA_LOAN_YEARS
+          ? { status: "met", note: `${y}. Confirm the figure includes only options you can exercise.` }
+          : { status: "gap", note: `${y}. An SBA lender wants the lease, with options, to cover the loan term, usually ${SBA_LOAN_YEARS} years, so it would need extending.` };
+      }
       if (l.owns_real_estate === "N") return unknown("You lease (per owner). Unknown: years left on the lease, with options.");
       return unknown("Unknown: own or lease not stated yet.");
     },
@@ -404,6 +458,7 @@ export function toldFacts(lead: LeadRow): Fact[] {
   const per = "Per owner";
   const fact = (label: string, value: string | undefined): Fact => (value ? { label, value, source: per } : { label, value: "Unknown", source: "Not stated yet" });
   const num = (n: number | undefined, f: (n: number) => string) => (n === undefined ? undefined : f(n));
+  const yn = (v: "Y" | "N" | "") => (v === "Y" ? "Yes" : v === "N" ? "No" : undefined);
   return [
     fact("Annual revenue", num(lead.revenue, money) ?? (lead.revenue_band || undefined)),
     fact("Owner earnings (SDE)", num(lead.sde, money)),
@@ -415,6 +470,11 @@ export function toldFacts(lead: LeadRow): Fact[] {
     fact("Premises", lead.owns_real_estate === "Y" ? "Owned" : lead.owns_real_estate === "N" ? "Leased" : undefined),
     fact("Licence held by", lead.license_holder || undefined),
     fact("Timeline", TIMELINE_WORDS[lead.timeline]),
+    fact("Revenue trend (3 years)", lead.revenue_trend || undefined),
+    fact("Books match tax returns", yn(lead.books_match_returns)),
+    fact("Manager or lead in place", yn(lead.manager_in_place)),
+    fact("Runs 4 weeks without the owner", yn(lead.runs_without_owner)),
+    fact("Years left on the lease", num(lead.lease_years_left, String)),
   ];
 }
 

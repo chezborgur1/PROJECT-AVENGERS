@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { DRIVERS, MIN_SDE_FOR_RANGE, article, buildReadinessCheck, money, readinessLabel, writeReadinessCheck } from "../src/readiness/check.ts";
 import { loadMultiples, type MultipleRow } from "../src/readiness/multiples.ts";
+import { lintBody } from "../src/compliance/lint.ts";
 import type { LeadRow } from "../src/domain/schema.ts";
 import { REPO, makeLead, makeProspect, tempStores, testConfig } from "./helpers.ts";
 
@@ -52,6 +53,16 @@ describe("buildReadinessCheck: structure", () => {
     const { p, lead } = answered();
     expect(check(lead, p)).toEqual(check(lead, p));
   });
+
+  it("writes an email the reply lint passes, whether every item is unknown or most are answered", () => {
+    // The check is drafted as a reply through the compliance gate, so its wording must pass the same lint.
+    const bare = makeProspect({ business_name: "Bay Comfort Air Inc", city: "Tampa" });
+    const { p, lead } = answered();
+    for (const [prospect, l] of [[bare, makeLead(bare)], [p, lead]] as const) {
+      const allow = [prospect.business_name, prospect.city, prospect.owner_name];
+      expect(lintBody(check(l, prospect).emailBody, { kind: "reply", allow })).toEqual([]);
+    }
+  });
 });
 
 describe("buildReadinessCheck: the owner's answers", () => {
@@ -83,8 +94,33 @@ describe("buildReadinessCheck: the owner's answers", () => {
     expect(c.score).toBe(50); // every unknown is half credit
     expect(c.markdown).toContain("| Owner earnings (SDE) | Unknown | Not stated yet |");
     expect(c.markdown).toContain("(provisional)");
-    expect(c.markdown).toContain("23 of 23 checklist items are unknown");
+    expect(c.markdown).toContain("25 of 25 checklist items are unknown");
     expect(c.emailBody).toContain("Unknown until we talk:");
+  });
+
+  it("reads the checklist facts the owner stated and keeps the parts they did not state unknown", () => {
+    const { p, lead } = answered({ books_match_returns: "N", revenue_trend: "growing", manager_in_place: "Y", runs_without_owner: "Y", lease_years_left: 6 });
+    const c = check(lead, p);
+    const item = (text: string) => c.items.find((i) => i.item === text)!;
+    expect(item("Three years of profit and loss statements match the filed tax returns")).toMatchObject({ status: "gap", note: expect.stringContaining("(per owner)") });
+    expect(item("The business runs for 4 weeks without you").status).toBe("met");
+    expect(item("A manager or lead person runs day-to-day work").status).toBe("met");
+    expect(item("That manager or lead person would stay after a sale").status).toBe("unknown");
+    expect(item("Revenue is flat or growing over the last 3 years")).toMatchObject({ status: "met", note: "Revenue has been growing (per owner)." });
+    expect(item("Profit is flat or growing over the last 3 years").status).toBe("unknown");
+    expect(item("You own the premises, or the lease runs long enough (with options) to cover a 10-year buyer loan")).toMatchObject({ status: "gap", note: expect.stringContaining("About 6 years left on the lease (per owner)") });
+    expect(c.markdown).toContain("| Revenue trend (3 years) | growing | Per owner |");
+    expect(c.markdown).toContain("| Years left on the lease | 6 | Per owner |");
+    const longLease = check(answered({ lease_years_left: 12 }).lead, p);
+    expect(longLease.items.find((i) => i.driver === "Real estate and lease")!.status).toBe("met");
+    const declining = check(answered({ revenue_trend: "declining" }).lead, p);
+    expect(declining.items.find((i) => i.item.startsWith("Revenue is flat"))!.status).toBe("gap");
+  });
+
+  it("raises the score when the owner states the checklist facts favourably", () => {
+    const { p, lead } = answered();
+    const better = answered({ books_match_returns: "Y", revenue_trend: "growing", manager_in_place: "Y", runs_without_owner: "Y" });
+    expect(check(better.lead, p).score).toBeGreaterThan(check(lead, p).score);
   });
 
   it("scores a better-prepared business higher than a worse one", () => {

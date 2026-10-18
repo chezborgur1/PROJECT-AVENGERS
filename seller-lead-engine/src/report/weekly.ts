@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { EngineConfig } from "../config.ts";
-import { LEAD_STAGES, type LeadRow, type ReplyRow, type TouchRow } from "../domain/schema.ts";
+import { LEAD_STAGES, type LeadRow, type TouchRow } from "../domain/schema.ts";
 import type { Stores } from "../store/index.ts";
+import { isHardBounce, mailboxHealth } from "../sending/health.ts";
 import { addDays, isoWeekLabel } from "../util/dates.ts";
 
 // The weekly report: the plan's success metrics for the 7 days ending
@@ -14,10 +15,14 @@ import { addDays, isoWeekLabel } from "../util/dates.ts";
 // Definitions, so the numbers mean the same thing every week:
 // - sent / drafted: outreach touches whose status reached sent / drafted in
 //   the window (dated by updated_at, then created_at, then planned_for).
-// - reply rate: human replies received in the window over outreach sent in
-//   the window. Bounces and auto-replies are not human replies.
-// - bounces: hard bounces; the bounce rate is hard bounces over sent, the
-//   same basis as the guardrail (docs/research/deliverability.md).
+// - delivered: outreach sent or drafted in the window, the guardrail's own
+//   definition of a send (src/sending/health.ts). In draft mode a person
+//   sends each draft from Gmail and the engine rarely hears back, so "sent"
+//   alone would leave every rate at zero and the bounce alarm silent.
+// - reply rate: human replies received in the window over outreach
+//   delivered in the window. Bounces and auto-replies are not human replies.
+// - bounces: hard bounces; the bounce rate (and the opt-out rate) is over
+//   delivered, the same basis as the guardrail (docs/research/deliverability.md).
 // - qualified / meetings / listings: leads at that stage (or later) whose
 //   row changed in the window. leads.csv keeps no stage history, so a lead
 //   edited again in a later week can count again; the cumulative funnel is
@@ -50,7 +55,6 @@ const QUALIFIED_OR_LATER = new Set<LeadRow["stage"]>(["qualified", "warm", "hand
 const day = (s: string) => s.slice(0, 10);
 const touchDate = (t: TouchRow) => day(t.updated_at || t.created_at || t.planned_for);
 const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
-const isHardBounce = (r: ReplyRow) => r.class === "bounce" && r.bounce_type !== "soft";
 
 /** Build the weekly report for the 7 days ending `today` and write it to data/reports/<week>.md. */
 export function weeklyReport(stores: Stores, config: EngineConfig, opts: { today: string }): { metrics: WeeklyMetrics; markdown: string; file: string } {
@@ -84,8 +88,10 @@ export function weeklyReport(stores: Stores, config: EngineConfig, opts: { today
   const hardBounces = weekReplies.filter(isHardBounce);
   const bounces = hardBounces.length;
   const complaints = weekReplies.filter((r) => r.class === "complaint").length;
-  const replyRate = sent ? humanReplies / sent : 0;
-  const bounceRate = sent ? bounces / sent : 0;
+  // The guardrail's denominator: sent or drafted (see the header).
+  const delivered = sent + drafted;
+  const replyRate = delivered ? humanReplies / delivered : 0;
+  const bounceRate = delivered ? bounces / delivered : 0;
 
   const changed = (l: LeadRow) => inWindow(day(l.updated_at));
   const qualified = leads.filter((l) => QUALIFIED_OR_LATER.has(l.stage) && changed(l)).length;
@@ -93,19 +99,27 @@ export function weeklyReport(stores: Stores, config: EngineConfig, opts: { today
   const meetings = leads.filter((l) => l.stage === "meeting" && changed(l)).length;
   const listingsSigned = leads.filter((l) => l.stage === "listed" && changed(l)).length;
 
-  // Per mailbox: sends, hard bounces, and whether it is paused (config, or the sender's latest log row).
+  // Per mailbox: sends, hard bounces, and whether it is paused today. The pause comes from the
+  // sender's own circuit breakers (mailboxHealth, src/sending/health.ts), so the report and the
+  // planner never disagree; like the planner, an uncleared complaint on one mailbox pauses all.
   const byMailbox: WeeklyMetrics["byMailbox"] = {};
+  const pauseReasons: Record<string, string[]> = {};
   const mailboxNames = new Set([...config.mailboxes.map((m) => m.email.toLowerCase()), ...weekOutreach.map((t) => t.mailbox.toLowerCase()).filter(Boolean)]);
+  const health = new Map([...mailboxNames].map((mb) => [mb, mailboxHealth(stores, config, mb, opts.today)]));
+  const complained = [...health.values()].filter((h) => h.complaintPause).map((h) => h.mailbox);
   for (const mb of mailboxNames) {
     const cfg = config.mailboxes.find((m) => m.email.toLowerCase() === mb);
-    const lastLog = loads.mailboxLog.rows
-      .filter((r) => r.mailbox.toLowerCase() === mb && r.date !== "" && r.date <= opts.today)
-      .sort((a, b) => a.date.localeCompare(b.date))
-      .at(-1);
+    const h = health.get(mb)!;
+    const reasons = [
+      ...(cfg?.paused ? ["paused in config"] : []),
+      ...(h.pause ? h.reasons : []),
+      ...(!h.complaintPause && complained.length && config.guardrails.pause_on_complaint ? [`spam complaint on ${complained.join(", ")}`] : []),
+    ];
+    pauseReasons[mb] = reasons;
     byMailbox[mb] = {
       sent: sentRows.filter((t) => t.mailbox.toLowerCase() === mb).length,
       bounces: hardBounces.filter((r) => r.mailbox.toLowerCase() === mb).length,
-      paused: Boolean(cfg?.paused) || lastLog?.paused === "Y",
+      paused: reasons.length > 0,
     };
   }
 
@@ -113,15 +127,15 @@ export function weeklyReport(stores: Stores, config: EngineConfig, opts: { today
   const alarms: string[] = [];
   if (!config.licensed_states.length || !config.licensing_signoff.trim()) alarms.push("Sending is blocked: licensed_states is empty or licensing_signoff is blank (docs/COMPLIANCE.md).");
   if (!config.firm.postal_address.trim()) alarms.push("Sending is blocked: firm.postal_address is blank (CAN-SPAM 16 CFR 316.2(p)).");
-  if (sent && bounceRate > g.max_bounce_rate) alarms.push(`Hard bounce rate ${pct(bounceRate)} is above the ${pct(g.max_bounce_rate)} guardrail: check list quality before sending more.`);
+  if (delivered && bounceRate > g.max_bounce_rate) alarms.push(`Hard bounce rate ${pct(bounceRate)} is above the ${pct(g.max_bounce_rate)} guardrail: check list quality before sending more.`);
   for (const mb of mailboxNames) {
     const perDay = new Map<string, number>();
     for (const r of hardBounces.filter((x) => x.mailbox.toLowerCase() === mb)) perDay.set(day(r.received_at), (perDay.get(day(r.received_at)) ?? 0) + 1);
     for (const [d, n] of perDay) if (n >= g.max_hard_bounces_per_day) alarms.push(`${mb} had ${n} hard bounces on ${d} (limit ${g.max_hard_bounces_per_day} a day).`);
   }
   if (complaints) alarms.push(`${complaints} spam complaint${complaints > 1 ? "s" : ""} this week${g.pause_on_complaint ? ": sending stays paused until a person reviews and clears it" : ""}.`);
-  if (sent && optOuts / sent > g.max_opt_out_rate) alarms.push(`Opt-out rate ${pct(optOuts / sent)} is above the ${pct(g.max_opt_out_rate)} guardrail: review targeting and copy.`);
-  for (const [mb, h] of Object.entries(byMailbox)) if (h.paused) alarms.push(`${mb} is paused.`);
+  if (delivered && optOuts / delivered > g.max_opt_out_rate) alarms.push(`Opt-out rate ${pct(optOuts / delivered)} is above the ${pct(g.max_opt_out_rate)} guardrail: review targeting and copy.`);
+  for (const [mb, h] of Object.entries(byMailbox)) if (h.paused) alarms.push(`${mb} is paused. ${pauseReasons[mb]!.join("; ")}.`);
   const failed = weekOutreach.filter((t) => t.status === "failed").length + touches.filter((t) => t.kind === "reply" && t.status === "failed" && inWindow(touchDate(t))).length;
   if (failed) alarms.push(`${failed} message${failed > 1 ? "s" : ""} failed to deliver this week (touches.csv status failed).`);
   const replyErrors = weekReplies.filter((r) => r.error.trim()).length;
@@ -154,6 +168,7 @@ export function weeklyReport(stores: Stores, config: EngineConfig, opts: { today
   // Cumulative funnel since the start.
   const everContacted = new Set(outreach.filter((t) => t.status === "sent" || t.status === "drafted").map((t) => t.prospect_id)).size;
   const everSent = outreach.filter((t) => t.status === "sent").length;
+  const everDelivered = outreach.filter((t) => t.status === "sent" || t.status === "drafted").length;
   const everHuman = replies.filter((r) => !NON_HUMAN.has(r.class)).length;
   const stageCount = (s: LeadRow["stage"]) => leads.filter((l) => l.stage === s).length;
   const funnel: [string, string][] = [
@@ -162,7 +177,7 @@ export function weeklyReport(stores: Stores, config: EngineConfig, opts: { today
     ["Contacted (sent or drafted)", String(everContacted)],
     ["Outreach emails sent", String(everSent)],
     ["Human replies", String(everHuman)],
-    ["Reply rate (all time)", everSent ? pct(everHuman / everSent) : "n/a"],
+    ["Reply rate (all time, over sent or drafted)", everDelivered ? pct(everHuman / everDelivered) : "n/a"],
     ["Interested replies", String(replies.filter((r) => r.class === "interested").length)],
     ["Leads", String(leads.length)],
     ["Qualified or later", String(leads.filter((l) => QUALIFIED_OR_LATER.has(l.stage)).length)],
@@ -183,11 +198,11 @@ export function weeklyReport(stores: Stores, config: EngineConfig, opts: { today
     ["Outreach drafts created", String(drafted)],
     ["New prospects contacted", String(newProspectsContacted)],
     ["Human replies", String(humanReplies)],
-    ["Reply rate", sent ? pct(replyRate) : "n/a"],
+    ["Reply rate (over sent or drafted)", delivered ? pct(replyRate) : "n/a"],
     ["Interested replies", String(positiveReplies)],
     ["Opt-outs", String(optOuts)],
     ["Hard bounces", String(bounces)],
-    ["Hard bounce rate", sent ? pct(bounceRate) : "n/a"],
+    ["Hard bounce rate (over sent or drafted)", delivered ? pct(bounceRate) : "n/a"],
     ["Soft bounces", String(weekReplies.filter((r) => r.class === "bounce" && r.bounce_type === "soft").length)],
     ["Spam complaints", String(complaints)],
     ["Qualified sellers", String(qualified)],

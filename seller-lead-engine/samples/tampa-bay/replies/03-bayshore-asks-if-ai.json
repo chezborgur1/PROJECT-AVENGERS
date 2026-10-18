@@ -1,0 +1,12 @@
+{
+  "_note": "Fictional. Bayshore Plumbing's shared inbox asks whether a person or a bot is writing; the engine answers truthfully from a fixed template.",
+  "id": "demo-reply-0003",
+  "threadId": "",
+  "mailbox": "",
+  "from": "Bayshore Plumbing <info@bayshoreplumbing.example>",
+  "to": "",
+  "subject": "",
+  "date": "2026-10-21T14:10:00Z",
+  "text": "Are you a bot or a real person?",
+  "headers": {}
+}

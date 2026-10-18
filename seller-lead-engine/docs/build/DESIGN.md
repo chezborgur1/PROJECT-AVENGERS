@@ -10,6 +10,7 @@ be changed without updating every caller:
 - `src/store/csvTable.ts` and `src/store/index.ts`: `CsvTable` (`load`, `rows`, `upsert`, `append`, `replaceAll`), `openStores(dataDir)` -> `Stores`, `nextId`, `idAllocator`
 - `src/util/dates.ts`: `isoDate`, `isoStamp`, `addDays`, `addBusinessDays`, `isBusinessDay`, `daysBetween`, `yearsSince`, `isoWeekLabel`, `localTime`, `localDate`, `usFederalHolidays`
 - `src/util/claude.ts`: the one Claude wrapper (`claude`, `claudeAvailable`, `CLAUDE_MODEL`, `fallbackOptions`, `assertFinished`)
+- `src/util/gmailAuth.ts`: the one Gmail credentials loader (`GmailTokensFileSchema`, `loadGmailTokens`, `credentialsFor`, `GmailTokenRefresher`); the documented tokens file is `{ "client_id", "client_secret", "mailboxes": { "<mailbox>": { "refresh_token" } } }` from an Internal OAuth app in the sending Workspace tenant
 - `tests/helpers.ts`: `REPO`, `tmpDir`, `tempStores`, `testConfig`, `makeProspect`, `makeLead`, `offline`
 
 Research behind every rule is in `docs/research/` (claims, compliance, data,
@@ -107,7 +108,7 @@ export function scoreProspect(p: ProspectRow, ctx: { config: EngineConfig; today
 export function scoreAll(stores: Stores, config: EngineConfig, opts: { today: string; now: Date; places?: PlacesClient }): { scored: number; excluded: number; byTier: Record<string, number> }
 ```
 
-Weights from `docs/research/data.md` §9: owner age 30, tenure 20, no apparent successor 15, size fit 15, fatigue signals 10, vertical prior 10 (`config.verticals[v].prior`). Knock-outs (score 0, status `excluded` with `exclude_reason`): inactive entity or licence, `CLOSED_PERMANENTLY`, franchise/chain name pattern, excluded domain, suppressed, tenure under `targeting.min_tenure_years`, no vertical or no metro. A prospect without a sendable email (`valid`, or `catch_all`) scores but goes to `hold`. Tiers from `targeting.tier_a_min` / `tier_b_min`. `scoreAll` only rescoring prospects in `new`, `scored`, `hold`; it writes `score`, `tier`, `score_components` ("age=27; tenure=20; ..."), `score_reasons` (plain English, e.g. "Licensed since 1994 (32 years)", "Sole officer on every annual report since 2004", never the estimated age as a fact: write "Licence issued 1994, which suggests a senior owner"), `age_est_*`, `tenure_years`, `scored_at`, and `place_id` when matched.
+Weights from `docs/research/data.md` §9: owner age 30, tenure 20, no apparent successor 15, size fit 15, fatigue signals 10, vertical prior 10 (`config.verticals[v].prior`). Knock-outs (score 0, status `excluded` with `exclude_reason`): inactive entity or licence, `CLOSED_PERMANENTLY`, franchise/chain name pattern, excluded domain, suppressed, tenure under `targeting.min_tenure_years`, no vertical or no metro. A prospect without a sendable email (`isSendableVerification`: `valid`, `catch_all`, or `role_based`, which enrich only leaves on a business with no person address) scores but goes to `hold`. Tiers from `targeting.tier_a_min` / `tier_b_min`. `scoreAll` only rescoring prospects in `new`, `scored`, `hold`; it writes `score`, `tier`, `score_components` ("age=27; tenure=20; ..."), `score_reasons` (plain English, e.g. "Licensed since 1994 (32 years)", "Sole officer on every annual report since 2004", never the estimated age as a fact: write "Licence issued 1994, which suggests a senior owner"), `age_est_*`, `tenure_years`, `scored_at`, and `place_id` when matched.
 
 ## Module C: contacts and compliance (`src/contacts/`, `src/compliance/`)
 
@@ -128,11 +129,14 @@ export function discoverEmails(website: string, opts: { fetchImpl?: typeof fetch
 // contacts/enrich.ts
 export function enrichContacts(stores: Stores, config: EngineConfig, opts: { now: Date; discover: boolean; verify: boolean; fetchImpl?: typeof fetch; resolveMx?: (d: string) => Promise<string[]>; verifierApiKey?: string }): Promise<{ found: number; verified: number; byStatus: Record<string, number> }>
 //   for prospects in new/scored/hold: pick the best email (owner-name match > other person > role-based), record email_source(+url), verify, write email_verification + email_verified_at; never overwrite a verified email with an unverified one
+//   without a verifier API key every address ends "unknown" (not sendable): the safe default
+export function setManualVerification(stores: Stores, prospectId: string, status: "valid" | "invalid", by: string, now: Date): ProspectRow   // a person's own check: sets the status, email_verified_at, and appends "verified manually by <by>" to notes
 
 // compliance/suppression.ts
 export class Suppression {
   constructor(table: Stores["suppression"])
-  check(email: string, prospectId?: string): SuppressionRow | undefined   // email, its domain, or the prospect id
+  check(email: string, prospectId?: string): SuppressionRow | undefined   // email, its domain, or the prospect id; fails closed while the file has unreadable rows
+  lookup(email: string, prospectId?: string): SuppressionRow | undefined  // readable rows only, for scoring bookkeeping; sends, exports and drafts use check
   add(value: string, valueType: "email" | "domain" | "prospect", reason: SuppressionRow["reason"], source: string, now: Date): void   // idempotent; never removes
   all(): SuppressionRow[]
 }
@@ -144,7 +148,7 @@ export function jurisdictionBlock(p: Pick<ProspectRow, "state" | "zip">, email: 
 // compliance/footer.ts
 export function adNotice(config: EngineConfig): string     // the CAN-SPAM advertisement identification line, plain and honest
 export function buildFooter(config: EngineConfig, mailbox: Mailbox): string   // sender name, title, firm legal name, postal address, phone, opt-out instruction ("Reply 'unsubscribe' and I will not email you again." plus the URL when configured)
-export function aiDisclosure(config: EngineConfig, mailbox: Mailbox): string  // "I drafted this reply with an AI assistant; <sender> reviews every message before it is sent." style, truthful
+export function aiDisclosure(config: EngineConfig, mailbox: Mailbox): string  // "I drafted this reply with an AI assistant; <sender> reviews every reply before it is sent." style, truthful
 export function listUnsubscribeHeaders(config: EngineConfig, mailbox: Mailbox, touchId: string): Record<string, string>  // List-Unsubscribe (mailto with subject "unsubscribe <touchId>", plus https URL when configured) and List-Unsubscribe-Post when a URL exists
 
 // compliance/lint.ts
@@ -181,7 +185,8 @@ export function mailboxDailyCap(mailbox: Mailbox, config: EngineConfig, today: s
 
 // sending/health.ts
 export interface MailboxHealth { mailbox: string; sends: number; hardBounces: number; bounceRate: number; complaints: number; optOuts: number; pause: boolean; reasons: string[] }
-export function mailboxHealth(stores: Stores, config: EngineConfig, mailbox: string, today: string): MailboxHealth   // from touches (sent) and replies (bounce, complaint, opt-out) in the guardrail windows
+export function mailboxHealth(stores: Stores, config: EngineConfig, mailbox: string, today: string): MailboxHealth   // from touches (sent or drafted) and replies (bounce, policy bounce, complaint, opt-out) in the guardrail windows
+export function clearPause(stores: Stores, mailbox: string, by: string, now: Date): MailboxLogRow   // appends the mailbox_log row (paused "N", pause_reason "cleared: by <by> at <stamp>") the breakers read as clearance
 
 // sending/planner.ts
 export interface PlannedMessage { prospectId: string; step: 1 | 2 | 3; mailbox: string }
@@ -199,7 +204,7 @@ export function base64url(s: string): string
 // sending/transports.ts
 export interface Transport { readonly name: string; deliver(msg: OutgoingMessage, mode: "draft" | "send"): Promise<DeliveryResult> }
 export class OutboxTransport implements Transport   // constructor(outboxDir, today): writes <outbox>/<today>/<touchId>.json (the whole OutgoingMessage plus mode) and appends to <outbox>/<today>/README.md a checklist the Claude Gmail connector works through; returns {} (ids are recorded later)
-export class GmailApiTransport implements Transport // constructor({ tokensFile, fetchImpl, now }): OAuth refresh per mailbox (client id/secret/refresh token in the tokens file), POST gmail/v1/users/me/drafts or /messages/send with { raw: base64url(mime), threadId }
+export class GmailApiTransport implements Transport // constructor({ tokensFile, fetchImpl, now }): OAuth refresh per mailbox via src/util/gmailAuth.ts, POST gmail/v1/users/me/drafts or /messages/send with { raw: base64url(mime), threadId }
 export class MemoryTransport implements Transport   // for tests and the demo: records every message
 
 // sending/run.ts
@@ -225,16 +230,17 @@ Files: `replies/parse.ts`, `replies/inbox.ts`, `replies/classify.ts`, `replies/r
 ```ts
 // replies/parse.ts
 export function stripQuoted(text: string): string    // drop "On ... wrote:", ">" lines, "-----Original Message-----", signature after "-- "
-export function detectBounce(msg: InboundMessage): { type: "hard" | "soft"; recipient?: string; code?: string } | null   // mailer-daemon / postmaster senders, DSN subjects, 5.x.x (hard), 4.x.x (soft), "550 5.7.515" / "550; 5.7.515"
-export function detectAutoReply(msg: InboundMessage): boolean   // Auto-Submitted != no, X-Autoreply, Precedence auto_reply/bulk, OOO subjects and phrases
+export function detectBounce(msg: InboundMessage): { type: "hard" | "soft" | "policy"; recipient?: string; code?: string } | null   // mailer-daemon / postmaster senders, DSN subjects; "policy" for authentication rejections of OUR domain ("550 5.7.515" / "550; 5.7.515", 5.7.509, 5.7.20-27, any 5.7.x naming SPF/DKIM/DMARC); 5.x.x otherwise hard (5.1.1, 5.1.10, 5.2.1, 5.4.1 ...), 4.x.x soft
+//   policy bounces never suppress the recipient: replies.csv records them as bounce_type "soft" with the code leading the snippet, and sending/health.ts pauses the mailbox
+export function detectAutoReply(msg: InboundMessage): boolean   // Auto-Submitted != no, X-Autoreply, Precedence auto_reply/bulk, OOO subjects; OOO body phrases only when the new text has no clear human answer ("yes", "interested", "call me", a question to us, 40+ words of its own)
 
 // replies/inbox.ts
 export function readInboxFolder(dir: string): { messages: InboundMessage[]; invalid: { file: string; error: string }[] }   // *.json files (one message or an array) written by the Claude Gmail connector routine; moves nothing
-export class GmailApiInbox { constructor(opts: { tokensFile: string; fetchImpl?: typeof fetch; now: Date }); fetchSince(mailbox: string, sinceIso: string): Promise<InboundMessage[]> }
+export class GmailApiInbox { constructor(opts: { tokensFile: string; fetchImpl?: typeof fetch; now: Date }); fetchSince(mailbox: string, sinceIso: string): Promise<InboundMessage[]> }   // credentials via src/util/gmailAuth.ts
 
 // qualify/questions.ts
 export interface IntakeQuestion { key: string; field: keyof LeadRow; text: string; priority: number }
-export const INTAKE_QUESTIONS: readonly IntakeQuestion[]   // revenue (band), owner earnings / SDE (band), timeline, motivation (what prompted the interest), employees, owner hours, recurring share, largest customer share, real estate owned or leased, who holds the licence
+export const INTAKE_QUESTIONS: readonly IntakeQuestion[]   // revenue (band), owner earnings / SDE (band), timeline, motivation (what prompted the interest), employees, owner hours, recurring share, largest customer share, real estate owned or leased, who holds the licence; then the readiness checklist facts: runs 4 weeks without the owner, manager in place, 3-year revenue trend, books match the returns, years left on the lease
 export function nextQuestions(lead: LeadRow, max: number): IntakeQuestion[]   // unanswered and not yet asked, by priority
 
 // qualify/score.ts
@@ -243,7 +249,7 @@ export function qualScore(lead: LeadRow, config: EngineConfig): QualResult   // 
 export function nextStage(lead: LeadRow, cls: ReplyClass, q: QualResult, config: EngineConfig): LeadStage
 
 // replies/classify.ts
-export interface Classification { class: ReplyClass; classifier: "rules" | "claude"; optOut: boolean; complaint: boolean; facts: Partial<Pick<LeadRow, "revenue" | "revenue_band" | "sde" | "ebitda" | "employees" | "years_owned" | "owner_hours_per_week" | "recurring_revenue_pct" | "top_customer_pct" | "owns_real_estate" | "license_holder" | "timeline" | "motivation" | "motivation_detail" | "wants_readiness_check">>; question?: string; notes: string }
+export interface Classification { class: ReplyClass; classifier: "rules" | "claude"; optOut: boolean; complaint: boolean; facts: Partial<Pick<LeadRow, "revenue" | "revenue_band" | "sde" | "ebitda" | "employees" | "years_owned" | "owner_hours_per_week" | "recurring_revenue_pct" | "top_customer_pct" | "owns_real_estate" | "license_holder" | "timeline" | "motivation" | "motivation_detail" | "wants_readiness_check" | "books_match_returns" | "revenue_trend" | "manager_in_place" | "runs_without_owner" | "lease_years_left">>; question?: string; notes: string }
 export function classifyByRules(msg: InboundMessage, strippedText: string): Classification | null   // bounce, auto_reply, unsubscribe (detectOptOut), complaint, asks_if_ai; null when the rules cannot decide
 export function classifyReply(msg: InboundMessage, ctx: { prospect: ProspectRow; lead?: LeadRow; config: EngineConfig }): Promise<Classification>
 //   rules first; then Claude (structured wire schema, every key present, nulls for anything the owner did not state; facts only when stated) when claudeAvailable(); else a keyword fallback (interested / not_now / not_interested / question / other)
@@ -289,13 +295,27 @@ export function handOffWarmLeads(stores: Stores, config: EngineConfig, opts: { n
 
 // report/weekly.ts
 export interface WeeklyMetrics { week: string; sent: number; drafted: number; newProspectsContacted: number; humanReplies: number; replyRate: number; positiveReplies: number; optOuts: number; bounces: number; bounceRate: number; complaints: number; qualified: number; handedOff: number; meetings: number; listingsSigned: number; byMailbox: Record<string, { sent: number; bounces: number; paused: boolean }>; alarms: string[] }
-export function weeklyReport(stores: Stores, config: EngineConfig, opts: { today: string }): { metrics: WeeklyMetrics; markdown: string; file: string }   // the 7 days ending today; also cumulative funnel; writes data/reports/<isoWeek>.md
+export function weeklyReport(stores: Stores, config: EngineConfig, opts: { today: string }): { metrics: WeeklyMetrics; markdown: string; file: string }   // the 7 days ending today; rates over outreach sent or drafted (the guardrail basis); pauses from mailboxHealth; also cumulative funnel; writes data/reports/<isoWeek>.md
 
 // report/exportLeads.ts
 export function exportLeads(stores: Stores, config: EngineConfig, opts: { partner: string; now: Date; prospectIds: string[]; outFile: string }): { exported: number; skipped: { prospectId: string; reason: string }[] }
-//   throws unless lead_sales.enabled and legal_review_ref set; flat fee only (no share of the sale); never exports a suppressed or dnc prospect; logs exports.csv
+//   throws ComplianceError unless lead_sales.enabled and legal_review_ref set; flat fee only (no share of the sale); never exports a suppressed (Suppression.check) or dnc prospect; logs exports.csv
 ```
 
 ## Module G: CLI, demo, docs (after A to F)
 
-`src/cli.ts` (hand-rolled like amb-bot): `init`, `preflight`, `import <sunbiz|dbpr|csv:<preset>> <file> [--snapshot YYYY-MM-DD]`, `build`, `enrich [--discover] [--no-verify]`, `score [--places]`, `plan [--date]`, `send [--date] [--dry-run]`, `record <touchId> <drafted|sent|failed> [--message-id] [--thread-id] [--draft-id] [--error]`, `sync [--since]` (inbox folder or Gmail API), `qualify` (process inbox), `check <prospectId>`, `handoff`, `report`, `stage <prospectId> <stage>`, `suppress <email|domain> [--reason]`, `export <partner> <ids...>`, `daily` (sync, qualify, handoff, send), `status`, `demo`. `src/demo.ts` runs the whole loop offline on `samples/tampa-bay/` in a temp data folder with `MemoryTransport` and canned replies. Docs: `README.md`, `CLAUDE.md`, `.env.example`, `config/engine.config.example.json`, `docs/RUNBOOK.md` (setup steps and the Claude scheduled-task prompts that replace the plan's Grok Bot), `docs/COMPLIANCE.md`, `docs/DATA_SOURCES.md`, `docs/PLAN_REVIEW.md` (what the fact-check changed in the plan). Root `README.md` row and `setup.sh` / `setup.bat` blocks.
+`src/cli.ts` (hand-rolled like amb-bot): `init`, `preflight`, `import <sunbiz|dbpr|csv:<preset>> <file> [--snapshot YYYY-MM-DD] [--metro-only]`, `build`, `enrich [--discover] [--no-verify]`, `verify <prospectId> <valid|invalid> --by <name>`, `score [--places]`, `plan [--date]`, `send [--date] [--dry-run]`, `record <touchId> <drafted|sent|failed> [--message-id] [--thread-id] [--draft-id] [--error]`, `sync [--since]` (Gmail API; with the outbox transport the Claude routine writes `data/inbox/`), `qualify` (process inbox), `check <prospectId>`, `handoff`, `report [--date]`, `stage <prospectId> <meeting|listed|lost|nurture> [--until]`, `suppress <email|domain> [--reason]`, `clear-pause <mailbox> --by <name>`, `export <partner> <ids...> --out <file>`, `daily [--date]` (sync for gmail_api, qualify, handoff, send), `status`, `demo`.
+
+```ts
+// cli.ts: the only clock read is in main(); every command is a function of injected deps, so tests never spawn a process
+export interface CliDeps { cwd: string; env: NodeJS.ProcessEnv; today: string; now: Date; log: (line: string) => void; fetchImpl?: typeof fetch; resolveTxt?: ...; resolveMx?: ...; transport?: Transport; classify?: typeof classifyReply }
+export type Command = (args: string[], deps: CliDeps) => Promise<number>   // exit code
+export const COMMANDS: Record<string, Command>                              // cmdInit, cmdPreflight, cmdImport, ... cmdDemo, cmdHelp
+export function runCli(argv: string[], deps: CliDeps): Promise<number>
+export const SEND_BLOCKING_CHECKS: readonly string[]                        // postal address, licensed states, mailboxes, sender names, separate sending domain
+export function sendBlockers(config: EngineConfig, today: string): Promise<PreflightItem[]>   // offline (stub DNS); send and send --dry-run refuse while any fails
+```
+
+Paths: config and data from `engineEnv(deps.cwd)`; templates, `reference/` and samples from the package. `qualify` moves a `data/inbox/*.json` file to `data/inbox/processed/` only when every message in it has a classified `replies.csv` row (or came from an AMB mailbox); an unreadable file or a message whose classification failed stays for the next run. `check` refuses a suppressed or dnc prospect before building anything, writes the check, and drafts `emailBody` plus `aiDisclosure` and `buildFooter` through `assertSendable` (kind reply) as a draft in the owner's latest thread. `suppress` marks prospects whose email the new row matches (`Suppression.lookup`) dnc. `daily` skips the send when sync or qualify did not finish cleanly, because an unprocessed reply may be an opt-out.
+
+`src/demo.ts` (`runDemo(opts: { log; today; now; dataDir? }): Promise<DemoResult>`) runs the whole loop offline on `samples/tampa-bay/` through `runCli` in a temp data folder: config from `config/engine.config.example.json` with fictional mailboxes and FL licensed (postal address and `licensing_signoff` marked DEMO ONLY), a stub verifier and MX resolver, `MemoryTransport` (drafts written to `<data>/drafts/`), and the canned replies in `samples/tampa-bay/replies/*.json` (interested with figures, a question, "are you a bot?", an opt-out, a hard bounce, an out-of-office), delivered into the thread of each step-1 email. Claude is replaced by `standInClassifier`: the rules first, then the `claude_stand_in` answer stored with the one reply the rules cannot decide, else keywords; it never calls Claude. The engine calendar is fixed (build 2026-10-19, send 2026-10-20, replies 2026-10-21), so every run gives the same files; `today` and `now` are only reported. Docs: `README.md`, `CLAUDE.md`, `.env.example`, `config/engine.config.example.json`, `docs/RUNBOOK.md` (setup steps and the Claude scheduled-task prompts that replace the plan's Grok Bot), `docs/COMPLIANCE.md`, `docs/DATA_SOURCES.md`, `docs/PLAN_REVIEW.md` (what the fact-check changed in the plan). Root `README.md` row and `setup.sh` / `setup.bat` blocks.

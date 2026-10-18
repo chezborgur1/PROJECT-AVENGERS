@@ -12,12 +12,17 @@ import { idAllocator } from "../store/csvTable.ts";
 import type { Stores } from "../store/index.ts";
 import { addDays, isoStamp } from "../util/dates.ts";
 import { classifyByRules, classifyReply, withoutOwnText, type Classification, type ReplyFacts } from "./classify.ts";
-import { addressOf, detectBounce, stripQuoted } from "./parse.ts";
+import { addressOf, detectBounce, POLICY_SNIPPET_PREFIX, stripQuoted, type BounceType } from "./parse.ts";
 import { draftResponse, withQuestionsAsked } from "./respond.ts";
 
 // The reply loop: every received message is matched to a prospect,
 // classified, recorded in replies.csv, and acted on.
 //
+// - An authentication or policy bounce (550 5.7.515, 5.7.26, ...: our
+//   domain failed SPF, DKIM or DMARC at the receiver) suppresses nobody.
+//   It is recorded as a soft bounce whose snippet leads with the code, and a
+//   mailbox_log row names it; src/sending/health.ts pauses the mailbox from
+//   it until a person clears the pause.
 // - Opt-out, complaint, "not the owner" and hard bounce: the address and the
 //   prospect go on the permanent suppression list at once (CAN-SPAM 7704(a)(4)
 //   allows 10 business days, Gmail expects 2, docs/research/deliverability.md
@@ -51,6 +56,8 @@ export interface ProcessReport {
   errors: { replyId: string; error: string }[];
   /** Messages sent by one of AMB's own mailboxes (a thread's own history), skipped. */
   ownMessages: number;
+  /** Authentication or policy bounces: the mailbox pauses, the recipient is not suppressed. */
+  policyBounces: number;
 }
 
 /** Classes from a person, as opposed to machine mail. */
@@ -113,12 +120,17 @@ export function newLead(p: ProspectRow): LeadRow {
     nurture_date: "",
     handed_off_at: "",
     handoff_file: "",
+    books_match_returns: "",
+    revenue_trend: "",
+    manager_in_place: "",
+    runs_without_owner: "",
+    lease_years_left: undefined,
     updated_at: "",
   };
 }
 
 /** The suppression reason a classification calls for, or undefined. */
-function suppressionReason(cls: Classification, bounceType: "hard" | "soft" | undefined): SuppressionRow["reason"] | undefined {
+function suppressionReason(cls: Classification, bounceType: BounceType | undefined): SuppressionRow["reason"] | undefined {
   if (cls.complaint || cls.class === "complaint") return "complaint";
   if (cls.optOut || cls.class === "unsubscribe") return "opt_out";
   if (cls.class === "wrong_person") return "wrong_person";
@@ -145,7 +157,7 @@ export async function processInbox(
   const { now, today, transport } = opts;
   const classify = opts.classify ?? classifyReply;
   const stamp = isoStamp(now);
-  const report: ProcessReport = { received: opts.messages.length, duplicates: 0, unmatched: 0, byClass: {}, suppressed: 0, drafted: 0, errors: [], ownMessages: 0 };
+  const report: ProcessReport = { received: opts.messages.length, duplicates: 0, unmatched: 0, byClass: {}, suppressed: 0, drafted: 0, errors: [], ownMessages: 0, policyBounces: 0 };
 
   const suppression = new Suppression(stores.suppression);
   const existing = new Map(stores.replies.rows().map((r) => [r.reply_id, r]));
@@ -193,11 +205,13 @@ export async function processInbox(
       from_email: from,
       subject: msg.subject.slice(0, 300),
       received_at: stampOf(msg.date),
-      snippet: stripped.slice(0, 500),
+      // A policy bounce leads with its code, so the mailbox health check and a person both see it.
+      snippet: (bounce?.type === "policy" ? `${POLICY_SNIPPET_PREFIX} ${bounce.code}: ${stripped}` : stripped).slice(0, 500),
       class: "",
       classifier: "",
       opt_out: "",
-      bounce_type: bounce?.type ?? "",
+      // replies.csv keeps hard/soft only: a policy bounce is recorded as soft, so it never counts as a dead address.
+      bounce_type: bounce ? (bounce.type === "policy" ? "soft" : bounce.type) : "",
       processed_at: stamp,
       response_touch_id: prior?.response_touch_id ?? "",
       error: "",
@@ -261,6 +275,28 @@ export async function processInbox(
             },
           ]);
         }
+      }
+
+      if (cls.class === "bounce" && bounce?.type === "policy") {
+        // Our domain failed the receiver's SPF, DKIM or DMARC check: the recipient is not at fault and is
+        // not suppressed. The sender's health check pauses the mailbox from this reply row; this log row
+        // tells a person why.
+        report.policyBounces++;
+        stores.mailboxLog.append([
+          {
+            date: today,
+            mailbox: msg.mailbox || prospect?.mailbox || "",
+            sent: undefined,
+            drafted: undefined,
+            hard_bounces: undefined,
+            soft_bounces: 1,
+            complaints: undefined,
+            opt_outs: undefined,
+            human_replies: undefined,
+            paused: "Y",
+            pause_reason: `authentication bounce ${bounce.code ?? ""} in reply ${msg.id}: the receiver refused our sending domain (SPF, DKIM or DMARC); recipient not suppressed. Fix DNS, run preflight, then clear the pause`.replace(/\s+/g, " "),
+          },
+        ]);
       }
 
       if (!prospect) {

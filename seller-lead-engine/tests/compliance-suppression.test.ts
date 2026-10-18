@@ -81,5 +81,8 @@ describe("Suppression", () => {
     expect(hit?.source).toMatch(/unreadable row/);
     s.add("mary@exampleair.com", "email", "opt_out", "reply R-3", NOW);
     expect(stores.suppression.rows().map((r) => r.value)).toEqual(["john@exampleair.com", "mary@exampleair.com"]);
+    // lookup (for scoring only) reads the readable rows and never invents a hit.
+    expect(s.lookup("anyone@else.example")).toBeUndefined();
+    expect(s.lookup("John@ExampleAir.com")?.reason).toBe("opt_out");
   });
 });

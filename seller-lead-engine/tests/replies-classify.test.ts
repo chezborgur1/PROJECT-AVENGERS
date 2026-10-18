@@ -91,6 +91,13 @@ describe("classifyReply offline", () => {
       expect(await classifyReply(inbound({ text: "What does it cost?" }), ctx)).toMatchObject({ class: "question", question: "What does it cost?" });
     });
   });
+
+  it("reads an owner on vacation who says yes as interested, not as an auto-reply", async () => {
+    await offline(async () => {
+      expect(await classifyReply(inbound({ text: "I'm on vacation until Monday, but yes, I'm interested" }), ctx)).toMatchObject({ class: "interested", facts: { wants_readiness_check: "Y" } });
+      expect(await classifyReply(inbound({ text: OOO_TEXT }), ctx)).toMatchObject({ class: "auto_reply" });
+    });
+  });
 });
 
 describe("wireToFacts", () => {
@@ -114,6 +121,11 @@ describe("wireToFacts", () => {
     motivation: null,
     motivation_detail: null,
     wants_readiness_check: null,
+    books_match_returns: null,
+    revenue_trend: null,
+    manager_in_place: null,
+    runs_without_owner: null,
+    lease_years_left: null,
     notes: "",
     ...o,
   });
@@ -137,6 +149,18 @@ describe("wireToFacts", () => {
     expect(wireToFacts(wire({ recurring_revenue_pct: 140, owner_hours_per_week: 200, revenue: -5 }), "lots of 9s")).toEqual({});
     expect(wireToFacts(wire({ revenue: 1_000_000, employees: 10 }), "Yes, interested.")).toEqual({});
     expect(wireToFacts(wire({ employees: 12 }), "twelve people")).toEqual({ employees: 12 });
+  });
+
+  it("keeps the readiness checklist facts the owner states, and drops a lease length with no number in the reply", () => {
+    const stated = wire({ books_match_returns: "Y", revenue_trend: "growing", manager_in_place: "Y", runs_without_owner: "N", lease_years_left: 7 });
+    expect(wireToFacts(stated, "Books match, growing, my manager runs it, 7 years left on the lease")).toEqual({
+      books_match_returns: "Y",
+      revenue_trend: "growing",
+      manager_in_place: "Y",
+      runs_without_owner: "N",
+      lease_years_left: 7,
+    });
+    expect(wireToFacts(wire({ lease_years_left: 7 }), "We lease the shop.")).toEqual({});
   });
 
   it("never records unknown as a timeline or motivation", () => {

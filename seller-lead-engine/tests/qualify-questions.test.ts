@@ -6,7 +6,7 @@ import { makeLead, makeProspect } from "./helpers.ts";
 
 describe("INTAKE_QUESTIONS", () => {
   it("covers the intake list from the offer research, each key once and filling a real lead field", () => {
-    expect(INTAKE_QUESTIONS.map((q) => q.key)).toEqual(["revenue", "sde", "timeline", "motivation", "employees", "owner_hours", "recurring", "top_customer", "real_estate", "license_holder"]);
+    expect(INTAKE_QUESTIONS.map((q) => q.key)).toEqual(["revenue", "sde", "timeline", "motivation", "employees", "owner_hours", "recurring", "top_customer", "real_estate", "license_holder", "runs_without_owner", "manager", "revenue_trend", "books_match_returns", "lease_years"]);
     const fields = Object.keys(LeadRowSchema.shape);
     for (const q of INTAKE_QUESTIONS) expect(fields).toContain(q.field);
     expect(new Set(INTAKE_QUESTIONS.map((q) => q.priority)).size).toBe(INTAKE_QUESTIONS.length);
@@ -46,6 +46,20 @@ describe("nextQuestions", () => {
     expect(isAnswered(makeLead(p, { timeline: "unknown" }), t)).toBe(false);
     const re = INTAKE_QUESTIONS.find((x) => x.key === "real_estate")!;
     expect(isAnswered(makeLead(p, { owns_real_estate: "N" }), re)).toBe(true);
+  });
+
+  it("asks the readiness checklist questions last, and skips the lease question when the owner owns the building", () => {
+    const keys = INTAKE_QUESTIONS.map((q) => q.key);
+    const core = ["revenue", "sde", "timeline", "motivation"].map((k) => INTAKE_QUESTIONS.find((q) => q.key === k)!.priority);
+    for (const k of ["runs_without_owner", "manager", "revenue_trend", "books_match_returns", "lease_years"]) {
+      expect(keys).toContain(k);
+      expect(INTAKE_QUESTIONS.find((q) => q.key === k)!.priority).toBeGreaterThan(Math.max(...core));
+    }
+    const lease = INTAKE_QUESTIONS.find((x) => x.key === "lease_years")!;
+    expect(isAnswered(makeLead(p, { owns_real_estate: "Y" }), lease)).toBe(true);
+    expect(isAnswered(makeLead(p, { owns_real_estate: "N" }), lease)).toBe(false);
+    expect(isAnswered(makeLead(p, { lease_years_left: 7 }), lease)).toBe(true);
+    expect(isAnswered(makeLead(p, { revenue_trend: "flat" }), INTAKE_QUESTIONS.find((x) => x.key === "revenue_trend")!)).toBe(true);
   });
 
   it("returns nothing for a zero or negative limit and when everything is known", () => {

@@ -13,4 +13,16 @@ echo  2. Put reference models in amb-material-bot\references\model-templates
 echo  3. Put past CIMs in amb-material-bot\references\cims
 start "" "%~dp0amb-material-bot\references"
 start "" "%~dp0amb-material-bot\output"
+echo.
+echo Setting up the seller lead engine...
+cd /d "%~dp0seller-lead-engine"
+call npm install || (pause & exit /b 1)
+if not exist .env copy .env.example .env >nul
+if not exist config mkdir config
+if not exist config\engine.config.json copy config\engine.config.example.json config\engine.config.json >nul
+call npm run demo
+echo.
+echo Seller lead engine ready. Next steps:
+echo  1. Fill in seller-lead-engine\config\engine.config.json and seller-lead-engine\.env in Notepad
+echo  2. Read seller-lead-engine\docs\RUNBOOK.md. Nothing is sent until the licensing sign-off and postal address are filled in
 pause

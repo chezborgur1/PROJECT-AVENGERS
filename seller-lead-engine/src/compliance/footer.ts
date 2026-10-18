@@ -52,7 +52,7 @@ export function buildFooter(config: EngineConfig, mailbox: Mailbox): string {
 
 /** The AI-assistance disclosure for drafted replies: truthful, short, names the person who reviews. */
 export function aiDisclosure(config: EngineConfig, mailbox: Mailbox): string {
-  return `This reply was drafted with an AI assistant. ${mailbox.sender_name.trim()} of ${config.firm.name} reviews every message before it is sent.`;
+  return `This reply was drafted with an AI assistant. ${mailbox.sender_name.trim()} of ${config.firm.name} reviews every reply before it is sent.`;
 }
 
 /**

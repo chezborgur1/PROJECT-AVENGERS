@@ -361,6 +361,16 @@ describe("mailbox log", () => {
     expect(mb2).toMatchObject({ date: TUE, drafted: 1, paused: "N" });
   });
 
+  it("keeps rows the reply loop wrote today (a complaint or authentication-bounce note) when it replaces its own row", async () => {
+    const s = setup([makeProspect()]);
+    s.stores.mailboxLog.append([makeLog({ date: TUE, mailbox: MB1, sent: undefined, drafted: undefined, complaints: 1, paused: "Y", pause_reason: "complaint in reply r-1" })]);
+    await run(s, TUE);
+    await run(s, TUE);
+    const rows = s.stores.mailboxLog.rows().filter((r) => r.mailbox === MB1);
+    expect(rows.filter((r) => r.pause_reason === "complaint in reply r-1").length).toBe(1);
+    expect(rows.filter((r) => r.sent !== undefined).length).toBe(1);
+  });
+
   it("logs a paused mailbox with its reasons", async () => {
     const s = setup([makeProspect()]);
     s.stores.replies.append([makeReply({ class: "complaint", mailbox: MB2, received_at: "2026-11-09T10:00:00Z" })]);

@@ -4,7 +4,7 @@ import type { EngineConfig } from "../config.ts";
 import { splitList, type LeadRow, type ProspectRow, type ReplyRow } from "../domain/schema.ts";
 import { article, buildReadinessCheck, fileStem, money, recordFacts, toldFacts, writeReadinessCheck } from "../readiness/check.ts";
 import type { MultipleRow } from "../readiness/multiples.ts";
-import { suppressionHit } from "../report/exportLeads.ts";
+import { Suppression } from "../compliance/suppression.ts";
 import type { Stores } from "../store/index.ts";
 import { addBusinessDays, isoStamp } from "../util/dates.ts";
 
@@ -86,6 +86,13 @@ function nextStep(lead: LeadRow, config: EngineConfig, today: string): string {
     : `${advisor} replies by email by ${by} to book a 20-minute call and walks through the readiness check's unknown items.`;
 }
 
+/** Where the owner's name came from: the owner's own correction, else the state record it was copied from. */
+function ownerSource(lead: LeadRow, p: ProspectRow): string {
+  const same = (a: string, b: string) => a.trim().toLowerCase().replace(/\s+/g, " ") === b.trim().toLowerCase().replace(/\s+/g, " ");
+  if (!lead.owner_name.trim() && !p.owner_name.trim()) return "Not on file";
+  return lead.owner_name.trim() && !same(lead.owner_name, p.owner_name) ? "Per owner" : "Per state records";
+}
+
 /** Escape a value for a markdown table cell. */
 const cell = (s: string) => s.replace(/\|/g, "/").replace(/\s+/g, " ").trim();
 
@@ -93,7 +100,7 @@ const cell = (s: string) => s.replace(/\|/g, "/").replace(/\s+/g, " ").trim();
 export function handOffWarmLeads(stores: Stores, config: EngineConfig, opts: { now: Date; today: string; multiples: MultipleRow[] }): HandoffResult[] {
   const prospects = new Map(stores.prospects.rows().map((p) => [p.prospect_id, p]));
   const replies = stores.replies.rows();
-  const suppression = stores.suppression.rows();
+  const suppression = new Suppression(stores.suppression);
   const results: HandoffResult[] = [];
 
   for (const lead of stores.leads.rows()) {
@@ -101,7 +108,7 @@ export function handOffWarmLeads(stores: Stores, config: EngineConfig, opts: { n
     const p = prospects.get(lead.prospect_id);
     if (!p) continue;
     // Opt-outs are permanent and checked before anything else (DESIGN principle 3).
-    if (p.status === "dnc" || suppressionHit(suppression, lead.email || p.email, p.prospect_id)) continue;
+    if (p.status === "dnc" || suppression.check(lead.email || p.email, p.prospect_id) || suppression.check(p.email, p.prospect_id)) continue;
 
     const check = buildReadinessCheck(lead, p, config, { today: opts.today, multiples: opts.multiples });
     const checkFile = writeReadinessCheck(stores, check, p);
@@ -113,7 +120,8 @@ export function handOffWarmLeads(stores: Stores, config: EngineConfig, opts: { n
     md.push("## Summary", "", summary, "");
     md.push("## Facts", "", "| Fact | Value | Source |", "|---|---|---|");
     const facts = [
-      { label: "Owner", value: lead.owner_name || p.owner_name || "Unknown", source: lead.owner_name ? "Per owner" : "Per state records" },
+      // The reply loop seeds lead.owner_name from the state record, so it is "per owner" only when it differs from that record.
+      { label: "Owner", value: lead.owner_name || p.owner_name || "Unknown", source: ownerSource(lead, p) },
       { label: "Business", value: p.business_name + (p.dba_name ? ` (dba ${p.dba_name})` : ""), source: "Per state records" },
       { label: "Address", value: [p.street, p.city, p.state, p.zip].filter(Boolean).join(", ") || "Unknown", source: "Per state records" },
       ...recordFacts(p),

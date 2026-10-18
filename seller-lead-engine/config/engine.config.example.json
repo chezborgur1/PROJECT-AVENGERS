@@ -1,0 +1,198 @@
+{
+  "_notes": {
+    "about": "Example settings for AMB Advisory Services in the Tampa Bay metro. Copy to config/engine.config.json (npm run engine -- init does it) and fill in the blanks. JSON has no comments, so each field is explained here by its key name; the engine ignores this _notes object. Secrets (API keys, Gmail tokens) go in .env, never here.",
+    "firm.name": "Used on first mention in every email body (HOUSE_STYLE: AMB Advisory Services, then AMB Advisory).",
+    "firm.legal_name": "The legal name in the CAN-SPAM footer of every email.",
+    "firm.website": "The firm's primary domain. Mailboxes must not send from it: cold email uses a separate sending domain (preflight checks this).",
+    "firm.phone": "Printed in the footer when set. Optional.",
+    "firm.postal_address": "REQUIRED before anything is sent. A valid physical postal address (16 CFR 316.2(p)): the current street address, or a USPS PO box or a private mailbox at a registered CMRA accurately registered to AMB. Blank means the gate refuses every email and preflight fails.",
+    "mailboxes": "Each sending mailbox, at a separate sending domain registered openly to AMB (never ambadvisoryservices.com itself). sender_name must be a real AMB person's full name, never a team or a persona (CAN-SPAM header accuracy, FTC Impersonation Rule). warmup_started is the day warm-up began; cold sends start sending.warmup_weeks later. The placeholder below uses the reserved .example domain, so preflight's DNS checks fail until it is replaced. With transport outbox the Claude Gmail connector drafts as one signed-in account: add a second mailbox only with one connector routine per mailbox, or with transport gmail_api.",
+    "licensed_states": "REQUIRED before anything is sent. The states where AMB may solicit business sellers. Soliciting sellers for compensation is licensed brokerage in Florida (Fla. Stat. 475.01) and other states, so this list must equal the states counsel has signed off (docs/COMPLIANCE.md). Empty means nothing is sent.",
+    "licensing_signoff": "REQUIRED before anything is sent. Who signed off licensed_states and when, e.g. \"J. Smith, counsel, 2026-10-20\". Blank means nothing is sent.",
+    "verticals": "Trades the engine targets. noun is the plain words used in emails. keywords are matched as whole words against licence types, entity names and POI categories. license_codes are licence class codes or licence-number prefixes that decide the vertical whatever the name says. prior (0-10) is the vertical prior in the score. multiples_key is a key in reference/multiples.json for the readiness check's rough range.",
+    "verticals.hvac.license_codes": "Florida DBPR Construction Industry Licensing Board classes: CAC certified air conditioning contractor, CMC certified mechanical contractor, RA registered air conditioning contractor.",
+    "verticals.plumbing.license_codes": "Florida DBPR CILB classes: CFC certified plumbing contractor, RF registered plumbing contractor.",
+    "verticals.electrical.license_codes": "Florida DBPR Electrical Contractors' Licensing Board: EC certified electrical contractor, ER registered electrical contractor.",
+    "verticals.landscaping.license_codes": "None: Florida has no state landscaping licence, so landscapers are found from Sunbiz entity names and open POI categories.",
+    "verticals.pest_control.license_codes": "Florida Department of Agriculture and Consumer Services pest control business licences, which use the JB number prefix. Confirm against the FDACS file before importing it with a csv preset.",
+    "verticals.dental.license_codes": "Florida Board of Dentistry (Department of Health) dentist licences, which use the DN number prefix. Confirm against the DOH licence file before importing it with a csv preset.",
+    "metros": "Where AMB looks. counties are matched without the word County; zip_prefixes are used only when a record has no county. time_zone sets the recipient-local send window.",
+    "targeting.min_tenure_years": "Businesses younger than this (by licence or formation date) are knocked out.",
+    "targeting.send_tiers": "Score tiers that may enter the email sequence; tier C waits in hold.",
+    "targeting.tier_a_min": "Score at or above which a prospect is tier A.",
+    "targeting.tier_b_min": "Score at or above which a prospect is tier B.",
+    "targeting.exclude_name_patterns": "Name fragments that mark a franchise, chain or platform-owned company (knock-out). Whole words, case-insensitive.",
+    "targeting.exclude_domains": "Email domains or addresses never contacted: AMB itself, clients, businesses already in another process.",
+    "sending.mode": "draft: every email becomes a Gmail draft a person reviews and sends (the default). send: the engine sends; keep draft until about 2 weeks of clean sends.",
+    "sending.transport": "outbox: messages are written to data/outbox/ for the Claude Gmail connector routine, which reports back with npm run engine -- record. gmail_api: the engine calls the Gmail API with the tokens file named by GMAIL_TOKENS_FILE in .env.",
+    "sending.warmup_weeks": "Weeks of warm-up before the first cold email from a mailbox.",
+    "sending.ramp": "Cold emails per mailbox per day by week of cold sending; the last number holds.",
+    "sending.max_per_mailbox_per_day": "Hard ceiling per mailbox per day, follow-ups included.",
+    "sending.max_per_domain_per_day": "Hard ceiling per sending domain per day across its mailboxes.",
+    "sending.follow_up_gaps": "Business days from step 1 to step 2, and from step 2 to step 3.",
+    "sending.window_start": "Recipient-local start of the send window (HH:MM, 24-hour).",
+    "sending.window_end": "Recipient-local end of the send window.",
+    "sending.send_days": "Weekdays that send (1 Monday to 7 Sunday): Tuesday to Thursday by default.",
+    "sending.holidays": "Dates nothing is sent: the 2026 and 2027 US federal holidays (and the day after Thanksgiving) plus the December 21 to January 2 lull. Federal holidays are skipped even when missing here; extend the list each year.",
+    "sending.unsubscribe_url": "Optional HTTPS one-click unsubscribe endpoint (RFC 8058). Blank: the List-Unsubscribe header carries a mailto only, and the body's reply-unsubscribe line is the opt-out.",
+    "sending.unsubscribe_mailbox": "Mailbox that receives unsubscribe mailto requests. Blank: each sending mailbox receives its own.",
+    "sending.max_catch_all_share": "Most of a day's new step-1 emails that may go to catch-all addresses.",
+    "guardrails": "Circuit breakers that pause a mailbox: hard-bounce rate over the window, hard bounces in one day, any spam complaint (until a person clears it with clear-pause), and the opt-out rate over the last 100 sends (pauses new step-1 emails).",
+    "qualify": "The revenue and owner-earnings range AMB serves, the qualification score at which a lead is warm and handed off, and the timeline horizon in months. auto_send_replies is always false: AI-drafted replies are drafts for a person.",
+    "readiness": "include_range adds a rough value range to the exit-readiness check, only from verified rows in reference/multiples.json and only below max_sde_for_range.",
+    "lead_sales": "Selling leads to partner brokers. Off until counsel signs off (docs/COMPLIANCE.md): export refuses unless enabled is true and legal_review_ref names the review. flat_fee is a flat dollar amount per lead, never a share of a sale.",
+    "handoff": "The AMB advisor who receives warm sellers; the name goes on each handoff summary."
+  },
+  "firm": {
+    "name": "AMB Advisory Services",
+    "short_name": "AMB Advisory",
+    "legal_name": "AMB Advisory Services LLC",
+    "website": "ambadvisoryservices.com",
+    "phone": "",
+    "postal_address": ""
+  },
+  "mailboxes": [
+    {
+      "email": "firstname@ambadvisory-mail.example",
+      "sender_name": "Firstname Lastname",
+      "sender_title": "Principal",
+      "warmup_started": "2026-11-02",
+      "paused": false
+    }
+  ],
+  "licensed_states": [],
+  "licensing_signoff": "",
+  "verticals": {
+    "hvac": {
+      "noun": "HVAC company",
+      "keywords": ["air conditioning", "hvac", "heating", "cooling", "refrigeration", "mechanical"],
+      "license_codes": ["CAC", "CMC", "RA"],
+      "prior": 7,
+      "multiples_key": "hvac"
+    },
+    "plumbing": {
+      "noun": "plumbing company",
+      "keywords": ["plumbing", "plumber", "plumbers"],
+      "license_codes": ["CFC", "RF"],
+      "prior": 7,
+      "multiples_key": "plumbing"
+    },
+    "electrical": {
+      "noun": "electrical contractor",
+      "keywords": ["electrical", "electrician", "electricians", "electrical contractor"],
+      "license_codes": ["EC", "ER"],
+      "prior": 6,
+      "multiples_key": "electrical"
+    },
+    "landscaping": {
+      "noun": "landscaping company",
+      "keywords": ["landscaping", "landscape", "lawn care", "lawn service", "tree service", "irrigation"],
+      "license_codes": [],
+      "prior": 5,
+      "multiples_key": "landscaping"
+    },
+    "pest_control": {
+      "noun": "pest control company",
+      "keywords": ["pest control", "termite", "exterminating", "exterminator"],
+      "license_codes": ["JB"],
+      "prior": 6,
+      "multiples_key": "pest_control"
+    },
+    "dental": {
+      "noun": "dental practice",
+      "keywords": ["dental", "dentist", "dentistry", "orthodontics", "endodontics", "periodontics"],
+      "license_codes": ["DN"],
+      "prior": 6,
+      "multiples_key": "dental"
+    }
+  },
+  "metros": {
+    "tampa_bay": {
+      "name": "Tampa Bay",
+      "state": "FL",
+      "counties": ["Hillsborough", "Pinellas", "Pasco", "Polk", "Manatee", "Sarasota"],
+      "zip_prefixes": ["335", "336", "337", "338", "342", "346", "347"],
+      "time_zone": "America/New_York"
+    }
+  },
+  "targeting": {
+    "min_tenure_years": 15,
+    "send_tiers": ["A", "B"],
+    "tier_a_min": 70,
+    "tier_b_min": 50,
+    "exclude_name_patterns": [
+      "one hour heating",
+      "service experts",
+      "aire serv",
+      "rescue rooter",
+      "roto-rooter",
+      "mr rooter",
+      "benjamin franklin plumbing",
+      "mister sparky",
+      "mr electric",
+      "trugreen",
+      "the grounds guys",
+      "weed man",
+      "terminix",
+      "orkin",
+      "aspen dental",
+      "heartland dental",
+      "coast dental",
+      "great expressions"
+    ],
+    "exclude_domains": ["ambadvisoryservices.com"]
+  },
+  "sending": {
+    "mode": "draft",
+    "transport": "outbox",
+    "warmup_weeks": 3,
+    "ramp": [5, 10, 15, 20],
+    "max_per_mailbox_per_day": 25,
+    "max_per_domain_per_day": 75,
+    "follow_up_gaps": [4, 6],
+    "window_start": "08:00",
+    "window_end": "11:00",
+    "send_days": [2, 3, 4],
+    "holidays": [
+      "2026-01-01", "2026-01-19", "2026-02-16", "2026-05-25", "2026-06-19", "2026-07-03", "2026-09-07", "2026-10-12",
+      "2026-11-11", "2026-11-26", "2026-11-27",
+      "2026-12-21", "2026-12-22", "2026-12-23", "2026-12-24", "2026-12-25", "2026-12-26", "2026-12-27", "2026-12-28",
+      "2026-12-29", "2026-12-30", "2026-12-31", "2027-01-01", "2027-01-02",
+      "2027-01-18", "2027-02-15", "2027-05-31", "2027-06-18", "2027-07-05", "2027-09-06", "2027-10-11", "2027-11-11",
+      "2027-11-25", "2027-11-26",
+      "2027-12-21", "2027-12-22", "2027-12-23", "2027-12-24", "2027-12-25", "2027-12-26", "2027-12-27", "2027-12-28",
+      "2027-12-29", "2027-12-30", "2027-12-31", "2028-01-01", "2028-01-02"
+    ],
+    "unsubscribe_url": "",
+    "unsubscribe_mailbox": "",
+    "max_catch_all_share": 0.1
+  },
+  "guardrails": {
+    "max_bounce_rate": 0.02,
+    "bounce_window_days": 14,
+    "max_hard_bounces_per_day": 3,
+    "pause_on_complaint": true,
+    "max_opt_out_rate": 0.05
+  },
+  "qualify": {
+    "min_revenue": 500000,
+    "max_revenue": 10000000,
+    "min_sde": 100000,
+    "warm_score": 60,
+    "horizon_months": 24,
+    "auto_send_replies": false
+  },
+  "readiness": {
+    "include_range": true,
+    "max_sde_for_range": 1000000
+  },
+  "lead_sales": {
+    "enabled": false,
+    "legal_review_ref": "",
+    "flat_fee": 0
+  },
+  "handoff": {
+    "advisor_name": "",
+    "advisor_email": ""
+  }
+}

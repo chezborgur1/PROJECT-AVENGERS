@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { emailRank, enrichContacts, MAX_VERIFICATIONS_PER_PROSPECT } from "../src/contacts/enrich.ts";
+import { emailRank, enrichContacts, MAX_VERIFICATIONS_PER_PROSPECT, setManualVerification } from "../src/contacts/enrich.ts";
 import type { ContactRow, ProspectRow } from "../src/domain/schema.ts";
 import { makeProspect, tempStores, testConfig } from "./helpers.ts";
 
@@ -174,5 +174,37 @@ describe("enrichContacts", () => {
     const r = await enrichContacts(stores, testConfig(), { now: NOW, discover: false, verify: true, resolveMx: mxOk });
     expect(r.byStatus).toEqual({ no_email: 1 });
     expect(read()).toEqual(p);
+  });
+});
+
+describe("setManualVerification", () => {
+  it("leaves an address unknown without a verifier key, then lets a person mark it valid with a dated note", async () => {
+    const { stores, read } = setup({ email: "john@exampleair.example", email_source: "website", notes: "from the website" });
+    await enrichContacts(stores, testConfig(), { now: NOW, discover: false, verify: true, resolveMx: mxOk });
+    expect(read().email_verification).toBe("unknown");
+
+    const later = new Date("2026-10-19T09:30:00Z");
+    const row = setManualVerification(stores, read().prospect_id, "valid", "Frank Example", later);
+    expect(row).toMatchObject({ email_verification: "valid", email_verified_at: "2026-10-19T09:30:00Z" });
+    expect(read().notes).toBe("from the website; verified manually by Frank Example (valid, john@exampleair.example, 2026-10-19)");
+
+    // The next enrich run reuses the manual verdict instead of downgrading it to unknown.
+    await enrichContacts(stores, testConfig(), { now: new Date("2026-10-20T09:00:00Z"), discover: false, verify: true, resolveMx: mxOk });
+    expect(read()).toMatchObject({ email_verification: "valid", email_verified_at: "2026-10-19T09:30:00Z" });
+  });
+
+  it("records an invalid mark the same way", () => {
+    const { stores, read } = setup({ email: "old@exampleair.example", email_verification: "unknown" });
+    setManualVerification(stores, read().prospect_id, "invalid", "Frank Example", NOW);
+    expect(read()).toMatchObject({ email_verification: "invalid", email_verified_at: STAMP, notes: "verified manually by Frank Example (invalid, old@exampleair.example, 2026-10-18)" });
+  });
+
+  it("refuses an unknown prospect, a prospect with no email, a blank name and any other status", () => {
+    const { stores, read } = setup({ email: "" });
+    expect(() => setManualVerification(stores, "P-99999", "valid", "Frank", NOW)).toThrow(/P-99999 not found/);
+    expect(() => setManualVerification(stores, read().prospect_id, "valid", "Frank", NOW)).toThrow(/has no email/);
+    stores.prospects.upsert([{ ...read(), email: "john@exampleair.example" }]);
+    expect(() => setManualVerification(stores, read().prospect_id, "valid", "  ", NOW)).toThrow(/who checked/);
+    expect(() => setManualVerification(stores, read().prospect_id, "catch_all" as "valid", "Frank", NOW)).toThrow(/valid or invalid/);
   });
 });

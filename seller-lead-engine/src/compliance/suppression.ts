@@ -77,6 +77,15 @@ export class Suppression {
         added_at: "",
       };
     }
+    return this.lookup(email, prospectId);
+  }
+
+  /**
+   * The readable row that suppresses this address or prospect, ignoring
+   * unreadable rows. For bookkeeping only (scoring): every send, export and
+   * draft uses `check`, which fails closed.
+   */
+  lookup(email: string, prospectId?: string): SuppressionRow | undefined {
     const e = normalizeEmail(email);
     if (e) {
       const hit = this.byEmail.get(canonicalEmail(e));

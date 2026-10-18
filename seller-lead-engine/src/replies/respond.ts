@@ -54,6 +54,12 @@ export function shortBusinessName(name: string): string {
     .trim();
 }
 
+/** A name that ends a sentence, with one full stop: "Example Air, Inc." stays as it is, never "Inc..". */
+export function stop(name: string): string {
+  const s = name.trim();
+  return s.endsWith(".") ? s : `${s}.`;
+}
+
 /** "Re: <subject>" with any existing Re:/Fwd: prefixes folded into one. */
 export function replySubject(original: string | undefined, fallback: string): string {
   const base = (original ?? "").replace(/^\s*((re|fwd?|fw|aw|wg)\s*:\s*)+/i, "").trim() || fallback;
@@ -174,7 +180,7 @@ export function draftResponse(
 
   switch (cls.class) {
     case "interested": {
-      paragraphs.push(`Thank you for your reply. I would be glad to prepare the free exit-readiness check from ${firm()} for ${business}.`);
+      paragraphs.push(`Thank you for your reply. I would be glad to prepare the free exit-readiness check from ${firm()} for ${stop(business)}`);
       paragraphs.push(...answers(faqTopics(asked)));
       const q = questionList(lead);
       if (q.keys.length) {
@@ -211,7 +217,7 @@ export function draftResponse(
     }
     case "not_now":
       paragraphs.push("Thank you for letting me know. I will stop the follow-up emails I had planned.");
-      paragraphs.push(`If your plans change, reply to this email at any time and I will prepare the free exit-readiness check for ${business}.`);
+      paragraphs.push(`If your plans change, reply to this email at any time and I will prepare the free exit-readiness check for ${stop(business)}`);
       break;
     case "not_interested":
       paragraphs.push("Thank you for your reply, and I am sorry to have taken your time. I will not send any more emails in this series.");

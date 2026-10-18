@@ -1,12 +1,15 @@
 import type { EngineConfig } from "../config.ts";
 import { normalizeEmail, type MailboxLogRow, type ReplyRow, type TouchRow } from "../domain/schema.ts";
 import type { Stores } from "../store/index.ts";
-import { addDays } from "../util/dates.ts";
+import { isPolicyBounceSnippet, policyBounceCode } from "../replies/parse.ts";
+import { addDays, isoDate, isoStamp } from "../util/dates.ts";
 
 // Mailbox circuit breakers, computed from what the engine already records:
 // outreach touches (what went out) and replies.csv rows written by the
 // inbox processor (class bounce / complaint / unsubscribe, bounce_type).
-// Nothing here imports the replies module; the CSV is the contract.
+// The CSV is the contract; the only import from the replies module is the
+// pure bounce-code reader (replies/parse.ts), so "which 5.7.x codes mean our
+// domain failed authentication" is one rule in one place.
 //
 // Rules (docs/research/deliverability.md section 6, "Hard caps and circuit
 // breakers", and config.guardrails):
@@ -18,8 +21,11 @@ import { addDays } from "../util/dates.ts";
 //   bad batch on its own;
 // - `max_hard_bounces_per_day` hard bounces on any one day in the window
 //   pause it;
-// - any "550 5.7.515" or "5.7.509" bounce (Microsoft and Gmail
-//   authentication rejections, section 1) pauses it;
+// - any authentication or policy bounce ("550 5.7.515", "5.7.509", Gmail's
+//   5.7.26 and the other codes in replies/parse.ts POLICY_BOUNCE_CODES;
+//   section 1) pauses it. The reply loop records these as soft bounces and
+//   never suppresses the recipient, because the failure is our domain's;
+//   they do not count toward the hard-bounce rate either;
 // - any spam complaint pauses it, with no time limit, until a person clears
 //   it (`guardrails.pause_on_complaint`); the planner then pauses every
 //   mailbox, because a complaint is a domain-level reputation event;
@@ -35,7 +41,8 @@ import { addDays } from "../util/dates.ts";
 //
 // Clearing a pause: a person appends a mailbox_log.csv row for the mailbox
 // with paused "N" and a pause_reason starting with "cleared" (for example
-// "cleared: Frank reviewed the complaint from P-00012"). Bounces, complaints
+// "cleared: Frank reviewed the complaint from P-00012"); `clearPause` below
+// writes that row for the CLI. Bounces, complaints
 // and opt-outs received on or before that date no longer trip a breaker;
 // they still count in the totals. A blocked hard bounce has already made
 // the address dnc, so clearing never re-opens a suppressed address.
@@ -95,7 +102,6 @@ export function isClearanceRow(r: Pick<MailboxLogRow, "paused" | "pause_reason">
   return r.paused === "N" && /^\s*cleared\b/i.test(r.pause_reason);
 }
 
-const AUTH_REJECTION = /\b5\.7\.(515|509)\b/;
 
 /** Guardrail counters and pause decision for one mailbox, from touches and replies in the guardrail windows. */
 export function mailboxHealth(stores: Stores, config: EngineConfig, mailbox: string, today: string): MailboxHealth {
@@ -152,10 +158,14 @@ export function healthFrom(data: { touches: TouchRow[]; replies: ReplyRow[]; log
       reasons.push(`${n} hard bounces on ${d} (limit ${g.max_hard_bounces_per_day} a day)`);
     }
   }
-  const auth = mine.filter((r) => r.class === "bounce" && inWindow(dayOf(r.received_at)) && uncleared(dayOf(r.received_at)) && AUTH_REJECTION.test(r.snippet));
+  const auth = mine.filter((r) => r.class === "bounce" && inWindow(dayOf(r.received_at)) && uncleared(dayOf(r.received_at)) && isPolicyBounceSnippet(r.snippet));
   if (auth.length) {
     pause = true;
-    reasons.push(`authentication rejection bounce (${auth[0]!.snippet.match(AUTH_REJECTION)![0]}) on ${dayOf(auth[0]!.received_at)}: check SPF, DKIM and DMARC`);
+    const first = auth[0]!;
+    const code = policyBounceCode(first.snippet) ?? "5.7.x";
+    reasons.push(
+      `authentication rejection bounce (${code}) on ${dayOf(first.received_at)}${auth.length > 1 ? ` and ${auth.length - 1} more` : ""}: the receiver refused our sending domain, so check SPF, DKIM and DMARC (preflight), then clear the pause; the recipient was not suppressed`,
+    );
   }
 
   const complaintRows = mine.filter((r) => r.class === "complaint" && uncleared(dayOf(r.received_at)));
@@ -180,6 +190,34 @@ export function healthFrom(data: { touches: TouchRow[]; replies: ReplyRow[]; log
   if (pause) pauseNew = true;
 
   return { mailbox: mb, sends, hardBounces, bounceRate, complaints, optOuts, pause, reasons, optOutRate, pauseNew, complaintPause, clearedThrough };
+}
+
+/**
+ * Clear a mailbox's pause: appends the mailbox_log.csv row the breakers read
+ * as clearance (paused "N", pause_reason "cleared: ..."), dated `now`'s
+ * day. Bounces, complaints and opt-outs on or before that day stop tripping
+ * a breaker; suppressed addresses stay suppressed. Returns the row written.
+ */
+export function clearPause(stores: Stores, mailbox: string, by: string, now: Date): MailboxLogRow {
+  const mb = normalizeEmail(mailbox);
+  if (!/^[^@\s]+@[^@\s]+$/.test(mb)) throw new Error(`Cannot clear "${mailbox}": not a mailbox address`);
+  // A pause is cleared by a named person who has looked at why it tripped, so the log says who.
+  if (!by.trim()) throw new Error("Say who is clearing the pause (by)");
+  const row: MailboxLogRow = {
+    date: isoDate(now),
+    mailbox: mb,
+    sent: undefined,
+    drafted: undefined,
+    hard_bounces: undefined,
+    soft_bounces: undefined,
+    complaints: undefined,
+    opt_outs: undefined,
+    human_replies: undefined,
+    paused: "N",
+    pause_reason: `cleared: by ${by.trim().replace(/\s+/g, " ")} at ${isoStamp(now)}`,
+  };
+  stores.mailboxLog.append([row]);
+  return row;
 }
 
 function pct(x: number): string {

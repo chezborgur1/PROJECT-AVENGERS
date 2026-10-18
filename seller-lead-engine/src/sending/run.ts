@@ -227,7 +227,7 @@ export async function runSend(stores: Stores, config: EngineConfig, opts: { toda
 /**
  * One mailbox_log.csv row per mailbox for today: what went out, what came
  * back, and whether the mailbox is paused. A rerun replaces the sender's
- * own row for the day; rows a person wrote to clear a pause are kept.
+ * own row for the day; rows a person or the reply loop wrote are kept.
  */
 export function writeMailboxLog(stores: Stores, config: EngineConfig, plan: DayPlan, today: string): void {
   const touches = stores.touches.rows();
@@ -254,7 +254,11 @@ export function writeMailboxLog(stores: Stores, config: EngineConfig, plan: DayP
     };
   });
   const mine = new Set(rows.map((r) => normalizeEmail(r.mailbox)));
-  const keep = stores.mailboxLog.rows().filter((r) => !(r.date === today && mine.has(normalizeEmail(r.mailbox)) && !isClearanceRow(r)));
+  // Only the sender's own row for today is replaced (it always carries a sent count). Rows other
+  // modules append (a complaint or authentication-bounce note from the reply loop, a person's
+  // clearance) are kept, so a rerun never erases why a mailbox paused.
+  const ownRow = (r: MailboxLogRow) => r.sent !== undefined && !isClearanceRow(r);
+  const keep = stores.mailboxLog.rows().filter((r) => !(r.date === today && mine.has(normalizeEmail(r.mailbox)) && ownRow(r)));
   stores.mailboxLog.replaceAll([...keep, ...rows]);
 }
 

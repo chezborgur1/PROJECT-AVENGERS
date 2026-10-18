@@ -110,7 +110,22 @@ describe("scoreAll", () => {
     expect(after["P-00004"]!.status).toBe("scored");
   });
 
-  it("holds a prospect without a sendable email and releases it once verified", async () => {
+  it("uses the suppression list's rules (+tags included) and does not knock everyone out over one unreadable row", async () => {
+    const stores = tempStores();
+    stores.prospects.upsert([
+      makeProspect({ prospect_id: "P-00001", status: "new", email: "owner+office@one.example" }),
+      makeProspect({ prospect_id: "P-00002", status: "new", email: "owner@two.example" }),
+    ]);
+    stores.suppression.append([{ value: "owner@one.example", value_type: "email", reason: "opt_out", source: "reply R-1", added_at: "2026-10-01T00:00:00Z" }]);
+    fs.appendFileSync(stores.suppression.file, "broken@x.example,not_a_type,opt_out,manual,\n");
+    const result = await scoreAll(stores, config, { today: TODAY, now: NOW });
+    const after = byId(stores.prospects.rows(true));
+    expect(after["P-00001"]!.exclude_reason).toBe("suppressed (opt_out)");
+    expect(after["P-00002"]!.status).toBe("scored");
+    expect(result.errors).toEqual([{ prospectId: "", error: expect.stringMatching(/suppression\.csv has 1 unreadable row/) }]);
+  });
+
+  it("holds a prospect without a sendable email, sends to a role-based only address, and releases a held one once verified", async () => {
     const stores = tempStores();
     stores.prospects.upsert([
       makeProspect({ prospect_id: "P-00001", status: "new", email_verification: "unknown" }),
@@ -119,9 +134,9 @@ describe("scoreAll", () => {
       makeProspect({ prospect_id: "P-00004", status: "new", email_verification: "role_based" }),
     ]);
     const result = await scoreAll(stores, config, { today: TODAY, now: NOW });
-    expect(result).toMatchObject({ scored: 4, held: 3, byTier: { A: 4 } });
+    expect(result).toMatchObject({ scored: 4, held: 2, byTier: { A: 4 } });
     let after = byId(stores.prospects.rows(true));
-    expect(["P-00001", "P-00002", "P-00003", "P-00004"].map((id) => after[id]!.status)).toEqual(["hold", "scored", "hold", "hold"]);
+    expect(["P-00001", "P-00002", "P-00003", "P-00004"].map((id) => after[id]!.status)).toEqual(["hold", "scored", "hold", "scored"]);
     stores.prospects.upsert([{ ...after["P-00001"]!, email_verification: "valid" }]);
     await scoreAll(stores, config, { today: TODAY, now: NOW });
     after = byId(stores.prospects.rows(true));

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mailboxHealth } from "../src/sending/health.ts";
+import { clearPause, isClearanceRow, mailboxHealth } from "../src/sending/health.ts";
 import { MB1, MB2, makeLog, makeReply, makeTouches } from "./fixtures/sending/rows.ts";
 import { tempStores, testConfig } from "./helpers.ts";
 
@@ -82,6 +82,20 @@ describe("mailbox health", () => {
     expect(h.reasons[0]).toMatch(/authentication rejection bounce \(5\.7\.515\)/);
   });
 
+  it("pauses on a policy bounce the reply loop recorded as soft, without counting it as a hard bounce", () => {
+    const { stores, config } = setup();
+    stores.touches.append(makeTouches(200));
+    stores.replies.append([hard("2026-10-21", { bounce_type: "soft", snippet: "Authentication bounce 5.7.26: This mail has been blocked because the sender is unauthenticated." })]);
+    const h = mailboxHealth(stores, config, MB1, TODAY);
+    expect(h).toMatchObject({ pause: true, hardBounces: 0 });
+    expect(h.reasons[0]).toMatch(/authentication rejection bounce \(5\.7\.26\) on 2026-10-21: .*SPF, DKIM and DMARC/);
+    // An ordinary soft bounce does not pause.
+    const other = setup();
+    other.stores.touches.append(makeTouches(200));
+    other.stores.replies.append([hard("2026-10-21", { bounce_type: "soft", snippet: "452 4.2.2 mailbox full" })]);
+    expect(mailboxHealth(other.stores, other.config, MB1, TODAY).pause).toBe(false);
+  });
+
   it("pauses on any spam complaint, however old, until a person clears it in the mailbox log", () => {
     const { stores, config } = setup();
     stores.touches.append(makeTouches(20));
@@ -100,6 +114,29 @@ describe("mailbox health", () => {
     // A new complaint after the clearance pauses again.
     stores.replies.append([makeReply({ class: "complaint", received_at: "2026-10-22T09:00:00Z" })]);
     expect(mailboxHealth(stores, config, MB1, TODAY).pause).toBe(true);
+  });
+
+  it("clearPause appends the clearance row the breakers read, naming who cleared it", () => {
+    const { stores, config } = setup();
+    stores.touches.append(makeTouches(20));
+    stores.replies.append([makeReply({ class: "complaint", received_at: "2026-10-20T12:00:00Z" })]);
+    expect(mailboxHealth(stores, config, MB1, TODAY).pause).toBe(true);
+
+    const row = clearPause(stores, MB1.toUpperCase(), "Frank Example", new Date("2026-10-21T16:30:00Z"));
+    expect(row).toMatchObject({ date: "2026-10-21", mailbox: MB1, paused: "N", pause_reason: "cleared: by Frank Example at 2026-10-21T16:30:00Z" });
+    expect(isClearanceRow(row)).toBe(true);
+    expect(stores.mailboxLog.rows()).toEqual([row]);
+    expect(mailboxHealth(stores, config, MB1, TODAY)).toMatchObject({ pause: false, clearedThrough: "2026-10-21" });
+    // Only that mailbox is cleared.
+    stores.replies.append([makeReply({ class: "complaint", mailbox: MB2, received_at: "2026-10-20T12:00:00Z" })]);
+    expect(mailboxHealth(stores, config, MB2, TODAY).pause).toBe(true);
+  });
+
+  it("clearPause refuses a blank name or a value that is not a mailbox", () => {
+    const { stores } = setup();
+    expect(() => clearPause(stores, MB1, " ", new Date("2026-10-21T16:30:00Z"))).toThrow(/who is clearing/);
+    expect(() => clearPause(stores, "frank", "Frank", new Date("2026-10-21T16:30:00Z"))).toThrow(/not a mailbox/);
+    expect(stores.mailboxLog.rows()).toEqual([]);
   });
 
   it("does not pause on a complaint when pause_on_complaint is off", () => {

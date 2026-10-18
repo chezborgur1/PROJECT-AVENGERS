@@ -116,6 +116,11 @@ export function makeLead(p: ProspectRow, overrides: Partial<LeadRow> = {}): Lead
     nurture_date: "",
     handed_off_at: "",
     handoff_file: "",
+    books_match_returns: "",
+    revenue_trend: "",
+    manager_in_place: "",
+    runs_without_owner: "",
+    lease_years_left: undefined,
     updated_at: "",
     ...overrides,
   };

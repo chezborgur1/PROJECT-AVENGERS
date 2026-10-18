@@ -8,7 +8,7 @@ An owner who replies "yes" to the first email receives, by email and as a short 
 
 1. **A readiness score from 0 to 100**, built from 8 drivers that buyers and SBA lenders look at. The score comes with a label: 80 and above is "Buyer-ready", 60 to 79 is "Close: fix 2 or 3 items", 40 to 59 is "Needs 12 to 24 months of preparation", and under 40 is "Early stage".
 2. **The 3 things to look at first**, taken from the owner's own answers.
-3. **The 23-item checklist buyers use**, with each item marked Met, Gap or Unknown, and a note giving the owner's figure ("60 hours a week (per owner)").
+3. **The 25-item checklist buyers use**, with each item marked Met, Gap or Unknown, and a note giving the owner's figure ("60 hours a week (per owner)").
 4. **A rough market range**, only when it can be supported (see "When a range is given" below). Otherwise the check says plainly why there is no number and offers a 20-minute call.
 5. **What would sharpen the picture**: tax returns that match the books, a list of add-backs, the lease, and a customer list. Owners are asked not to email these.
 6. **One paragraph on buyer financing**: most buyers of a business this size borrow through an SBA 7(a) loan, so earnings a buyer can verify on the tax returns set a ceiling on price.
@@ -45,7 +45,7 @@ Each driver's points are the share of its checklist items that are met. An item 
 **Owner dependence**
 - You work 50 hours a week or less in the business.
 - The business runs for 4 weeks without you.
-- Staff, not only you, hold the main customer relationships.
+- Staff as well as you hold the main customer relationships.
 - Pricing, processes and job checklists are written down.
 
 **Customer concentration**
@@ -57,12 +57,14 @@ Each driver's points are the share of its checklist items that are met. An item 
 - More than 60% of revenue repeats.
 
 **Team depth**
-- A manager or lead person runs day-to-day work and would stay after a sale.
+- A manager or lead person runs day-to-day work.
+- That manager or lead person would stay after a sale.
 - The business has 5 or more employees.
 - Workers are classified correctly (W-2 or 1099) and payroll taxes are current.
 
 **Growth**
-- Revenue and profit are flat or growing over the last 3 years.
+- Revenue is flat or growing over the last 3 years.
+- Profit is flat or growing over the last 3 years.
 - Annual revenue is at or above the size most buyers in this market finance (`qualify.min_revenue`, $500K by default).
 
 **Licences and transferability**
@@ -72,23 +74,28 @@ Each driver's points are the share of its checklist items that are met. An item 
 - No pending lawsuits, tax disputes or major warranty claims.
 
 **Real estate and lease**
-- You own the premises, or the lease runs long enough (with options) to cover a 10-year buyer loan.
+- You own the premises, or the lease runs long enough (with options) to cover a 10-year buyer loan: 10 or more years left is met, fewer is a gap.
 - The landlord would consent to assigning the lease, or you know whether the property is for sale or lease.
 
 ## The intake questions
 
-The first reply asks for bands, never documents (offer.md §4). The engine asks at most 3 at a time and never asks the same question twice (`src/qualify/questions.ts`).
+The first reply asks for bands, never documents (offer.md §4). The engine asks at most 3 at a time, in this order, and never asks the same question twice (`src/qualify/questions.ts`). Questions 11 to 15 are the checklist facts; the lease question counts as answered when the owner owns the building.
 
 1. Revenue last full year: under $500K, $500K to $1M, $1M to $2M, $2M to $5M, or $5M and up.
 2. Owner earnings (SDE), meaning net profit plus your own pay and perks, interest, depreciation and one-time costs: under $100K, $100K to $250K, $250K to $500K, $500K to $1M, or $1M and up.
-3. Timeline: within 6 months, 6 to 12 months, 12 to 24 months, or later.
+3. Timeline: within 12 months, 12 to 24 months, or further out.
 4. What prompted the interest.
-5. Number of employees, and whether there is a manager or lead person.
+5. Number of employees, full-time and part-time.
 6. Your hours per week in the business.
 7. Share of revenue from maintenance agreements, contracts or repeat routes.
 8. Your largest customer's share of revenue.
 9. Whether you own or lease the premises.
 10. Who holds the trade or professional licence.
+11. Whether the business could run for about four weeks without you.
+12. Whether a manager or lead person runs the day-to-day work.
+13. Whether revenue over the last three years has been growing, flat or declining.
+14. Whether the books for the last three years match the tax returns.
+15. If you lease, the years left on the lease, counting renewal options.
 
 ## When a range is given
 

@@ -4,8 +4,6 @@ import {
   formatComponents,
   isInactiveStatus,
   NEUTRAL,
-  parsePersonName,
-  personOfficers,
   reviewBandPoints,
   scoreProspect,
   tenurePointsForYears,
@@ -13,6 +11,7 @@ import {
   websiteHost,
   WEIGHTS,
 } from "../src/score/score.ts";
+import { isPersonName, splitPersonName } from "../src/sources/normalize.ts";
 import { makeProspect, testConfig } from "./helpers.ts";
 import { makeDetails, makeEntity, makeLicense } from "./fixtures/score/records.ts";
 
@@ -107,10 +106,12 @@ describe("successor signal", () => {
   it("reads LAST, FIRST names and generational suffixes", () => {
     expect(score({ officers: "EXAMPLE, JOHN (P); EXAMPLE, MICHAEL (D)", officer_count: 2 }).components.successor).toBe(0);
     expect(score({ officers: "JOHN EXAMPLE (P); JOHN EXAMPLE JR (VP)", officer_count: 2 }).components.successor).toBe(0);
-    expect(parsePersonName("Example, John M.")).toMatchObject({ first: "JOHN", last: "EXAMPLE", suffix: "" });
-    expect(parsePersonName("JOHN V SMITH")).toMatchObject({ first: "JOHN", last: "SMITH", suffix: "" });
-    expect(parsePersonName("SMITH JR, JOHN")).toMatchObject({ first: "JOHN", last: "SMITH", suffix: "JR" });
-    expect(parsePersonName("ACME HOLDINGS LLC")).toBeUndefined();
+    expect(score({ officers: "SMITH JR, JOHN (P); JOHN SMITH (VP)", officer_count: 2, owner_name: "", owner_first_name: "", owner_last_name: "" }).components.successor).toBe(0);
+    // The names are read with the importers' own rules (src/sources/normalize.ts).
+    expect(splitPersonName("Example, John M.")).toMatchObject({ first: "John", last: "Example" });
+    expect(splitPersonName("JOHN V SMITH")).toMatchObject({ first: "John", last: "Smith", full: "John V Smith" });
+    expect(splitPersonName("SMITH JR, JOHN")).toEqual({ first: "John", last: "Smith", full: "John Smith Jr" });
+    expect(isPersonName("ACME HOLDINGS LLC")).toBe(false);
   });
 
   it("gives 8 for several officers with none sharing the surname", () => {
@@ -120,7 +121,6 @@ describe("successor signal", () => {
   });
 
   it("counts the owner listed twice under two titles once", () => {
-    expect(personOfficers("JOHN EXAMPLE (P); EXAMPLE, JOHN (D)").length).toBe(1);
     expect(score({ officers: "JOHN EXAMPLE (P); EXAMPLE, JOHN (D)", officer_count: 1 }).components.successor).toBe(15);
   });
 

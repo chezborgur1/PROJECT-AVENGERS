@@ -2,7 +2,7 @@ import type { EngineConfig } from "../config.ts";
 import { EMAIL_SOURCES, normalizeEmail, type ContactRow, type ProspectRow } from "../domain/schema.ts";
 import { matchKey } from "../sources/normalize.ts";
 import type { Stores } from "../store/index.ts";
-import { isoStamp } from "../util/dates.ts";
+import { isoDate, isoStamp } from "../util/dates.ts";
 import { Suppression } from "../compliance/suppression.ts";
 import { discoverEmails } from "./discover.ts";
 import { emailLocal, isRoleBased, isSendableVerification, verifyEmail, type Verification } from "./verify.ts";
@@ -28,6 +28,13 @@ import { emailLocal, isRoleBased, isSendableVerification, verifyEmail, type Veri
 //
 // Provenance (compliance.md section 9 rule 8): email_source and
 // email_source_url record where each address came from.
+//
+// Without a verifier API key every address ends as "unknown", which is not
+// sendable. That default is the safe one and stays. A person who has checked
+// an address another way (the owner gave it on the phone, it is printed on
+// the business's own invoice) records that with `setManualVerification`,
+// which stamps email_verified_at and says who in the notes. enrichContacts
+// then reuses that verdict for REVERIFY_AFTER_DAYS like any other.
 
 /** The most verifier calls spent on one prospect in one run. */
 export const MAX_VERIFICATIONS_PER_PROSPECT = 3;
@@ -194,4 +201,40 @@ function verifyOpts(opts: { fetchImpl?: typeof fetch; resolveMx?: (d: string) =>
     ...(opts.resolveMx ? { resolveMx: opts.resolveMx } : {}),
     ...(opts.verifierApiKey ? { verifierApiKey: opts.verifierApiKey } : {}),
   };
+}
+
+/** Statuses a person may record by hand after checking an address themselves. */
+export const MANUAL_VERIFICATION_STATUSES = ["valid", "invalid"] as const;
+
+/**
+ * Record a person's own check of a prospect's email: sets email_verification
+ * to valid or invalid, stamps email_verified_at, and appends "verified
+ * manually by <by>" to notes. Suppression still applies at send time: a
+ * valid mark never makes a suppressed address sendable. Returns the updated row.
+ */
+export function setManualVerification(
+  stores: Stores,
+  prospectId: string,
+  status: (typeof MANUAL_VERIFICATION_STATUSES)[number],
+  by: string,
+  now: Date,
+): ProspectRow {
+  if (!(MANUAL_VERIFICATION_STATUSES as readonly string[]).includes(status)) throw new Error(`Manual verification must be ${MANUAL_VERIFICATION_STATUSES.join(" or ")}, not "${status}"`);
+  const who = by.trim().replace(/\s+/g, " ");
+  // The note is the audit trail: a verdict nobody can attribute is not a verification.
+  if (!who) throw new Error("Say who checked the address (by)");
+  const p = stores.prospects.rows().find((x) => x.prospect_id === prospectId.trim());
+  if (!p) throw new Error(`Prospect ${prospectId} not found in prospects.csv`);
+  if (!p.email.trim()) throw new Error(`Prospect ${p.prospect_id} has no email address to verify`);
+  const stamp = isoStamp(now);
+  const note = `verified manually by ${who} (${status}, ${normalizeEmail(p.email)}, ${isoDate(now)})`;
+  const updated: ProspectRow = {
+    ...p,
+    email_verification: status,
+    email_verified_at: stamp,
+    notes: p.notes.trim() ? `${p.notes.trim()}; ${note}` : note,
+    updated_at: stamp,
+  };
+  stores.prospects.upsert([updated]);
+  return updated;
 }

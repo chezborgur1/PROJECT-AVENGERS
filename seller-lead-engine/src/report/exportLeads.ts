@@ -2,7 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { stringify } from "csv-stringify/sync";
 import type { EngineConfig } from "../config.ts";
-import { normalizeEmail, type ExportRow, type ProspectRow, type SuppressionRow } from "../domain/schema.ts";
+import { ComplianceError } from "../compliance/gate.ts";
+import { Suppression } from "../compliance/suppression.ts";
+import type { ExportRow, ProspectRow } from "../domain/schema.ts";
 import { idAllocator } from "../store/csvTable.ts";
 import type { Stores } from "../store/index.ts";
 import { isoStamp } from "../util/dates.ts";
@@ -17,25 +19,13 @@ import { isoStamp } from "../util/dates.ts";
 // sale, which brokerage licensing (Florida F.S. 475.01, cited in config.ts)
 // may reserve to licensees. The fee is logged as a flat dollar amount.
 //
-// Suppressed and do-not-contact prospects are never exported (CAN-SPAM
-// 15 U.S.C. 7704(a)(4): an opt-out may not be transferred or sold), and
+// A closed gate throws ComplianceError (src/compliance/gate.ts), the same
+// error every other compliance block throws. Suppressed and do-not-contact
+// prospects are never exported (CAN-SPAM 15 U.S.C. 7704(a)(4): an opt-out
+// may not be transferred or sold), checked with the Suppression class the
+// sender uses (its +tag, Gmail-dot and parent-domain matching included), and
 // neither is the internal owner-age estimate or the score (DESIGN principle
 // 5; offer.md M7). Every exported lead is logged in exports.csv.
-
-/** Thrown when the export gate is closed; the message names what is missing. */
-export class ExportBlockedError extends Error {}
-
-/** The suppression row that covers this email (or its domain) or prospect id, if any. */
-export function suppressionHit(rows: readonly SuppressionRow[], email: string, prospectId?: string): SuppressionRow | undefined {
-  const e = normalizeEmail(email);
-  const domain = e.includes("@") ? e.split("@")[1]! : "";
-  return rows.find((r) => {
-    const v = r.value.trim().toLowerCase();
-    if (r.value_type === "email") return e !== "" && v === e;
-    if (r.value_type === "domain") return domain !== "" && (domain === v || domain.endsWith(`.${v}`));
-    return prospectId !== undefined && r.value.trim() === prospectId;
-  });
-}
 
 /** The public-record and contact fields a partner receives. No score, no age estimate, no conversation. */
 export const EXPORT_COLUMNS = [
@@ -54,10 +44,11 @@ export function exportLeads(
   if (!config.lead_sales.legal_review_ref.trim()) gate.push("lead_sales.legal_review_ref is blank (record counsel's sign-off first)");
   if (!opts.partner.trim()) gate.push("partner is blank");
   if (!(config.lead_sales.flat_fee >= 0)) gate.push("lead_sales.flat_fee must be a flat dollar amount");
-  if (gate.length) throw new ExportBlockedError(`Lead export blocked: ${gate.join("; ")}. See docs/COMPLIANCE.md.`);
+  // A closed gate is a compliance block like any other (DESIGN principle 2): it throws, it never warns and exports.
+  if (gate.length) throw new ComplianceError([...gate, "lead export blocked: see docs/COMPLIANCE.md"]);
 
   const prospects = new Map(stores.prospects.rows().map((p) => [p.prospect_id, p]));
-  const suppression = stores.suppression.rows();
+  const suppression = new Suppression(stores.suppression);
   const existing = stores.exports.rows();
   const already = new Set(existing.filter((x) => x.partner === opts.partner).map((x) => x.prospect_id));
   const nextExportId = idAllocator("E", 6, existing.map((x) => x.export_id));
@@ -71,7 +62,7 @@ export function exportLeads(
     const p = prospects.get(id);
     if (!p) { skipped.push({ prospectId: id, reason: "not found" }); continue; }
     if (p.status === "dnc") { skipped.push({ prospectId: id, reason: "do not contact" }); continue; }
-    const hit = suppressionHit(suppression, p.email, p.prospect_id);
+    const hit = suppression.check(p.email, p.prospect_id);
     if (hit) { skipped.push({ prospectId: id, reason: `suppressed (${hit.reason})` }); continue; }
     if (already.has(id)) { skipped.push({ prospectId: id, reason: `already exported to ${opts.partner}` }); continue; }
     out.push(p);

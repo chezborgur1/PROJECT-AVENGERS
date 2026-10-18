@@ -6,7 +6,8 @@ import { Suppression } from "../src/compliance/suppression.ts";
 import type { OutgoingMessage } from "../src/domain/messages.ts";
 import type { ReplyClass } from "../src/domain/schema.ts";
 import type { Classification } from "../src/replies/classify.ts";
-import { draftResponse, faqTopics, replySubject, shortBusinessName, withQuestionsAsked } from "../src/replies/respond.ts";
+import { INTAKE_QUESTIONS } from "../src/qualify/questions.ts";
+import { draftResponse, faqTopics, replySubject, shortBusinessName, stop, withQuestionsAsked } from "../src/replies/respond.ts";
 import { makeLead, makeProspect, tempStores, testConfig } from "./helpers.ts";
 
 const config = testConfig();
@@ -67,7 +68,7 @@ describe("draftResponse", () => {
     expect(d.body).toMatch(/please do not send tax returns or bank statements/);
     expect(d.body).toMatch(/AMB Advisory Services/);
     // A lead who answered everything gets no questions.
-    const done = makeLead(prospect, { questions_asked: "revenue; sde; timeline; motivation; employees; owner_hours; recurring; top_customer; real_estate; license_holder" });
+    const done = makeLead(prospect, { questions_asked: INTAKE_QUESTIONS.map((q) => q.key).join("; ") });
     expect(draft(cls("interested"), { lead: done })!.questionKeys).toEqual([]);
   });
 
@@ -133,6 +134,12 @@ describe("reply helpers", () => {
 
   it("drops a legal suffix from a business name", () => {
     expect(shortBusinessName("Example Air Inc")).toBe("Example Air");
+    // A name ending in "Inc." ends a sentence with one full stop.
+    expect(stop("Gulfside Air Conditioning & Heating, Inc.")).toBe("Gulfside Air Conditioning & Heating, Inc.");
+    expect(stop("Example Air Inc")).toBe("Example Air Inc.");
+    const dotted = draftResponse(cls("interested"), { prospect: { ...prospect, business_name: "Example Air, Inc." }, lead, config, mailbox });
+    expect(dotted!.body).toContain("for Example Air, Inc.\n");
+    expect(dotted!.body).not.toContain("Inc..");
     expect(shortBusinessName("Smith Plumbing, LLC")).toBe("Smith Plumbing");
     expect(shortBusinessName("Gulf Coast Mechanical")).toBe("Gulf Coast Mechanical");
   });

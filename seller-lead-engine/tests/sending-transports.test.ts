@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OutgoingMessage } from "../src/domain/messages.ts";
-import { credentialsFor, GmailApiTransport, MemoryTransport, OutboxTransport, type OutboxMessage } from "../src/sending/transports.ts";
+import { GmailApiTransport, MemoryTransport, OutboxTransport, type OutboxMessage } from "../src/sending/transports.ts";
 import { MB1, MB2 } from "./fixtures/sending/rows.ts";
 import { tmpDir } from "./helpers.ts";
 
@@ -157,13 +157,8 @@ describe("GmailApiTransport", () => {
   it("fails clearly without a tokens file or without a token for the mailbox", async () => {
     const { impl, calls } = fakeFetch();
     await expect(new GmailApiTransport({ tokensFile: path.join(tmpDir(), "missing.json"), fetchImpl: impl, now: NOW }).deliver(msg(), "draft")).rejects.toThrow(/tokens file not found/);
-    await expect(new GmailApiTransport({ tokensFile: tokensFile(TOKENS), fetchImpl: impl, now: NOW }).deliver(msg({ mailbox: "nobody@x.example" }), "draft")).rejects.toThrow(/no refresh_token for nobody@x\.example/);
+    await expect(new GmailApiTransport({ tokensFile: tokensFile(TOKENS), fetchImpl: impl, now: NOW }).deliver(msg({ mailbox: "nobody@x.example" }), "draft")).rejects.toThrow(/No Gmail credentials for nobody@x\.example/);
     expect(calls).toEqual([]);
-  });
-
-  it("reads a flat tokens file keyed by mailbox", () => {
-    expect(credentialsFor({ [MB1]: { client_id: "a", client_secret: "b", refresh_token: "c" } }, MB1.toUpperCase())).toEqual({ client_id: "a", client_secret: "b", refresh_token: "c" });
-    expect(() => credentialsFor({ [MB1]: { refresh_token: "c" } }, MB1)).toThrow(/no client_id\/client_secret/);
   });
 });
 

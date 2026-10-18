@@ -32,6 +32,11 @@ const blank: ReplyWire = {
   motivation: null,
   motivation_detail: null,
   wants_readiness_check: null,
+  books_match_returns: null,
+  revenue_trend: null,
+  manager_in_place: null,
+  runs_without_owner: null,
+  lease_years_left: null,
   notes: "Owner wants the check.",
 };
 

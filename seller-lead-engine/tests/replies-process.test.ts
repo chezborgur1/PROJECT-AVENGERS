@@ -7,7 +7,8 @@ import type { Classification, classifyReply } from "../src/replies/classify.ts";
 import { mergeFacts, processInbox } from "../src/replies/process.ts";
 import { MemoryTransport, type Transport } from "../src/sending/transports.ts";
 import type { Stores } from "../src/store/index.ts";
-import { gmailDelay, gmailHardBounce, inbound, MAILBOX, OOO_TEXT } from "./fixtures/replies/messages.ts";
+import { mailboxHealth } from "../src/sending/health.ts";
+import { gmailDelay, gmailHardBounce, inbound, MAILBOX, OOO_TEXT, outlookAuthBounce } from "./fixtures/replies/messages.ts";
 import { makeLead, makeProspect, offline, tempStores, testConfig } from "./helpers.ts";
 
 const NOW = new Date("2026-10-18T14:00:00Z");
@@ -204,6 +205,24 @@ describe("processInbox: opt-outs, complaints, wrong person, bounces", () => {
     expect(rows.some((r) => r.value.includes("mailer-daemon"))).toBe(false);
     expect(stores.prospects.rows()[0]!.status).toBe("dnc");
     expect(stores.leads.rows()).toEqual([]);
+  });
+
+  it("never suppresses the recipient on an authentication bounce, and pauses the mailbox with the reason", async () => {
+    const stores = tempStores();
+    const p = seed(stores);
+    const config = testConfig();
+    const report = await run(stores, [outlookAuthBounce(p.email)]);
+    expect(report).toMatchObject({ byClass: { bounce: 1 }, suppressed: 0, policyBounces: 1 });
+    expect(stores.suppression.rows()).toEqual([]);
+    expect(stores.prospects.rows()[0]!.status).toBe("in_sequence");
+    const row = stores.replies.rows()[0]!;
+    expect(row).toMatchObject({ prospect_id: p.prospect_id, class: "bounce", bounce_type: "soft" });
+    expect(row.snippet).toMatch(/^Authentication bounce 5\.7\.515: /);
+    expect(stores.mailboxLog.rows()).toEqual([expect.objectContaining({ date: TODAY, mailbox: MAILBOX, paused: "Y", pause_reason: expect.stringMatching(/authentication bounce 5\.7\.515 .*recipient not suppressed/) })]);
+    // The sender's breaker reads the reply row: the mailbox pauses, and the bounce is not a hard one.
+    const h = mailboxHealth(stores, config, MAILBOX, TODAY);
+    expect(h).toMatchObject({ pause: true, hardBounces: 0 });
+    expect(h.reasons.join(" ")).toMatch(/authentication rejection bounce \(5\.7\.515\).*recipient was not suppressed/);
   });
 
   it("records a soft bounce without suppressing or stopping the sequence", async () => {

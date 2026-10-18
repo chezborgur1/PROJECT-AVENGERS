@@ -1,5 +1,8 @@
 import type { EngineConfig } from "../config.ts";
-import { normalizeEmail, splitList, type EntityRow, type LicenseRow, type ProspectRow, type SuppressionRow } from "../domain/schema.ts";
+import { isSendableVerification } from "../contacts/verify.ts";
+import { Suppression } from "../compliance/suppression.ts";
+import { normalizeEmail, splitList, type EntityRow, type LicenseRow, type ProspectRow } from "../domain/schema.ts";
+import { isPersonName, splitPersonName, titleCaseName } from "../sources/normalize.ts";
 import type { Stores } from "../store/index.ts";
 import { addDays, daysBetween, isoStamp, yearsSince } from "../util/dates.ts";
 import { ageBasisYear, ageMidpoint, estimateOwnerAge, type AgeEstimate } from "./age.ts";
@@ -48,8 +51,6 @@ export const NEUTRAL = {
 
 /** Statuses `scoreAll` rescoring touches; anything further along the funnel is left alone. */
 export const RESCORE_STATUSES = ["new", "scored", "hold"] as const;
-/** Verifications good enough to enter a sequence, per DESIGN.md module B. */
-export const SCORE_SENDABLE_VERIFICATIONS = ["valid", "catch_all"] as const;
 
 /** One prospect's score, every component's points and the plain-English reasons behind them. */
 export interface ScoreResult {
@@ -254,11 +255,7 @@ function tenurePoints(t: Tenure): { points: number; reasons: string[] } {
 
 // ---------------------------------------------------------------- successor (15)
 
-// "V" is left out: in "JOHN V SMITH" it is a middle initial far more often than a suffix.
-const NAME_SUFFIX = /^(JR|SR|II|III|IV)$/;
-const ENTITY_WORDS = /\b(INC|LLC|L L C|CORP|CORPORATION|CO|COMPANY|LTD|LP|LLP|PA|PLLC|PC|SERVICES?|GROUP|HOLDINGS?|TRUST|ENTERPRISES?|PARTNERS|REGISTERED|AGENTS?|ASSOCIATES)\b/;
-
-/** A person's name reduced to what the successor check compares. */
+/** A person's name reduced to what the successor check compares: upper-case first, last and generational suffix. */
 export interface ParsedName {
   first: string;
   last: string;
@@ -266,39 +263,28 @@ export interface ParsedName {
   key: string;
 }
 
-/** Parses "FIRST M LAST JR" or "LAST, FIRST M" into upper-case first, last and generational suffix; undefined for a company name. */
-export function parsePersonName(raw: string): ParsedName | undefined {
-  const cleaned = raw.toUpperCase().replace(/[.]/g, "").replace(/\s+/g, " ").trim();
-  if (!cleaned || ENTITY_WORDS.test(cleaned)) return undefined;
-  let tokens: string[];
-  let last: string | undefined;
-  if (cleaned.includes(",")) {
-    const [lastPart, ...rest] = cleaned.split(",").map((s) => s.trim());
-    const restTokens = rest.join(" ").split(" ").filter(Boolean);
-    // "SMITH, JOHN, JR" and "SMITH JR, JOHN" both carry the suffix somewhere.
-    const lastTokens = (lastPart ?? "").split(" ").filter(Boolean);
-    const suffix = [...lastTokens, ...restTokens].find((t) => NAME_SUFFIX.test(t)) ?? "";
-    last = lastTokens.filter((t) => !NAME_SUFFIX.test(t)).join(" ");
-    tokens = restTokens.filter((t) => !NAME_SUFFIX.test(t));
-    const first = tokens[0] ?? "";
-    if (!first || !last) return undefined;
-    return { first, last, suffix, key: `${first} ${last} ${suffix}`.trim() };
-  }
-  tokens = cleaned.split(" ").filter(Boolean);
-  // Without a comma the suffix can only be the last word ("JOHN SMITH JR").
-  const suffix = tokens.length > 2 && NAME_SUFFIX.test(tokens[tokens.length - 1]!) ? tokens.pop()! : "";
-  if (tokens.length < 2) return undefined;
-  const first = tokens[0]!;
-  last = tokens[tokens.length - 1]!;
-  return { first, last, suffix, key: `${first} ${last} ${suffix}`.trim() };
+// Names are read with the importers' own rules (src/sources/normalize.ts),
+// so a name the merge step treated as a person is a person here too.
+const GENERATIONAL_SUFFIX = /^(JR|SR|II|III|IV)$/;
+
+/** A person's name via isPersonName and splitPersonName; undefined for a company, agent or single word. */
+function personName(raw: string): ParsedName | undefined {
+  if (!isPersonName(raw)) return undefined;
+  const { first, last, full } = splitPersonName(raw);
+  if (!first || !last) return undefined;
+  // splitPersonName keeps a generational suffix only at the end of `full` ("John Smith Jr").
+  const tail = (full.split(" ").at(-1) ?? "").toUpperCase();
+  const suffix = GENERATIONAL_SUFFIX.test(tail) ? tail : "";
+  const f = first.toUpperCase();
+  const l = last.toUpperCase();
+  return { first: f, last: l, suffix, key: `${f} ${l} ${suffix}`.trim() };
 }
 
 /** Distinct person officers from the officers cell ("Name (TITLE)" entries); companies are dropped. */
-export function personOfficers(officers: string): ParsedName[] {
+function personOfficers(officers: string): ParsedName[] {
   const seen = new Map<string, ParsedName>();
   for (const entry of splitList(officers)) {
-    const name = entry.replace(/\s*\([^)]*\)\s*$/, "");
-    const parsed = parsePersonName(name);
+    const parsed = personName(entry.replace(/\s*\([^)]*\)\s*$/, ""));
     if (parsed && !seen.has(parsed.key)) seen.set(parsed.key, parsed);
   }
   return [...seen.values()];
@@ -306,11 +292,11 @@ export function personOfficers(officers: string): ParsedName[] {
 
 function ownerName(p: ProspectRow): ParsedName | undefined {
   if (p.owner_first_name && p.owner_last_name) {
-    const full = parsePersonName(`${p.owner_first_name} ${p.owner_last_name}`);
-    const fromFull = parsePersonName(p.owner_name);
+    const full = personName(`${p.owner_first_name} ${p.owner_last_name}`);
+    const fromFull = personName(p.owner_name);
     if (full) return { ...full, suffix: fromFull?.suffix ?? "", key: `${full.first} ${full.last} ${fromFull?.suffix ?? ""}`.trim() };
   }
-  return parsePersonName(p.owner_name);
+  return personName(p.owner_name);
 }
 
 // Same surname with a different first name, or the same name with a
@@ -331,7 +317,7 @@ function successorPoints(p: ProspectRow, tenureYears: number | undefined): { poi
     ? others.find((o) => nextGeneration(owner, o))
     : others.find((o, i) => others.some((x, j) => j !== i && nextGeneration(o, x)));
   if (shared) {
-    return { points: 0, reasons: [`Another officer shares the owner's surname (${titleCase(shared.first)} ${titleCase(shared.last)}), a likely next generation`] };
+    return { points: 0, reasons: [`Another officer shares the owner's surname (${titleCaseName(shared.first)} ${titleCaseName(shared.last)}), a likely next generation`] };
   }
   if (count === 1) {
     // data.md §9 gives the full 15 to a sole officer of 10+ years. The engine
@@ -341,10 +327,6 @@ function successorPoints(p: ProspectRow, tenureYears: number | undefined): { poi
     return { points: 10, reasons: ["Sole officer on the current filing"] };
   }
   return { points: 8, reasons: [`${count} officers on the filing, none sharing the owner's surname`] };
-}
-
-function titleCase(s: string): string {
-  return s.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase());
 }
 
 // ---------------------------------------------------------------- size fit (15)
@@ -474,16 +456,10 @@ function verticalPoints(p: ProspectRow, config: EngineConfig): { points: number;
 // ---------------------------------------------------------------- the whole table
 
 /** The suppression reason for a prospect (its email, the email's domain, or its id), or undefined. */
-export function suppressionReason(p: ProspectRow, rows: readonly SuppressionRow[]): string | undefined {
-  const email = normalizeEmail(p.email);
-  const domain = email.split("@")[1] ?? "";
-  const hit = rows.find(
-    (r) =>
-      (r.value_type === "prospect" && r.value === p.prospect_id) ||
-      (r.value_type === "email" && email !== "" && normalizeEmail(r.value) === email) ||
-      (r.value_type === "domain" && domain !== "" && domainMatches(domain, r.value.trim().toLowerCase())),
-  );
-  return hit?.reason;
+export function suppressionReason(p: ProspectRow, suppression: Suppression): string | undefined {
+  // lookup, not check: an unreadable suppression row must not knock every prospect out for good.
+  // The planner and the gate still fail closed on it at send time.
+  return suppression.lookup(p.email, p.prospect_id)?.reason;
 }
 
 // Place ids should be refreshed after 12 months (Places policies, data.md §3);
@@ -499,12 +475,15 @@ export async function scoreAll(
 ): Promise<{ scored: number; excluded: number; byTier: Record<string, number>; held: number; placesMatched: number; errors: { prospectId: string; error: string }[] }> {
   const { today, now, places } = opts;
   const stamp = isoStamp(now);
-  const suppression = stores.suppression.rows();
+  const suppression = new Suppression(stores.suppression);
+  const errors: { prospectId: string; error: string }[] = [];
+  if (suppression.invalid.length) {
+    errors.push({ prospectId: "", error: `suppression.csv has ${suppression.invalid.length} unreadable row(s): scored with the readable rows; nothing is sent until the file is fixed` });
+  }
   const entities = new Map(stores.entities.rows().map((e) => [`${e.source}:${e.source_record_id}`, e]));
   const licenses = new Map(stores.licenses.rows().map((l) => [`${l.source}:${l.source_record_id}`, l]));
 
   const byTier: Record<string, number> = { A: 0, B: 0, C: 0 };
-  const errors: { prospectId: string; error: string }[] = [];
   const updated: ProspectRow[] = [];
   let scored = 0;
   let excluded = 0;
@@ -565,7 +544,9 @@ export async function scoreAll(
       byTier[result.tier] = (byTier[result.tier] ?? 0) + 1;
       scored++;
       // No sendable email, or a tier the config does not send: kept, but not queued.
-      const sendable = (SCORE_SENDABLE_VERIFICATIONS as readonly string[]).includes(p.email_verification) && p.email.trim() !== "";
+      // Sendable is the gate's own rule (isSendableVerification: valid, catch_all, role_based);
+      // enrich only leaves a role-based address on a business with no person address.
+      const sendable = isSendableVerification(p.email_verification) && p.email.trim() !== "";
       const sendTier = config.targeting.send_tiers.includes(result.tier);
       row.status = sendable && sendTier ? "scored" : "hold";
       if (row.status === "hold") held++;

@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { z } from "zod";
 import { mailboxDomain } from "../config.ts";
 import type { DeliveryResult, OutgoingMessage } from "../domain/messages.ts";
+import { GmailTokenRefresher } from "../util/gmailAuth.ts";
 import { base64url, buildMime } from "./mime.ts";
 
 // How a rendered, gated message leaves the engine. Every transport takes a
@@ -129,94 +129,30 @@ export class OutboxTransport implements Transport {
 
 // Direct Gmail API delivery (sending.transport = "gmail_api"), for several
 // mailboxes and real RFC 8058 headers, which the connector cannot set
-// (deliverability.md section 4, Option B). One OAuth refresh token per
-// mailbox lives in the tokens file (GMAIL_TOKENS_FILE, git-ignored):
+// (deliverability.md section 4, Option B). Credentials and the OAuth
+// refresh come from src/util/gmailAuth.ts, the one loader the inbox reader
+// shares; the tokens-file format is documented there.
 //
-//   { "client_id": "...", "client_secret": "...",
-//     "mailboxes": { "frank@send.example": { "refresh_token": "..." } } }
-//
-// A mailbox entry may carry its own client_id and client_secret, and a flat
-// { "<mailbox>": { client_id, client_secret, refresh_token } } file also
-// works. Create the OAuth client inside the sending Workspace tenant as an
-// Internal app: an external app left in "Testing" issues refresh tokens
-// that expire after 7 days (deliverability.md verification, missed item 3).
-//
-// Endpoints: POST https://oauth2.googleapis.com/token (refresh), then
-// POST https://gmail.googleapis.com/gmail/v1/users/me/drafts with
+// Endpoints: POST https://gmail.googleapis.com/gmail/v1/users/me/drafts with
 // { message: { raw, threadId } } or .../users/me/messages/send with
 // { raw, threadId }, where raw is the base64url RFC 5322 message.
 
-export const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 export const GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me";
-
-const Creds = z.object({ client_id: z.string().optional(), client_secret: z.string().optional(), refresh_token: z.string().min(1) });
-const TokensFile = z.object({
-  client_id: z.string().optional(),
-  client_secret: z.string().optional(),
-  mailboxes: z.record(z.string(), Creds).optional(),
-}).catchall(z.unknown());
-
-/** Client id, secret and refresh token for one mailbox from the tokens file contents. */
-export function credentialsFor(raw: unknown, mailbox: string): { client_id: string; client_secret: string; refresh_token: string } {
-  const parsed = TokensFile.safeParse(raw);
-  if (!parsed.success) throw new Error(`Gmail tokens file is invalid: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`);
-  const file = parsed.data;
-  const key = mailbox.trim().toLowerCase();
-  const pick = (rec: Record<string, unknown> | undefined) => Object.entries(rec ?? {}).find(([k]) => k.trim().toLowerCase() === key)?.[1];
-  const entry = Creds.safeParse(pick(file.mailboxes) ?? pick(file as Record<string, unknown>));
-  if (!entry.success) throw new Error(`Gmail tokens file has no refresh_token for ${mailbox}`);
-  const client_id = entry.data.client_id ?? file.client_id ?? "";
-  const client_secret = entry.data.client_secret ?? file.client_secret ?? "";
-  if (!client_id || !client_secret) throw new Error(`Gmail tokens file has no client_id/client_secret for ${mailbox}`);
-  return { client_id, client_secret, refresh_token: entry.data.refresh_token };
-}
 
 /** Drafts or sends through the Gmail API with an OAuth refresh per mailbox. */
 export class GmailApiTransport implements Transport {
   readonly name = "gmail_api";
   private readonly fetchImpl: typeof fetch;
-  private readonly tokens = new Map<string, { accessToken: string; expiresAt: number }>();
-  private fileCache: unknown;
+  private readonly auth: GmailTokenRefresher;
 
   constructor(private readonly opts: { tokensFile: string; fetchImpl?: typeof fetch; now: Date }) {
     this.fetchImpl = opts.fetchImpl ?? fetch;
-  }
-
-  private readTokensFile(): unknown {
-    if (this.fileCache !== undefined) return this.fileCache;
-    if (!fs.existsSync(this.opts.tokensFile)) {
-      throw new Error(`Gmail tokens file not found: ${this.opts.tokensFile}. Set GMAIL_TOKENS_FILE, or use sending.transport "outbox".`);
-    }
-    try {
-      this.fileCache = JSON.parse(fs.readFileSync(this.opts.tokensFile, "utf8"));
-    } catch (err) {
-      throw new Error(`Gmail tokens file is not valid JSON: ${(err as Error).message}`);
-    }
-    return this.fileCache;
+    this.auth = new GmailTokenRefresher(opts);
   }
 
   /** A fresh access token for the mailbox, refreshed once per run and reused until a minute before it expires. */
-  async accessToken(mailbox: string): Promise<string> {
-    const key = mailbox.trim().toLowerCase();
-    const cached = this.tokens.get(key);
-    if (cached && cached.expiresAt > this.opts.now.getTime() + 60_000) return cached.accessToken;
-    const creds = credentialsFor(this.readTokensFile(), mailbox);
-    const res = await this.fetchImpl(GOOGLE_TOKEN_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ grant_type: "refresh_token", ...creds }).toString(),
-    });
-    const text = await res.text();
-    if (!res.ok) {
-      const hint = /invalid_grant/.test(text)
-        ? " The refresh token was revoked or expired. An OAuth app in Testing status expires tokens after 7 days: create the client in the sending Workspace tenant as an Internal app and re-authorize."
-        : "";
-      throw new Error(`OAuth refresh for ${mailbox} failed (HTTP ${res.status}): ${snippet(text)}.${hint}`);
-    }
-    const body = safeJson(text) as { access_token?: string; expires_in?: number };
-    if (!body.access_token) throw new Error(`OAuth refresh for ${mailbox} returned no access_token`);
-    this.tokens.set(key, { accessToken: body.access_token, expiresAt: this.opts.now.getTime() + (body.expires_in ?? 3600) * 1000 });
-    return body.access_token;
+  accessToken(mailbox: string): Promise<string> {
+    return this.auth.accessToken(mailbox);
   }
 
   async deliver(msg: OutgoingMessage, mode: "draft" | "send"): Promise<DeliveryResult> {

@@ -318,6 +318,8 @@ export const LEAD_STAGES = [
 export type LeadStage = (typeof LEAD_STAGES)[number];
 
 export const TIMELINES = ["0-6m", "6-12m", "12-24m", "24m+", "unknown"] as const;
+/** Revenue over the last 3 years as the owner describes it; blank until stated. */
+export const REVENUE_TRENDS = ["growing", "flat", "declining", ""] as const;
 export const MOTIVATIONS = ["retirement", "health", "burnout", "partner_dispute", "new_venture", "relocation", "unsolicited_offer", "estate_planning", "curious", "other", "unknown"] as const;
 
 /** One owner in conversation with AMB (`leads.csv`), keyed by prospect_id. */
@@ -351,6 +353,13 @@ export const LeadRowSchema = z.object({
   nurture_date: optDate,
   handed_off_at: optStamp,
   handoff_file: z.string(),
+  // Readiness checklist facts stated by the owner (src/readiness/check.ts). Blank until the owner says;
+  // appended after the original columns so older leads.csv files read them as blank.
+  books_match_returns: z.enum(["Y", "N", ""]), // profit and loss statements match the filed tax returns
+  revenue_trend: z.enum(REVENUE_TRENDS), // revenue over the last 3 years, in the owner's words
+  manager_in_place: z.enum(["Y", "N", ""]), // a manager or lead person runs day-to-day work
+  runs_without_owner: z.enum(["Y", "N", ""]), // the business runs for about 4 weeks without the owner
+  lease_years_left: optNum, // years left on the lease, as the owner states it
   updated_at: optStamp,
 });
 export type LeadRow = z.infer<typeof LeadRowSchema>;

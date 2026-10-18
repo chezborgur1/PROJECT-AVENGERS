@@ -8,4 +8,8 @@ data/
 output/
 .gmail-tokens.json
 
+# The live config carries the real senders, postal address and counsel's
+# licensing sign-off; only the example is tracked.
+config/engine.config.json
+
 *.log

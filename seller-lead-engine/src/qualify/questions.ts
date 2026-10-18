@@ -10,7 +10,9 @@ import { splitList, type LeadRow } from "../domain/schema.ts";
 //
 // The order puts what qualifies a seller first (revenue, earnings, timeline,
 // motivation: the "qualified" stage needs them), then what the readiness
-// check needs. Each question is asked once: `questions_asked` on the lead
+// check needs, and last the checklist facts the check otherwise marks
+// unknown (runs without the owner, a manager, revenue trend, books against
+// returns, years left on the lease). Each question is asked once: `questions_asked` on the lead
 // records the keys already sent, and an answered fact is never asked again.
 //
 // The wording is plain, has no sensitive topic (DESIGN.md principle 5: no
@@ -87,11 +89,45 @@ export const INTAKE_QUESTIONS: readonly IntakeQuestion[] = [
     text: "Is the trade or professional licence in your name, or held by an employee?",
     priority: 10,
   },
+  // Readiness checklist facts (src/readiness/check.ts): asked after everything above, because they
+  // sharpen the check rather than decide whether the owner is a seller.
+  {
+    key: "runs_without_owner",
+    field: "runs_without_owner",
+    text: "Could the business run for about four weeks without you, with jobs quoted, done and billed as usual?",
+    priority: 11,
+  },
+  {
+    key: "manager",
+    field: "manager_in_place",
+    text: "Is there a manager or lead person who runs the day-to-day work when you are not there?",
+    priority: 12,
+  },
+  {
+    key: "revenue_trend",
+    field: "revenue_trend",
+    text: "Over the last three years, has revenue been growing, about flat, or declining?",
+    priority: 13,
+  },
+  {
+    key: "books_match_returns",
+    field: "books_match_returns",
+    text: "Do the profit and loss figures in your books for the last three years match what you reported to the IRS?",
+    priority: 14,
+  },
+  {
+    key: "lease_years",
+    field: "lease_years_left",
+    text: "If you lease, how many years are left on the lease, counting any renewal options?",
+    priority: 15,
+  },
 ];
 
-/** True when the lead already has the fact a question asks for (revenue counts as answered by a figure or a band). */
+/** True when the lead already has the fact a question asks for (revenue counts as answered by a figure or a band; the lease question by owning the premises). */
 export function isAnswered(lead: LeadRow, q: IntakeQuestion): boolean {
   if (q.key === "revenue") return lead.revenue !== undefined || lead.revenue_band.trim() !== "";
+  // An owner who owns the building has no lease to ask about.
+  if (q.key === "lease_years" && lead.owns_real_estate === "Y") return true;
   const v = lead[q.field];
   if (v === undefined || v === null) return false;
   if (typeof v === "number") return Number.isFinite(v);

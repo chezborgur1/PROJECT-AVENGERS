@@ -41,6 +41,18 @@ function warm(pOverrides: Partial<ProspectRow> = {}, lOverrides: Partial<LeadRow
 const run = (stores = tempStores()) => ({ stores, results: handOffWarmLeads(stores, config, { now: NOW, today: TODAY, multiples: MULTIPLES }) });
 
 describe("handOffWarmLeads", () => {
+  it("attributes the owner's name to the state record unless the owner gave a different one", () => {
+    const stores = tempStores();
+    const same = warm({ prospect_id: "P-00801" }, { owner_name: "John Example" });
+    const corrected = warm({ prospect_id: "P-00802" }, { owner_name: "Johnny Example" });
+    stores.prospects.upsert([same.p, corrected.p]);
+    stores.leads.upsert([same.lead, corrected.lead]);
+    const { results } = run(stores);
+    const note = (id: string) => fs.readFileSync(results.find((r) => r.prospectId === id)!.file, "utf8");
+    expect(note("P-00801")).toContain("| Owner | John Example | Per state records |");
+    expect(note("P-00802")).toContain("| Owner | Johnny Example | Per owner |");
+  });
+
   it("writes a handoff note and a readiness check, and moves the lead to handed_off", () => {
     const stores = tempStores();
     const { p, lead } = warm();

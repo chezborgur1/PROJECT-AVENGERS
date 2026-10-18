@@ -3,6 +3,7 @@ import path from "node:path";
 import { z } from "zod";
 import type { InboundMessage } from "../domain/messages.ts";
 import { isoStamp } from "../util/dates.ts";
+import { GmailTokenRefresher } from "../util/gmailAuth.ts";
 
 // Where received mail comes from. Two sources, one shape (InboundMessage):
 //
@@ -16,7 +17,8 @@ import { isoStamp } from "../util/dates.ts";
 //    dedupes by message id, so re-reading the folder is harmless.
 // 2. The Gmail API, with an OAuth refresh token per mailbox, when the engine
 //    reads mail itself (deliverability.md section 4, option B). It returns
-//    headers, so Auto-Submitted and DSN headers are available.
+//    headers, so Auto-Submitted and DSN headers are available. Credentials
+//    come from src/util/gmailAuth.ts, shared with the Gmail API sender.
 //
 // No clock reads and no implicit network: the API client takes `now` and a
 // `fetchImpl`.
@@ -89,40 +91,6 @@ export function readInboxFolder(dir: string): { messages: InboundMessage[]; inva
 
 // ---------------------------------------------------------------- Gmail API
 
-/** OAuth credentials for one mailbox. */
-export interface GmailCredentials {
-  client_id: string;
-  client_secret: string;
-  refresh_token: string;
-}
-
-const CredSchema = z.object({ client_id: z.string().min(1), client_secret: z.string().min(1), refresh_token: z.string().min(1) });
-
-/**
- * Credentials for `mailbox` from the tokens file. Accepted layouts:
- * `{ "<mailbox>": { client_id, client_secret, refresh_token } }`, the same
- * under a `mailboxes` key, or a shared client at the top level
- * (`{ client_id, client_secret, mailboxes: { "<mailbox>": { refresh_token } } }`),
- * or an array of `{ email | mailbox, client_id, client_secret, refresh_token }`.
- */
-export function credentialsFor(tokens: unknown, mailbox: string): GmailCredentials {
-  const want = mailbox.trim().toLowerCase();
-  const top = tokens && typeof tokens === "object" && !Array.isArray(tokens) ? (tokens as Record<string, unknown>) : {};
-  let entry: unknown;
-  if (Array.isArray(tokens)) {
-    entry = tokens.find((t) => t && typeof t === "object" && String((t as Record<string, unknown>).email ?? (t as Record<string, unknown>).mailbox ?? "").toLowerCase() === want);
-  } else {
-    const pool = (top.mailboxes && typeof top.mailboxes === "object" ? top.mailboxes : top) as Record<string, unknown>;
-    const key = Object.keys(pool).find((k) => k.toLowerCase() === want);
-    entry = key ? pool[key] : undefined;
-  }
-  if (!entry || typeof entry !== "object") throw new Error(`No Gmail credentials for ${mailbox} in the tokens file`);
-  const merged = { client_id: top.client_id, client_secret: top.client_secret, ...(entry as Record<string, unknown>) };
-  const parsed = CredSchema.safeParse(merged);
-  if (!parsed.success) throw new Error(`Gmail credentials for ${mailbox} need client_id, client_secret and refresh_token`);
-  return parsed.data;
-}
-
 interface GmailHeader {
   name: string;
   value: string;
@@ -186,44 +154,18 @@ function bodyText(part: GmailPart | undefined): string {
 /** Reads a mailbox over the Gmail API (users.messages.list and get, format full), one OAuth refresh per mailbox. */
 export class GmailApiInbox {
   private readonly fetchImpl: typeof fetch;
-  private readonly tokensFile: string;
-  private readonly now: Date;
-  private readonly access = new Map<string, { token: string; expires: number }>();
+  private readonly auth: GmailTokenRefresher;
   /** Most messages read per call; a cap so one run never pages forever. */
   maxMessages = 500;
 
   constructor(opts: { tokensFile: string; fetchImpl?: typeof fetch; now: Date }) {
-    this.tokensFile = opts.tokensFile;
     this.fetchImpl = opts.fetchImpl ?? fetch;
-    this.now = opts.now;
-  }
-
-  private async accessToken(mailbox: string): Promise<string> {
-    const cached = this.access.get(mailbox);
-    if (cached && cached.expires > this.now.getTime() + 60_000) return cached.token;
-    if (!fs.existsSync(this.tokensFile)) throw new Error(`Gmail tokens file not found: ${this.tokensFile}`);
-    let tokens: unknown;
-    try {
-      tokens = JSON.parse(fs.readFileSync(this.tokensFile, "utf8"));
-    } catch (err) {
-      throw new Error(`${path.basename(this.tokensFile)} is not valid JSON: ${(err as Error).message}`);
-    }
-    const cred = credentialsFor(tokens, mailbox);
-    const res = await this.fetchImpl("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ grant_type: "refresh_token", client_id: cred.client_id, client_secret: cred.client_secret, refresh_token: cred.refresh_token }).toString(),
-    });
-    const json = (await res.json().catch(() => ({}))) as { access_token?: string; expires_in?: number; error?: string; error_description?: string };
-    if (!res.ok || !json.access_token) {
-      throw new Error(`Gmail OAuth refresh for ${mailbox} failed (${res.status}): ${json.error_description ?? json.error ?? "no access token"}`);
-    }
-    this.access.set(mailbox, { token: json.access_token, expires: this.now.getTime() + (json.expires_in ?? 3600) * 1000 });
-    return json.access_token;
+    // The same loader and refresher as GmailApiTransport (src/util/gmailAuth.ts).
+    this.auth = new GmailTokenRefresher(opts);
   }
 
   private async get<T>(mailbox: string, url: string): Promise<T> {
-    const token = await this.accessToken(mailbox);
+    const token = await this.auth.accessToken(mailbox);
     const res = await this.fetchImpl(url, { headers: { authorization: `Bearer ${token}` } });
     if (!res.ok) {
       const detail = (await res.text().catch(() => "")).slice(0, 200);
