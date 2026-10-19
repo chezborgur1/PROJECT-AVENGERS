@@ -10,6 +10,7 @@
   "scripts": {
     "engine": "tsx src/cli.ts",
     "demo": "tsx src/cli.ts demo",
+    "app": "tsx src/cli.ts app",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

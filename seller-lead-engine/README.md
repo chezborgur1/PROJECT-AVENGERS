@@ -73,8 +73,16 @@ transport, approved emails go to `data/outbox/` and the Claude Gmail routine
 puts them in Gmail Drafts; with `gmail_api` they go straight to Gmail
 Drafts. The app listens on 127.0.0.1 only and every request needs the random
 key in the address it opens, so no web page or other computer can drive it.
-`npm run engine -- app` starts it from a terminal (`--no-open` to print the
-address only, `--port N` to pick the port).
+`npm run app` starts it from a terminal (`npm run engine -- app --no-open`
+prints the address only; `--port N` picks the port).
+
+**Windows Smart App Control blocks the .bat files?** It blocks scripts that
+Windows marks as downloaded from the internet. Either remove the mark before
+unzipping (right-click the downloaded .zip, Properties, tick **Unblock**, OK,
+then Extract All), or skip the .bat files: open the `seller-lead-engine`
+folder in File Explorer, type `cmd` in the address bar and press Enter, then
+run `npm install` once and `npm run app` each time. Do not turn Smart App
+Control off; Windows cannot turn it back on without a reset.
 
 ## Quick start
 
