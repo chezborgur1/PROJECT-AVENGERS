@@ -121,6 +121,7 @@ The launch plan, DNS records and the Claude scheduled tasks are in
 Other commands (all `npm run engine -- <command>`):
 
 ```bash
+npm run engine -- download florida --import   # fetch the DBPR contractor files and the Sunbiz quarterly file, import the businesses in your metros, build (Windows: double-click download-florida.bat)
 npm run engine -- import sunbiz <file> --snapshot 2026-10-01 --metro-only   # Florida cordata, only businesses in a configured metro
 npm run engine -- import dbpr <file> --snapshot 2026-10-01                  # Florida DBPR licensee CSV
 npm run engine -- import csv:tdlr <file>                                    # other presets: entities, licenses, contacts, open_poi, cslb, tsbde, wa_lni, overture, foursquare

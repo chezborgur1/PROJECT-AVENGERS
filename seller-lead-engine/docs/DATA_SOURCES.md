@@ -34,6 +34,19 @@ commercial-use limits.
 
 ## How to download each
 
+**The quick way: one command.** `npm run engine -- download florida --import`
+(on Windows, double-click `download-florida.bat`) does both downloads below,
+then imports the businesses in your metros and builds the prospect list. It
+reads the DBPR public-records page and downloads every licensee file linked
+there (applicant files left out), and logs in to the Sunbiz SFTP server with
+the public login you copy into `.env` (`SUNBIZ_SFTP_USER`,
+`SUNBIZ_SFTP_PASSWORD`) to find the quarterly `cordata` files by name. Files
+land in `data/downloads/<date>/`. Neither site's file names could be checked
+while this was built, so if a site has changed the command stops and says
+what it found; the manual steps below still work. A cloud session needs
+www2.myfloridalicense.com and sftp.floridados.gov allowed in its network
+settings; a person's own computer needs nothing.
+
 **Florida Sunbiz (Division of Corporations).**
 1. Open dos.fl.gov/sunbiz/other-services/data-downloads/ and note the public
    SFTP login for sftp.floridados.gov.

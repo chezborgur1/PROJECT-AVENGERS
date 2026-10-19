@@ -4,6 +4,7 @@
 //   init                                   create data/ and config/engine.config.json from the example if missing
 //   preflight                              config, licensing sign-off, DNS (SPF/DKIM/DMARC), warm-up, templates; exit 1 on any failure
 //   import sunbiz|dbpr|csv:<preset> <file> [--snapshot YYYY-MM-DD] [--metro-only]
+//   download florida [--import]            fetch Florida's DBPR and Sunbiz bulk files into data/downloads/
 //   build                                  merge imports into prospects.csv
 //   enrich [--discover] [--no-verify]      find and verify emails (verifier API when EMAIL_VERIFIER_API_KEY is set)
 //   verify <prospectId> <valid|invalid> --by <name>   a person's own check of an address
@@ -67,6 +68,8 @@ import { GmailApiTransport, OutboxTransport, type Transport } from "./sending/tr
 import { importCsv } from "./sources/csvImport.ts";
 import { importDbpr } from "./sources/dbpr.ts";
 import { assignMetro, buildProspects } from "./sources/merge.ts";
+import SftpClient from "ssh2-sftp-client";
+import { downloadDbpr, downloadSunbiz, SUNBIZ_DOWNLOADS_PAGE, type Downloaded, type SftpLike } from "./sources/download.ts";
 import { entityInMetro, importSunbiz } from "./sources/sunbiz.ts";
 import { openStores, type Stores } from "./store/index.ts";
 import { nextId } from "./store/csvTable.ts";
@@ -93,6 +96,8 @@ export interface CliDeps {
   transport?: Transport;
   /** Replaces the reply classifier (the demo's offline stand-in for Claude). */
   classify?: typeof classifyReply;
+  /** Replaces the SFTP client for the Sunbiz download (tests). */
+  sftp?: () => SftpLike;
 }
 
 /** A command signature: arguments after the command name, injected deps, exit code. */
@@ -262,6 +267,72 @@ export const cmdImport: Command = async (args, deps) => {
   for (const bad of result.invalid.slice(0, 10)) deps.log(`  line ${bad.line}: ${bad.error}`);
   if (result.invalid.length > 10) deps.log(`  ... and ${result.invalid.length - 10} more`);
   return 0;
+};
+
+/**
+ * Download Florida's free bulk files (DBPR construction licensees, the Sunbiz
+ * quarterly corporate file) into data/downloads/<today>/, and with --import
+ * load and merge them as `import ... --metro-only` and `build` would.
+ */
+export const cmdDownload: Command = async (args, deps) => {
+  const [what] = positionals(args);
+  if (what !== "florida") throw new UsageError("Usage: download florida [--import] [--dbpr-only | --sunbiz-only]");
+  const dbprOnly = has(args, "--dbpr-only");
+  const sunbizOnly = has(args, "--sunbiz-only");
+  const doImport = has(args, "--import");
+  const stores = storesOf(deps);
+  const dir = path.join(stores.dataDir, "downloads", deps.today);
+  const files: Downloaded[] = [];
+  let failures = 0;
+
+  if (!sunbizOnly) {
+    deps.log("Downloading DBPR construction licensee files...");
+    try {
+      const got = await downloadDbpr({ dir: path.join(dir, "dbpr"), ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}), log: deps.log });
+      files.push(...got);
+      deps.log(`DBPR: ${got.length} file(s) in ${shown(deps, path.join(dir, "dbpr"))}.`);
+    } catch (err) {
+      failures++;
+      deps.log(`DBPR download failed: ${(err as Error).message}`);
+    }
+  }
+  if (!dbprOnly) {
+    const username = deps.env.SUNBIZ_SFTP_USER ?? "";
+    const password = deps.env.SUNBIZ_SFTP_PASSWORD ?? "";
+    if (!username || !password) {
+      deps.log(`Sunbiz skipped: set SUNBIZ_SFTP_USER and SUNBIZ_SFTP_PASSWORD in .env to the public login shown on ${SUNBIZ_DOWNLOADS_PAGE}.`);
+      if (sunbizOnly) failures++;
+    } else {
+      deps.log("Downloading the Sunbiz quarterly corporate file (large: allow several minutes)...");
+      try {
+        const client = deps.sftp ? deps.sftp() : (new SftpClient() as unknown as SftpLike);
+        const got = await downloadSunbiz({ dir: path.join(dir, "sunbiz"), username, password, client, log: deps.log });
+        files.push(...got);
+        deps.log(`Sunbiz: ${got.length} file(s) in ${shown(deps, path.join(dir, "sunbiz"))}.`);
+      } catch (err) {
+        failures++;
+        deps.log(`Sunbiz download failed: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  if (doImport && files.length) {
+    const config = configOf(deps);
+    const snapshotDate = deps.today;
+    for (const f of files) {
+      const r =
+        f.source === "dbpr"
+          ? importDbpr(f.file, stores, { snapshotDate, filter: (l) => assignMetro(l.county, l.zip, l.state, config) !== "" })
+          : importSunbiz(f.file, stores, { snapshotDate, filter: entityInMetro(config) });
+      deps.log(`Imported ${path.basename(f.file)}: read ${r.read}, kept ${r.imported} in your metros, invalid ${r.invalid.length}.`);
+      if (r.invalid.length) failures++;
+    }
+    const b = buildProspects(stores, config, { now: deps.now });
+    deps.log(`Prospects: ${b.created} new, ${b.updated} updated, ${b.unchanged} unchanged. Next: npm run engine -- enrich, then score.`);
+  } else if (files.length) {
+    deps.log("Next: run this again with --import, or import each file with `import dbpr <file>` / `import sunbiz <file> --metro-only`, then build.");
+  }
+  return failures ? 1 : 0;
 };
 
 /** Merge the imports into prospects.csv. */
@@ -789,6 +860,8 @@ export const USAGE = `lead-engine: AMB Advisory seller lead engine (npm run engi
   init                                   create data/ and config/engine.config.json from the example
   preflight                              config, licensing sign-off, DNS, warm-up, templates (exit 1 on any failure)
   import sunbiz|dbpr|csv:<preset> <file> [--snapshot YYYY-MM-DD] [--metro-only]
+  download florida [--import] [--dbpr-only | --sunbiz-only]
+                                         fetch the DBPR licensee files and the Sunbiz quarterly file (and import them)
   build                                  merge imports into prospects.csv
   enrich [--discover] [--no-verify]      find and verify emails
   verify <prospectId> <valid|invalid> --by <name>
@@ -836,6 +909,7 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
   check: cmdCheck,
   handoff: cmdHandoff,
   report: cmdReport,
+  download: cmdDownload,
   dashboard: cmdDashboard,
   stage: cmdStage,
   suppress: cmdSuppress,
