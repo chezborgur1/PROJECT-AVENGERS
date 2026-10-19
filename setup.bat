@@ -1,6 +1,16 @@
 @echo off
 REM PROJECT AVENGERS one-click setup (Windows). Double-click this file.
 where node >nul 2>nul || (echo Node.js is missing. Install the LTS version from https://nodejs.org then run this again. & start https://nodejs.org & pause & exit /b 1)
+if not exist "%~dp0seller-lead-engine\package.json" (
+  echo.
+  echo This setup.bat is not inside the project folder.
+  echo It has to sit next to the amb-material-bot and seller-lead-engine folders.
+  echo Extract the whole project zip first: right-click the zip, Extract All.
+  echo Then open the extracted folder and double-click the setup.bat inside it.
+  echo.
+  pause
+  exit /b 1
+)
 cd /d "%~dp0amb-material-bot"
 call npm install || (pause & exit /b 1)
 if not exist .env copy .env.example .env >nul
