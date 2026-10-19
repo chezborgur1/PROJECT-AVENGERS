@@ -6,6 +6,9 @@ node_modules/
 # sample is tracked.
 data/
 data-sample/
+data-hosted-dev/
+data-hosted-dev-tmp/
+.vercel/
 output/
 .gmail-tokens.json
 

@@ -83,8 +83,19 @@ function verifiedRecently(p: ProspectRow, now: Date): boolean {
 export async function enrichContacts(
   stores: Stores,
   config: EngineConfig,
-  opts: { now: Date; discover: boolean; verify: boolean; fetchImpl?: typeof fetch; resolveMx?: (d: string) => Promise<string[]>; verifierApiKey?: string },
-): Promise<{ found: number; verified: number; byStatus: Record<string, number> }> {
+  opts: {
+    now: Date;
+    discover: boolean;
+    verify: boolean;
+    fetchImpl?: typeof fetch;
+    resolveMx?: (d: string) => Promise<string[]>;
+    verifierApiKey?: string;
+    /** Only prospects after this id (a run that stopped early continues here). */
+    startAfter?: string;
+    /** Asked before each prospect after the first; true stops the run, keeping what is done (a time budget). */
+    shouldStop?: () => boolean;
+  },
+): Promise<{ found: number; verified: number; byStatus: Record<string, number>; stoppedAfter?: string; remaining?: number }> {
   const stamp = isoStamp(opts.now);
   const suppression = new Suppression(stores.suppression);
   const contactsByKey = new Map<string, ContactRow[]>();
@@ -93,11 +104,23 @@ export async function enrichContacts(
     contactsByKey.set(k, [...(contactsByKey.get(k) ?? []), c]);
   }
 
-  const result = { found: 0, verified: 0, byStatus: {} as Record<string, number> };
+  const result: { found: number; verified: number; byStatus: Record<string, number>; stoppedAfter?: string; remaining?: number } = { found: 0, verified: 0, byStatus: {} };
   const updates: ProspectRow[] = [];
+  // In id order, so a run that stops early can continue after the last id it finished.
+  const after = opts.startAfter ? idNumber(opts.startAfter) : -1;
+  const todo = stores.prospects
+    .rows()
+    .filter((p) => ENRICH_STATUSES.has(p.status) && idNumber(p.prospect_id) > after)
+    .sort((a, b) => idNumber(a.prospect_id) - idNumber(b.prospect_id));
+  let done = 0;
 
-  for (const p of stores.prospects.rows()) {
-    if (!ENRICH_STATUSES.has(p.status)) continue;
+  for (const p of todo) {
+    if (done > 0 && opts.shouldStop?.()) {
+      result.stoppedAfter = todo[done - 1]!.prospect_id;
+      result.remaining = todo.length - done;
+      break;
+    }
+    done++;
     // A prospect suppressed by id gets no new address at the same business.
     if (suppression.check("", p.prospect_id)) continue;
     const owner = { first: p.owner_first_name, last: p.owner_last_name };
@@ -200,6 +223,11 @@ export async function enrichContacts(
 
   stores.prospects.upsert(updates);
   return result;
+}
+
+/** The number in an id such as P-00042. */
+function idNumber(id: string): number {
+  return Number(id.replace(/\D/g, "")) || 0;
 }
 
 function verifyOpts(opts: { fetchImpl?: typeof fetch; resolveMx?: (d: string) => Promise<string[]>; verifierApiKey?: string }) {

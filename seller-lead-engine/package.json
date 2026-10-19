@@ -11,6 +11,8 @@
     "engine": "tsx src/cli.ts",
     "demo": "tsx src/cli.ts demo",
     "app": "tsx src/cli.ts app",
+    "hosted:dev": "tsx src/hosted/dev.ts",
+    "build:vercel": "tsx scripts/build-vercel.mts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
@@ -22,14 +24,19 @@
     "csv-parse": "^7.0.3",
     "csv-stringify": "^6.9.0",
     "dotenv": "^18.0.4",
+    "pg": "^8.23.1",
     "ssh2-sftp-client": "^12.1.1",
     "yauzl": "^3.4.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.10",
+    "@electric-sql/pglite-socket": "^0.2.13",
     "@types/node": "^26.6.3",
+    "@types/pg": "^8.23.1",
     "@types/ssh2-sftp-client": "^9.0.6",
     "@types/yauzl": "^3.4.0",
+    "esbuild": "^0.28.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.0.2"

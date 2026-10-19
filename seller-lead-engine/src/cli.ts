@@ -6,14 +6,15 @@
 //   import sunbiz|dbpr|csv:<preset> <file> [--snapshot YYYY-MM-DD] [--metro-only]
 //   download florida [--import]            fetch Florida's DBPR and Sunbiz bulk files into data/downloads/
 //   build                                  merge imports into prospects.csv
-//   enrich [--discover] [--no-verify]      find and verify emails (verifier API when EMAIL_VERIFIER_API_KEY is set)
+//   enrich [--discover] [--no-verify] [--max-seconds N] [--resume]
+//                                          find and verify emails (verifier API when EMAIL_VERIFIER_API_KEY is set)
 //   verify <prospectId> <valid|invalid> --by <name>   a person's own check of an address
 //   score [--places]                       score and tier (Places details when GOOGLE_PLACES_API_KEY is set)
 //   plan [--date YYYY-MM-DD]               show the day's batch without writing
 //   send [--date YYYY-MM-DD] [--dry-run]   render, gate and deliver (drafts unless sending.mode = send)
 //   record <touchId> <drafted|sent|failed> [--draft-id] [--message-id] [--thread-id] [--error]
 //   sync [--since ISO]                     gmail_api: fetch new mail to data/inbox/
-//   qualify                                process data/inbox/*.json, move processed files to data/inbox/processed/
+//   qualify [--limit N]                    process data/inbox/*.json, move processed files to data/inbox/processed/
 //   check <prospectId>                     write the exit-readiness check and draft it as a reply
 //   handoff                                write warm-seller summaries (data/handoffs/)
 //   report [--date YYYY-MM-DD]             weekly report (data/reports/)
@@ -69,7 +70,6 @@ import { GmailApiTransport, OutboxTransport, type Transport } from "./sending/tr
 import { importCsv } from "./sources/csvImport.ts";
 import { importDbpr } from "./sources/dbpr.ts";
 import { assignMetro, buildProspects } from "./sources/merge.ts";
-import SftpClient from "ssh2-sftp-client";
 import { downloadDbpr, downloadSunbiz, SUNBIZ_DOWNLOADS_PAGE, type Downloaded, type SftpLike } from "./sources/download.ts";
 import { entityInMetro, importSunbiz } from "./sources/sunbiz.ts";
 import { openStores, type Stores } from "./store/index.ts";
@@ -306,7 +306,8 @@ export const cmdDownload: Command = async (args, deps) => {
     } else {
       deps.log("Downloading the Sunbiz quarterly corporate file (large: allow several minutes)...");
       try {
-        const client = deps.sftp ? deps.sftp() : (new SftpClient() as unknown as SftpLike);
+        // Loaded only here: the hosted app never reaches Sunbiz, so it ships without the SSH library.
+        const client = deps.sftp ? deps.sftp() : (new (await import("ssh2-sftp-client")).default() as unknown as SftpLike);
         const got = await downloadSunbiz({ dir: path.join(dir, "sunbiz"), username, password, client, log: deps.log });
         files.push(...got);
         deps.log(`Sunbiz: ${got.length} file(s) in ${shown(deps, path.join(dir, "sunbiz"))}.`);
@@ -354,15 +355,38 @@ export const cmdEnrich: Command = async (args, deps) => {
   if (verify && !env.verifierApiKey) {
     deps.log('EMAIL_VERIFIER_API_KEY is blank: addresses end "unknown", which is not sendable. A person can check one with: verify <prospectId> valid --by "<name>"');
   }
-  const r = await enrichContacts(storesOf(deps), config, {
+  const stores = storesOf(deps);
+  // --max-seconds stops cleanly between businesses (the hosted app's time limit); --resume continues after the last one done.
+  const budget = flag(args, "--max-seconds");
+  const seconds = budget === undefined ? undefined : Number(budget);
+  if (seconds !== undefined && !(seconds >= 0)) throw new UsageError(`--max-seconds must be a number of seconds, not "${budget}"`);
+  const cursorFile = path.join(stores.dir.cache, "enrich-cursor.json");
+  let startAfter: string | undefined;
+  if (has(args, "--resume") && fs.existsSync(cursorFile)) {
+    try {
+      startAfter = String((JSON.parse(fs.readFileSync(cursorFile, "utf8")) as { after?: unknown }).after ?? "") || undefined;
+    } catch {
+      startAfter = undefined; // an unreadable cursor starts again from the top
+    }
+  }
+  const started = performance.now();
+  const r = await enrichContacts(stores, config, {
     now: deps.now,
     discover: has(args, "--discover"),
     verify,
     ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
     ...(deps.resolveMx ? { resolveMx: deps.resolveMx } : {}),
     ...(env.verifierApiKey ? { verifierApiKey: env.verifierApiKey } : {}),
+    ...(startAfter ? { startAfter } : {}),
+    ...(seconds !== undefined ? { shouldStop: () => performance.now() - started >= seconds * 1000 } : {}),
   });
+  if (startAfter) deps.log(`Continuing after ${startAfter}.`);
   deps.log(`Emails: ${r.found} found, ${r.verified} verified. By status: ${counts(r.byStatus)}`);
+  if (r.stoppedAfter) {
+    fs.mkdirSync(stores.dir.cache, { recursive: true });
+    fs.writeFileSync(cursorFile, `${JSON.stringify({ after: r.stoppedAfter })}\n`);
+    deps.log(`Stopped after ${r.stoppedAfter} to stay inside the time limit, with ${r.remaining} business(es) to go: run it again to continue.`);
+  } else if (fs.existsSync(cursorFile)) fs.rmSync(cursorFile);
   return 0;
 };
 
@@ -565,7 +589,11 @@ function moveProcessed(stores: Stores, config: EngineConfig): string[] {
 }
 
 /** Process data/inbox/*.json: suppress, update leads, draft answers; then move processed files. */
-export const cmdQualify: Command = async (_args, deps) => {
+export const cmdQualify: Command = async (args, deps) => {
+  // --limit N handles the oldest N new messages and leaves the rest for the next run (the hosted app's time limit).
+  const limitArg = flag(args, "--limit");
+  const limit = limitArg === undefined ? undefined : Number(limitArg);
+  if (limit !== undefined && !(Number.isInteger(limit) && limit > 0)) throw new UsageError(`--limit must be a whole number above 0, not "${limitArg}"`);
   const config = configOf(deps);
   const stores = storesOf(deps);
   const { messages, invalid } = readInboxFolder(stores.dir.inbox);
@@ -574,8 +602,18 @@ export const cmdQualify: Command = async (_args, deps) => {
     deps.log(`No messages in ${shown(deps, stores.dir.inbox)}.`);
     return invalid.length ? 1 : 0;
   }
+  let batch = messages;
+  if (limit !== undefined) {
+    const done = new Set(stores.replies.rows().filter((r) => r.class !== "").map((r) => r.reply_id));
+    const own = new Set(config.mailboxes.map((m) => normalizeEmail(m.email)));
+    // Messages already recorded or from AMB's own mailboxes cost nothing and never count against the limit.
+    const free = messages.filter((m) => done.has(m.id) || own.has(addressOf(m.from)));
+    const waiting = messages.filter((m) => !free.includes(m)).sort((a, b) => (Date.parse(a.date) || 0) - (Date.parse(b.date) || 0) || a.date.localeCompare(b.date));
+    batch = [...free, ...waiting.slice(0, limit)];
+    if (waiting.length > limit) deps.log(`Handling the oldest ${limit} of ${waiting.length} new message(s); run qualify again for the rest.`);
+  }
   const transport = transportFor(deps, config, stores, deps.today);
-  const r = await processInbox(stores, config, { now: deps.now, today: deps.today, messages, transport, ...(deps.classify ? { classify: deps.classify } : {}) });
+  const r = await processInbox(stores, config, { now: deps.now, today: deps.today, messages: batch, transport, ...(deps.classify ? { classify: deps.classify } : {}) });
   deps.log(`Received ${r.received}: ${counts(r.byClass)}.`);
   deps.log(`Suppressed ${r.suppressed}, drafted ${r.drafted} answer(s), duplicates ${r.duplicates}, unmatched ${r.unmatched}, own messages ${r.ownMessages}, authentication bounces ${r.policyBounces}.`);
   if (r.policyBounces) deps.log("An authentication bounce paused its mailbox: check SPF, DKIM and DMARC, run preflight, then clear-pause.");
@@ -881,7 +919,8 @@ export const USAGE = `lead-engine: AMB Advisory seller lead engine (npm run engi
   download florida [--import] [--dbpr-only | --sunbiz-only]
                                          fetch the DBPR licensee files and the Sunbiz quarterly file (and import them)
   build                                  merge imports into prospects.csv
-  enrich [--discover] [--no-verify]      find and verify emails
+  enrich [--discover] [--no-verify] [--max-seconds N] [--resume]
+                                         find and verify emails (--max-seconds stops early, --resume continues)
   verify <prospectId> <valid|invalid> --by <name>
                                          record a person's own check of an address
   score [--places]                       score and tier (--places needs GOOGLE_PLACES_API_KEY)
@@ -890,7 +929,7 @@ export const USAGE = `lead-engine: AMB Advisory seller lead engine (npm run engi
   record <touchId> <drafted|sent|failed> [--draft-id ID] [--message-id ID] [--thread-id ID] [--error TEXT]
                                          outbox transport: what the Claude routine did
   sync [--since ISO]                     gmail_api: fetch new mail to data/inbox/
-  qualify                                process data/inbox/*.json; processed files move to data/inbox/processed/
+  qualify [--limit N]                    process data/inbox/*.json; processed files move to data/inbox/processed/
   check <prospectId>                     write the exit-readiness check (data/checks/) and draft it as a reply
   handoff                                write warm-seller summaries (data/handoffs/)
   report [--date YYYY-MM-DD]             weekly report (data/reports/)

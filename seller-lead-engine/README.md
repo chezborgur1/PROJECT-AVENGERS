@@ -84,6 +84,66 @@ folder in File Explorer, type `cmd` in the address bar and press Enter, then
 run `npm install` once and `npm run app` each time. Do not turn Smart App
 Control off; Windows cannot turn it back on without a reset.
 
+## Hosting it on Vercel (the same app, for the whole team)
+
+The same screens and buttons as the desktop app, at a web address, behind a
+team password, with everything saved in your Postgres database instead of
+on one computer. Steps run on Vercel's servers, so nobody's PC needs to be
+on, and everyone sees the same businesses, emails, replies and warm sellers.
+
+**Deploy (once, about ten minutes, in the Vercel dashboard):**
+
+1. **Add New, Project**, import the GitHub repository `project-avengers`.
+2. **Root Directory**: `seller-lead-engine`. Framework Preset: **Other**.
+   Leave the build and install commands alone (`vercel.json` sets them).
+3. **Environment Variables**: add `APP_PASSWORD`, the team password (at
+   least 10 characters). Optional ones are listed below.
+4. **Deploy.** Then open the project's **Storage** tab and connect your
+   Postgres database to it (this adds `DATABASE_URL` or `POSTGRES_URL`), and
+   **Redeploy** so the app picks it up.
+5. Open the site's address: `/api/health` should say `"ok": true`. Sign in
+   with the team password, press **Create the settings file**, then
+   **Edit settings** (on the Settings tab) to fill them in.
+
+The app is on the branch `claude/new-session-m1eien`. Vercel builds every
+branch as a preview automatically; for the main address, merge the branch
+into `main` or set it as the production branch (Settings, Git). Vercel may
+ask for your Vercel login on preview addresses (Deployment Protection),
+before the team password.
+
+| Variable | What it does |
+|---|---|
+| `APP_PASSWORD` | Required. Everyone signs in with it; changing it signs everyone out |
+| `DATABASE_URL` or `POSTGRES_URL` | Required. Set by connecting the database in Storage |
+| `ANTHROPIC_API_KEY`, `EMAIL_VERIFIER_API_KEY`, `GOOGLE_PLACES_API_KEY` | As in Quick start below |
+| `GMAIL_TOKENS_JSON` | The contents of `.gmail-tokens.json`. With `sending.transport` set to `"gmail_api"` in the settings, approved emails go straight into Gmail Drafts and Check replies reads Gmail |
+| `CRON_SECRET` | Any long random text: turns on a weekday 8:45 am Eastern replies check (Vercel's scheduler sends it) |
+| `SESSION_SECRET` | Optional: signs sign-in sessions instead of a hash of the password |
+
+**How it differs from the desktop app:**
+
+- It needs a **Postgres** database (Neon, Supabase, Prisma Postgres or the
+  older Vercel Postgres). It creates its own tables on first use:
+  `lead_engine_rows` (every table, row by row), `lead_engine_files` (the
+  settings, notes, reports, outbox and inbox) and `lead_engine_spaces`. The
+  views `amb_prospects`, `amb_leads`, `amb_replies`, `amb_emails` and
+  `amb_do_not_contact` show the main tables as columns in the database's
+  own tools. A save that would shorten the do-not-contact list is refused.
+- **Find new businesses** takes Florida's DBPR contractor licence files.
+  The Sunbiz quarterly file is several gigabytes, more than a server
+  function can hold, so it stays on the desktop app.
+- Vercel gives each step up to **five minutes**. Find emails stops in time
+  to save and carries on from where it stopped on the next press; Check
+  replies handles 12 new replies per press.
+- One step runs at a time across the whole team; a second press elsewhere
+  says to wait.
+- With the default `outbox` transport, approved emails are saved in the
+  database outbox, not Gmail. Set up `GMAIL_TOKENS_JSON` and `gmail_api` so
+  they reach Gmail Drafts.
+
+`npm run hosted:dev` runs the hosted app on this computer first, on a
+throwaway database in `data-hosted-dev/` (password `dev-password-only`).
+
 ## Quick start
 
 Requires Node 20 or later (developed on Node 22).

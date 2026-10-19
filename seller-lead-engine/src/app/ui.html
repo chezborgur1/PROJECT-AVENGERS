@@ -109,6 +109,10 @@
   .modal .box { background: var(--panel); color: var(--ink); border-radius: 12px; max-width: 760px; width: 100%; max-height: 85vh; display: flex; flex-direction: column; }
   .modal .box .top { display: flex; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); }
   .modal .box pre { margin: 0; padding: 16px; overflow: auto; white-space: pre-wrap; font: 13px/1.55 inherit; font-family: inherit; }
+  .modal .box textarea { margin: 0; padding: 14px 16px; border: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); min-height: 50vh; resize: vertical; font: 12.5px/1.5 Consolas, "SFMono-Regular", Menlo, monospace; background: var(--bg); color: var(--ink); }
+  .modal .box .foot { display: flex; gap: 8px; align-items: center; padding: 10px 16px; flex-wrap: wrap; }
+  .modal .box .foot .bad { flex: 1; min-width: 200px; }
+  .account a { color: var(--muted); font-size: 13px; }
   .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   @media (max-width: 860px) { .two { grid-template-columns: 1fr; } input[type=search] { min-width: 0; width: 100%; } }
 </style>
@@ -121,6 +125,7 @@
     <span class="pill" id="modePill"></span>
     <div class="grow"></div>
     <div id="modeButtons"></div>
+    <div class="account" id="account"></div>
   </div>
   <nav id="tabs">
     <button data-act="tab" data-tab="today" class="on">Today</button>
@@ -200,10 +205,10 @@
           <button class="btn" type="submit">Add to do-not-contact</button>
         </form>
       </div>
-      <div class="card">
+      <div class="card" id="foldersCard">
         <h2>Folders</h2>
         <p class="muted" id="dataDir"></p>
-        <div class="filters">
+        <div class="filters" id="folderButtons">
           <button class="btn" data-act="open" data-what="data">Data folder</button>
           <button class="btn" data-act="open" data-what="handoffs">Handoff notes</button>
           <button class="btn" data-act="open" data-what="reports">Weekly reports</button>
@@ -215,6 +220,9 @@
 </main>
 
 <div class="toast" id="toast"></div>
+<div class="modal" id="editor"><div class="box"><div class="top"><strong>Settings</strong><span class="muted" id="editorFile" style="margin-left:8px"></span><div class="grow"></div><button class="btn quiet" data-act="close-editor">Close</button></div>
+<textarea id="editorText" spellcheck="false" aria-label="Settings"></textarea>
+<div class="foot"><span class="bad" id="editorError"></span><span class="muted">The postal address, licensed states and licensing sign-off come from AMB and its counsel.</span><button class="btn primary" data-act="save-settings">Save settings</button></div></div></div>
 <div class="modal" id="modal"><div class="box"><div class="top"><strong id="modalTitle"></strong><div class="grow"></div><button class="btn quiet" data-act="close">Close</button></div><pre id="modalBody"></pre></div></div>
 
 <script>
@@ -223,6 +231,8 @@ const TOKEN = "__APP_TOKEN__";
 let state = null;
 let timer = null;
 let lastJobRunning = false;
+/** A step the page has asked for and is waiting on (the hosted app answers when the step is done). */
+let pending = null;
 const shown = {};
 const view = { sort: "score", dir: -1, search: "", status: "" };
 
@@ -233,6 +243,7 @@ async function api(method, url, body) {
   const res = await fetch(url, { method, headers: { "x-app-token": TOKEN, "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
   let data = {};
   try { data = await res.json(); } catch (e) { data = {}; }
+  if (res.status === 401 && state && state.hosted) { location.href = "/login"; throw new Error("Signed out"); }
   if (!res.ok) throw new Error(data.error || (data.log && data.log.join(" ")) || ("The app answered " + res.status));
   return data;
 }
@@ -259,7 +270,7 @@ async function refresh() {
     state = await api("GET", "/api/state");
     render();
   } catch (e) {
-    toast("Cannot reach the app: " + e.message + ". Is its black window still open?", 6000);
+    toast("Cannot reach the app: " + e.message + (state && state.hosted ? ". Check the internet connection." : ". Is its black window still open?"), 6000);
   }
   const running = Boolean(state && state.job && state.job.running);
   timer = setTimeout(refresh, running ? 1500 : 15000);
@@ -273,6 +284,15 @@ const STEPS = [
   { action: "drafts", title: "Approve and create Gmail drafts", text: "Puts the emails below into Gmail Drafts. You press send in Gmail." },
   { action: "replies", title: "Check replies", text: "Reads replies, handles opt-outs, drafts answers and writes a note for every warm seller." },
 ];
+
+/** Step wording that depends on where the app runs. */
+function stepText(st, s) {
+  if (!s.hosted) return st.text;
+  if (st.action === "find") return "Downloads Florida's free contractor licence records (DBPR) and keeps the businesses in your areas. Takes a few minutes.";
+  if (st.action === "emails") return st.text + " A long list takes a few presses: each one carries on where the last stopped.";
+  if (st.action === "replies") return st.text + " Handles 12 new replies per press; press again if more are waiting.";
+  return st.text;
+}
 
 function render() {
   const s = state;
@@ -304,10 +324,17 @@ function render() {
   part("repliesTable", s.replies, renderReplies);
   part("allTable", [s.businesses, view], renderAll);
   part("mailboxTable", s.mailboxes, renderMailboxes);
-  $("dataDir").textContent = s.dataDir ? "Everything is kept in the folder " + s.dataDir + " on this computer." : "";
+  part("account", s.hosted, () => { $("account").innerHTML = s.hosted ? '<a href="/logout">Sign out</a>' : ""; });
+  part("folders", s.hosted, () => {
+    if (s.hosted) {
+      $("foldersCard").querySelector("h2").textContent = "Where your data is";
+      $("dataDir").textContent = "Everything is saved in the app's database. In the database's own tools, the views amb_prospects, amb_leads, amb_replies, amb_emails and amb_do_not_contact show the main tables.";
+      $("folderButtons").innerHTML = "";
+    } else $("dataDir").textContent = s.dataDir ? "Everything is kept in the folder " + s.dataDir + " on this computer." : "";
+  });
 }
 
-function busy() { return Boolean(state && state.job && state.job.running); }
+function busy() { return Boolean(pending || (state && state.job && state.job.running)); }
 function dis(extra) { return busy() || extra ? " disabled" : ""; }
 
 function renderSetup(s) {
@@ -315,13 +342,14 @@ function renderSetup(s) {
   part("setup", [s.setup, s.configured, s.mode, busy()], () => {
     const list = (s.setup || []).map((i) => '<div class="check"><span class="mark ' + (i.ok ? "ok" : "bad") + '">' + (i.ok ? "&#10003;" : "&#10007;") + '</span><div><strong>' + esc(i.check) + '</strong><div class="muted">' + esc(i.detail) + "</div></div></div>").join("");
     $("setupList").innerHTML = list || '<p class="muted">Nothing to check.</p>';
-    $("setupButtons").innerHTML = s.configured
-      ? '<button class="btn" data-act="open" data-what="settings">Open the settings file</button> <span class="muted">' + esc(s.configFile) + "</span>"
+    const editButtons = '<button class="btn" data-act="settings">Edit settings</button>' + (s.hosted ? "" : ' <button class="btn quiet" data-act="open" data-what="settings">Open in Notepad</button>');
+    $("setupButtons").innerHTML = s.configured || s.setup.some((i) => i.check === "settings file" && /invalid|JSON/.test(i.detail))
+      ? editButtons + ' <span class="muted">' + esc(s.configFile) + "</span>"
       : '<button class="btn primary" data-act="run" data-action="setup"' + dis() + ">Create the settings file</button>";
     if (s.mode === "sample" || !failing.length) { $("setupAlert").innerHTML = ""; return; }
     $("setupAlert").innerHTML = '<div class="alert warn"><strong>Finish the settings before any email goes out.</strong> You can find and score businesses now; drafts wait until these are done:'
       + "<ul>" + failing.map((i) => "<li><strong>" + esc(i.check) + "</strong>: " + esc(i.detail) + "</li>").join("") + "</ul>"
-      + (s.configured ? '<button class="btn" data-act="open" data-what="settings">Open the settings file</button>' : '<button class="btn primary" data-act="run" data-action="setup"' + dis() + ">Create the settings file</button>")
+      + (s.configured ? editButtons : '<button class="btn primary" data-act="run" data-action="setup"' + dis() + ">Create the settings file</button>")
       + ' <span class="muted">The licensing sign-off and postal address come from AMB and its counsel.</span></div>';
   });
 }
@@ -343,21 +371,25 @@ function renderTiles(s) {
 }
 
 function renderSteps(s) {
-  part("steps", [s.mode, s.configured, s.ready_to_send, s.mode_is, s.transport, busy()], () => {
+  part("steps", [s.mode, s.hosted, s.configured, s.ready_to_send, s.mode_is, s.transport, busy()], () => {
     $("steps").innerHTML = STEPS.map((st, i) => {
       let why = "";
       if (!s.configured) why = "Create the settings file first (Settings tab).";
       else if (s.mode === "sample" && (st.action === "find" || st.action === "emails")) why = "Off in the sample: it never goes online.";
       else if (st.action === "drafts" && !s.ready_to_send) why = "Waits for the settings above.";
-      let title = st.title, text = st.text;
+      let title = st.title, text = stepText(st, s);
       if (st.action === "drafts" && s.mode_is === "send") { title = "Approve and send today's emails"; text = "Sends the emails below from your mailboxes."; }
-      if (st.action === "drafts" && s.transport === "outbox" && s.mode !== "sample") text += " With your current settings they are saved to the outbox folder and Claude's Gmail connection puts them in Gmail (RUNBOOK step 3).";
+      if (st.action === "drafts" && s.transport === "outbox" && s.mode !== "sample") {
+        text += s.hosted
+          ? " With your current settings they are saved to the outbox in the database. To have them go straight into Gmail Drafts, set up the Gmail connection (README, Hosting)."
+          : " With your current settings they are saved to the outbox folder and Claude's Gmail connection puts them in Gmail (RUNBOOK step 3).";
+      }
       const primary = st.action === "preview" || st.action === "drafts";
       return '<div class="step"><div class="t"><span class="num">' + (i + 1) + "</span>" + esc(title) + '</div><div class="d">' + esc(text) + "</div>"
         + (why ? '<div class="why">' + esc(why) + "</div>" : "")
         + '<div><button class="btn' + (primary ? " primary" : "") + '" data-act="run" data-action="' + st.action + '"' + dis(Boolean(why)) + ">" + esc(title) + "</button></div></div>";
     }).join("")
-      + '<div class="step"><div class="t">Weekly report</div><div class="d">Writes the week\'s numbers to the reports folder.</div><div><button class="btn" data-act="run" data-action="report"' + dis(!s.configured) + '>Write the weekly report</button> <button class="btn quiet" data-act="open" data-what="reports">Open folder</button></div></div>';
+      + '<div class="step"><div class="t">Weekly report</div><div class="d">Writes the week\'s numbers: emails, replies, warm sellers and mailbox health.</div><div><button class="btn" data-act="run" data-action="report"' + dis(!s.configured) + '>Write the weekly report</button> <button class="btn quiet" data-act="report">Read the latest</button></div></div>';
   });
 }
 
@@ -367,7 +399,12 @@ function renderJob(s) {
     toast(j.code === 0 ? j.label + ": done." : j.label + ": finished with problems. Read the log under the steps.", 6000);
   }
   lastJobRunning = Boolean(j && j.running);
-  part("job", j, () => {
+  part("job", [j, pending], () => {
+    if (pending) {
+      $("job").innerHTML = '<div class="job"><div class="head"><strong>' + esc(pending.label) + '</strong><span class="spin"></span> Working</div><pre>'
+        + esc(s.hosted ? "Working on it. A step can take up to five minutes: keep this page open." : "Starting...") + "</pre></div>";
+      return;
+    }
     if (!j) { $("job").innerHTML = ""; return; }
     const status = j.running ? '<span class="spin"></span> Running' : j.code === 0 ? '<span class="ok">&#10003; Done</span>' : '<span class="bad">Finished with problems: read the lines below</span>';
     $("job").innerHTML = '<div class="job"><div class="head"><strong>' + esc(j.label) + "</strong>" + status + '<div class="grow"></div><span class="muted">started ' + esc(j.startedAt ? new Date(j.startedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : '') + '</span></div><pre id="jobLog">' + esc(j.log.join("\n")) + "</pre></div>";
@@ -497,14 +534,50 @@ async function act(el) {
   try {
     if (a === "tab") return showTab(el.dataset.tab);
     if (a === "close") return $("modal").classList.remove("on");
+    if (a === "close-editor") return $("editor").classList.remove("on");
+    if (a === "settings") {
+      const r = await api("GET", "/api/settings");
+      $("editorFile").textContent = r.file;
+      $("editorText").value = r.text;
+      $("editorError").textContent = r.exists ? "" : "This is the example: saving it creates your settings.";
+      $("editor").classList.add("on");
+      return;
+    }
+    if (a === "save-settings") {
+      $("editorError").textContent = "";
+      try {
+        await api("POST", "/api/settings", { text: $("editorText").value });
+      } catch (err) {
+        $("editorError").textContent = err.message;
+        return;
+      }
+      $("editor").classList.remove("on");
+      toast("Settings saved.");
+      return refresh();
+    }
+    if (a === "report") {
+      const r = await api("GET", "/api/report");
+      $("modalTitle").textContent = "Weekly report: " + r.name;
+      $("modalBody").textContent = r.text;
+      $("modal").classList.add("on");
+      return;
+    }
     if (a === "sort") {
       view.dir = view.sort === el.dataset.key ? -view.dir : el.dataset.key === "score" || el.dataset.key === "emails_so_far" ? -1 : 1;
       view.sort = el.dataset.key;
       return part("allTable", [state.businesses, view], renderAll);
     }
     if (a === "run") {
-      await api("POST", "/api/action", { action: el.dataset.action });
       showTab("today");
+      pending = { label: el.textContent.trim() };
+      render();
+      try {
+        const r = await api("POST", "/api/action", { action: el.dataset.action });
+        // The hosted app answers when the step is done; the desktop app answers at once and the page follows the step.
+        if (r.job && !r.job.running) toast(r.job.code === 0 ? r.job.label + ": done." : r.job.label + ": finished with problems. Read the log under the steps.", 6000);
+      } finally {
+        pending = null;
+      }
     } else if (a === "mode") {
       await api("POST", "/api/mode", { mode: el.dataset.mode });
       toast(el.dataset.mode === "live" ? "Showing your real data." : "Showing the sample.");
@@ -517,7 +590,7 @@ async function act(el) {
       await api("POST", "/api/skip", { prospectId: el.dataset.id });
       toast("Skipped: that business is put on hold and left out of today's emails.");
     } else if (a === "note") {
-      const r = await api("GET", "/api/note?prospect=" + encodeURIComponent(el.dataset.id));
+      const r = await api("POST", "/api/note", { prospectId: el.dataset.id });
       $("modalTitle").textContent = "Handoff note: " + el.dataset.name;
       $("modalBody").textContent = r.text;
       $("modal").classList.add("on");
@@ -530,6 +603,7 @@ async function act(el) {
     refresh();
   } catch (e) {
     toast(e.message, 7000);
+    if (state) refresh();
   }
 }
 

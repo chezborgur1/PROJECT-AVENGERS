@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   cmdDaily,
+  cmdEnrich,
   cmdExport,
   cmdInit,
   cmdPreflight,
@@ -329,5 +330,45 @@ describe("demo", () => {
       return ["prospects.csv", "touches.csv", "replies.csv", "leads.csv", "suppression.csv"].map((f) => fs.readFileSync(path.join(dir, f), "utf8"));
     };
     expect(await run()).toEqual(await run());
+  });
+});
+
+describe("time limits", () => {
+  it("stops finding emails between businesses when told, and carries on from there with --resume", async () => {
+    const { cwd, deps, stores, out } = setup(testConfig());
+    stores.prospects.upsert([makeProspect({ prospect_id: "P-00001", status: "new" }), makeProspect({ prospect_id: "P-00002", status: "new" }), makeProspect({ prospect_id: "P-00003", status: "new" })]);
+    const cursor = path.join(cwd, "data/cache/enrich-cursor.json");
+    // A zero-second budget still does one business, so every press makes progress.
+    expect(await cmdEnrich(["--no-verify", "--max-seconds", "0", "--resume"], deps)).toBe(0);
+    expect(JSON.parse(fs.readFileSync(cursor, "utf8"))).toEqual({ after: "P-00001" });
+    expect(out()).toContain("Stopped after P-00001");
+    expect(await cmdEnrich(["--no-verify", "--max-seconds", "0", "--resume"], deps)).toBe(0);
+    expect(JSON.parse(fs.readFileSync(cursor, "utf8"))).toEqual({ after: "P-00002" });
+    expect(await cmdEnrich(["--no-verify", "--resume"], deps)).toBe(0);
+    expect(out()).toContain("Continuing after P-00002");
+    expect(fs.existsSync(cursor)).toBe(false);
+    await expect(cmdEnrich(["--max-seconds", "soon"], deps)).rejects.toThrow(UsageError);
+  });
+
+  it("handles only the oldest new replies with --limit and leaves the rest waiting", async () => {
+    const { cwd, deps, stores, out } = setup(testConfig());
+    stores.prospects.upsert([makeProspect({ status: "in_sequence", email: "one@a.example" }), makeProspect({ status: "in_sequence", email: "two@b.example" })]);
+    const inbox = path.join(cwd, "data/inbox");
+    fs.mkdirSync(inbox, { recursive: true });
+    const msg = (id: string, from: string, hour: string) => ({ id, from, to: "frank@ambadvisory-mail.example", mailbox: "frank@ambadvisory-mail.example", subject: "Re: Exit-readiness check", date: `${TODAY}T${hour}:00:00Z`, text: "Tell me more." });
+    fs.writeFileSync(path.join(inbox, "a.json"), JSON.stringify(msg("m-late", "two@b.example", "16")));
+    fs.writeFileSync(path.join(inbox, "b.json"), JSON.stringify(msg("m-early", "one@a.example", "14")));
+    const seen: string[] = [];
+    const classify: typeof classifyReply = async (m) => {
+      seen.push(m.id);
+      return { class: "question", classifier: "rules", optOut: false, complaint: false, facts: {}, notes: "test" };
+    };
+    expect(await cmdQualify(["--limit", "1"], { ...deps, classify })).toBe(0);
+    expect(seen).toEqual(["m-early"]);
+    expect(out()).toContain("Handling the oldest 1 of 2 new message(s)");
+    expect(fs.readdirSync(inbox).filter((f) => f.endsWith(".json"))).toEqual(["a.json"]);
+    expect(await cmdQualify(["--limit", "1"], { ...deps, classify })).toBe(0);
+    expect(seen).toEqual(["m-early", "m-late"]);
+    await expect(cmdQualify(["--limit", "0"], deps)).rejects.toThrow(UsageError);
   });
 });
