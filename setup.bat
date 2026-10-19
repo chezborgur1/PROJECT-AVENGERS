@@ -25,4 +25,6 @@ echo.
 echo Seller lead engine ready. Next steps:
 echo  1. Fill in seller-lead-engine\config\engine.config.json and seller-lead-engine\.env in Notepad
 echo  2. Read seller-lead-engine\docs\RUNBOOK.md. Nothing is sent until the licensing sign-off and postal address are filled in
+echo  3. To open the app, double-click "AMB Seller Leads" on your desktop (or seller-lead-engine\AMB Seller Leads.bat)
+powershell -NoProfile -Command "$s=(New-Object -ComObject WScript.Shell).CreateShortcut([Environment]::GetFolderPath('Desktop')+'\AMB Seller Leads.lnk'); $s.TargetPath='%~dp0seller-lead-engine\AMB Seller Leads.bat'; $s.WorkingDirectory='%~dp0seller-lead-engine'; $s.Save()" >nul 2>nul && echo     Desktop shortcut added.
 pause

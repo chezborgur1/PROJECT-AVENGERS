@@ -25,6 +25,7 @@
 //   daily [--date YYYY-MM-DD]              sync (gmail_api), qualify, handoff, send: the scheduled routine
 //   status                                 counts, mailbox health and today's caps
 //   demo                                   the whole loop offline on samples/tampa-bay in a temp folder
+//   app [--no-open] [--port N]             the desktop app: a window with a button for every step (src/app/)
 //
 // The CLI is the only place that reads the clock: main() takes today and now
 // once and passes them into every module (DESIGN.md principle 1). Config and
@@ -855,6 +856,23 @@ export const cmdDemo: Command = async (_args, deps) => {
   return 0;
 };
 
+/** Open the desktop app: one window with a button for every step. Runs until its window is closed with Ctrl+C or the console window is closed. */
+export const cmdApp: Command = async (args, deps) => {
+  // Loaded on demand: the app runs these same commands, so a static import would be a cycle.
+  const { openWindow, startApp } = await import("./app/server.ts");
+  const port = flag(args, "--port");
+  const app = await startApp({ root: deps.cwd, env: deps.env, ...(port ? { port: Number(port) } : {}) });
+  deps.log(`AMB Seller Leads is running at ${app.url}`);
+  deps.log("Keep this window open while you use the app. Close it (or press Ctrl+C) to stop.");
+  if (!args.includes("--no-open")) openWindow(app.url);
+  await new Promise<void>((resolve) => {
+    process.once("SIGINT", resolve);
+    process.once("SIGTERM", resolve);
+  });
+  await app.close();
+  return 0;
+};
+
 export const USAGE = `lead-engine: AMB Advisory seller lead engine (npm run engine -- <command>)
 
   init                                   create data/ and config/engine.config.json from the example
@@ -884,7 +902,8 @@ export const USAGE = `lead-engine: AMB Advisory seller lead engine (npm run engi
                                          lead sales; refused unless lead_sales is enabled with a legal review
   daily [--date YYYY-MM-DD]              sync (gmail_api), qualify, handoff, send: the scheduled routine
   status                                 counts, mailbox health and today's caps
-  demo                                   the whole loop offline on samples/tampa-bay in a temp folder`;
+  demo                                   the whole loop offline on samples/tampa-bay in a temp folder
+  app [--no-open] [--port N]             open the desktop app: a window with a button for every step`;
 
 /** Print the command list. */
 export const cmdHelp: Command = async (_args, deps) => {
@@ -918,6 +937,7 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
   daily: cmdDaily,
   status: cmdStatus,
   demo: cmdDemo,
+  app: cmdApp,
   help: cmdHelp,
 };
 

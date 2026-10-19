@@ -20,4 +20,4 @@ ignores its own `output/`, `deals/`, `.env` and credential files.
 2. `git clone https://github.com/grzepcasey-ui/project-avengers`
 3. Windows: double-click `setup.bat`. Mac: `bash setup.sh`.
 4. Reference models go in `amb-material-bot/references/model-templates/` and past CIMs in `amb-material-bot/references/cims/` (upload them on github.com or commit them).
-5. Seller lead engine: fill in `seller-lead-engine/config/engine.config.json` and `seller-lead-engine/.env`, then follow `seller-lead-engine/docs/RUNBOOK.md`. It sends nothing until the licensing sign-off and postal address are filled in.
+5. Seller lead engine: double-click **AMB Seller Leads** on the desktop (setup adds the shortcut; it is `seller-lead-engine/AMB Seller Leads.bat`). The app has a button for every step and shows every business, email, reply and warm seller; try **Show me with sample data** first. Before real emails, fill in `seller-lead-engine/config/engine.config.json` (the app's Settings tab opens it) and follow `seller-lead-engine/docs/RUNBOOK.md`. It sends nothing until the licensing sign-off and postal address are filled in.

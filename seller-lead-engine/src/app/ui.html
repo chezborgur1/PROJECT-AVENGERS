@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AMB Seller Leads</title>
+<!--
+  The desktop app's one page. Plain HTML and JavaScript, no outside files, so
+  it works offline. The server puts the app key in TOKEN; every call sends it
+  back. Everything shown comes from /api/state; every button posts to /api.
+-->
+<style>
+  :root {
+    --bg: #f6f5f3; --panel: #ffffff; --ink: #1d1b1a; --muted: #6b6560; --line: #e4e0db;
+    --accent: #7b0000; --accent-ink: #ffffff; --accent-soft: #f6e9e9;
+    --ok: #1e6b3a; --ok-soft: #e6f2ea; --warn: #8a5a00; --warn-soft: #fbf1dc; --bad: #9b1c1c; --bad-soft: #fbe9e9;
+    --shadow: 0 1px 2px rgba(0,0,0,.06), 0 1px 8px rgba(0,0,0,.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161413; --panel: #201d1c; --ink: #ece8e4; --muted: #a39b94; --line: #35302d;
+      --accent: #c25a5a; --accent-ink: #160b0b; --accent-soft: #3a2323;
+      --ok: #7fcf98; --ok-soft: #1f3226; --warn: #e6b75c; --warn-soft: #3a2f19; --bad: #f08a8a; --bad-soft: #3d2020;
+      --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); }
+  body { font: 14px/1.45 "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif; }
+  button { font: inherit; cursor: pointer; }
+  button:disabled { cursor: not-allowed; opacity: .5; }
+  header { position: sticky; top: 0; z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line); }
+  .bar { display: flex; align-items: center; gap: 12px; padding: 10px 20px; flex-wrap: wrap; }
+  .brand { font-weight: 700; font-size: 17px; letter-spacing: .2px; }
+  .brand span { color: var(--accent); }
+  .date { color: var(--muted); }
+  .grow { flex: 1; }
+  .pill { padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .pill.live { background: var(--ok-soft); color: var(--ok); }
+  .pill.sample { background: var(--warn-soft); color: var(--warn); }
+  nav { display: flex; gap: 2px; padding: 0 14px; overflow-x: auto; }
+  nav button { border: 0; background: none; padding: 9px 12px; color: var(--muted); border-bottom: 2px solid transparent; white-space: nowrap; }
+  nav button.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+  nav .count { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 4px; border-radius: 9px; background: var(--accent); color: var(--accent-ink); font-size: 11px; text-align: center; }
+  main { max-width: 1240px; margin: 0 auto; padding: 18px 20px 60px; }
+  section.tab { display: none; }
+  section.tab.on { display: block; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; margin-bottom: 16px; box-shadow: var(--shadow); }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  h2 small { font-weight: 400; color: var(--muted); margin-left: 6px; }
+  p { margin: 0 0 8px; }
+  .muted { color: var(--muted); }
+  .btn { border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 7px; padding: 6px 12px; }
+  .btn:hover:not(:disabled) { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  .btn.small { padding: 3px 8px; font-size: 12px; }
+  .btn.quiet { border-color: transparent; background: none; color: var(--muted); }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 16px; }
+  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; box-shadow: var(--shadow); }
+  .tile .n { font-size: 26px; font-weight: 700; line-height: 1.1; }
+  .tile .l { color: var(--muted); font-size: 12px; }
+  .tile.hot { border-color: var(--accent); background: var(--accent-soft); }
+  .tile.hot .n { color: var(--accent); }
+  .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; }
+  .step { border: 1px solid var(--line); border-radius: 9px; padding: 12px; display: flex; flex-direction: column; gap: 6px; }
+  .step .num { width: 22px; height: 22px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: 12px; display: inline-flex; align-items: center; justify-content: center; margin-right: 6px; }
+  .step .t { font-weight: 600; }
+  .step .d { color: var(--muted); font-size: 13px; flex: 1; }
+  .step .why { font-size: 12px; color: var(--warn); }
+  .alert { border-radius: 9px; padding: 12px 14px; margin-bottom: 16px; border: 1px solid; }
+  .alert.warn { background: var(--warn-soft); border-color: var(--warn); }
+  .alert.sample { background: var(--warn-soft); border-color: var(--warn); }
+  .alert ul { margin: 6px 0 8px 18px; padding: 0; }
+  .job { border: 1px solid var(--line); border-radius: 9px; overflow: hidden; margin-top: 12px; }
+  .job .head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bg); }
+  .job pre { margin: 0; padding: 10px 12px; max-height: 260px; overflow: auto; font: 12px/1.45 Consolas, "SFMono-Regular", Menlo, monospace; white-space: pre-wrap; }
+  .spin { width: 12px; height: 12px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .ok { color: var(--ok); } .bad { color: var(--bad); } .warn { color: var(--warn); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; white-space: nowrap; }
+  th.sort { cursor: pointer; user-select: none; }
+  th.sort:hover { color: var(--ink); }
+  td.num, th.num { text-align: right; }
+  td .acts { display: flex; gap: 4px; flex-wrap: wrap; }
+  .scroll { overflow-x: auto; }
+  .tag { display: inline-block; padding: 1px 7px; border-radius: 5px; background: var(--bg); border: 1px solid var(--line); font-size: 12px; white-space: nowrap; }
+  .tag.hot { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  .email { border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; margin-bottom: 8px; }
+  .email .meta { font-size: 12px; color: var(--muted); }
+  .email .subj { font-weight: 600; margin: 2px 0; }
+  .email pre { white-space: pre-wrap; font: 13px/1.5 inherit; font-family: inherit; margin: 8px 0 0; padding: 10px; background: var(--bg); border-radius: 7px; }
+  .email .row { display: flex; gap: 8px; align-items: center; }
+  details summary { cursor: pointer; color: var(--accent); font-size: 13px; margin-top: 4px; }
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  input[type=search], input[type=email], select { font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--ink); }
+  input[type=search] { min-width: 260px; }
+  .bars { display: grid; grid-template-columns: 150px 1fr 50px; gap: 6px 10px; align-items: center; }
+  .bars .b { height: 12px; background: var(--accent); border-radius: 3px; min-width: 2px; }
+  .bars .v { text-align: right; font-variant-numeric: tabular-nums; }
+  .check { display: flex; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+  .check:last-child { border-bottom: 0; }
+  .check .mark { width: 18px; font-weight: 700; }
+  .toast { position: fixed; right: 18px; bottom: 18px; max-width: 420px; padding: 10px 14px; border-radius: 9px; background: var(--ink); color: var(--bg); box-shadow: 0 4px 18px rgba(0,0,0,.2); display: none; z-index: 20; }
+  .toast.on { display: block; }
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; align-items: center; justify-content: center; z-index: 30; padding: 20px; }
+  .modal.on { display: flex; }
+  .modal .box { background: var(--panel); color: var(--ink); border-radius: 12px; max-width: 760px; width: 100%; max-height: 85vh; display: flex; flex-direction: column; }
+  .modal .box .top { display: flex; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .modal .box pre { margin: 0; padding: 16px; overflow: auto; white-space: pre-wrap; font: 13px/1.55 inherit; font-family: inherit; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 860px) { .two { grid-template-columns: 1fr; } input[type=search] { min-width: 0; width: 100%; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <div class="brand">AMB <span>Seller Leads</span></div>
+    <div class="date" id="today"></div>
+    <span class="pill" id="modePill"></span>
+    <div class="grow"></div>
+    <div id="modeButtons"></div>
+  </div>
+  <nav id="tabs">
+    <button data-act="tab" data-tab="today" class="on">Today</button>
+    <button data-act="tab" data-tab="warm">Warm sellers <span class="count" id="warmCount">0</span></button>
+    <button data-act="tab" data-tab="replies">Replies</button>
+    <button data-act="tab" data-tab="all">All businesses</button>
+    <button data-act="tab" data-tab="settings">Settings and mailboxes</button>
+  </nav>
+</header>
+
+<main>
+  <section class="tab on" id="tab-today">
+    <div id="sampleNote"></div>
+    <div id="setupAlert"></div>
+    <div class="tiles" id="tiles"></div>
+    <div class="card">
+      <h2>Steps <small>Run them in order. Each one picks up where the last left off.</small></h2>
+      <div class="steps" id="steps"></div>
+      <div id="job"></div>
+    </div>
+    <div class="card" id="emails"></div>
+    <div class="two">
+      <div class="card"><h2>Pipeline</h2><div id="funnel"></div></div>
+      <div class="card"><h2>Last 14 days</h2><div class="scroll" id="activity"></div></div>
+    </div>
+  </section>
+
+  <section class="tab" id="tab-warm">
+    <div class="card">
+      <h2>Warm sellers <small>Qualified owners ready for a call, and those already with the advisor</small></h2>
+      <div class="scroll" id="warmTable"></div>
+    </div>
+    <div class="card">
+      <h2>Check back later</h2>
+      <div class="scroll" id="laterTable"></div>
+    </div>
+  </section>
+
+  <section class="tab" id="tab-replies">
+    <div class="card">
+      <h2>Owners in conversation <small>Replied and still answering the intake questions</small></h2>
+      <div class="scroll" id="talkingTable"></div>
+    </div>
+    <div class="card">
+      <h2>Latest replies <small>Answers are drafted in Gmail for a person to read and send</small></h2>
+      <div class="scroll" id="repliesTable"></div>
+    </div>
+  </section>
+
+  <section class="tab" id="tab-all">
+    <div class="card">
+      <h2>All businesses <small id="allCount"></small></h2>
+      <div class="filters">
+        <input type="search" id="search" placeholder="Search name, city, trade or reason">
+        <select id="statusFilter"><option value="">Every status</option></select>
+      </div>
+      <div class="scroll" id="allTable"></div>
+    </div>
+  </section>
+
+  <section class="tab" id="tab-settings">
+    <div class="card">
+      <h2>Before any email goes out</h2>
+      <div id="setupList"></div>
+      <div id="setupButtons" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <h2>Mailboxes</h2>
+      <div class="scroll" id="mailboxTable"></div>
+    </div>
+    <div class="two">
+      <div class="card">
+        <h2>Never email this address</h2>
+        <p class="muted">Adds it to the permanent do-not-contact list. It can never be emailed again.</p>
+        <form id="suppressForm" class="filters">
+          <input type="email" id="suppressEmail" placeholder="owner@business.com" required>
+          <button class="btn" type="submit">Add to do-not-contact</button>
+        </form>
+      </div>
+      <div class="card">
+        <h2>Folders</h2>
+        <p class="muted" id="dataDir"></p>
+        <div class="filters">
+          <button class="btn" data-act="open" data-what="data">Data folder</button>
+          <button class="btn" data-act="open" data-what="handoffs">Handoff notes</button>
+          <button class="btn" data-act="open" data-what="reports">Weekly reports</button>
+          <button class="btn" data-act="open" data-what="outbox">Outbox</button>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+<div class="modal" id="modal"><div class="box"><div class="top"><strong id="modalTitle"></strong><div class="grow"></div><button class="btn quiet" data-act="close">Close</button></div><pre id="modalBody"></pre></div></div>
+
+<script>
+"use strict";
+const TOKEN = "__APP_TOKEN__";
+let state = null;
+let timer = null;
+let lastJobRunning = false;
+const shown = {};
+const view = { sort: "score", dir: -1, search: "", status: "" };
+
+const $ = (id) => document.getElementById(id);
+const esc = (v) => String(v == null ? "" : v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+async function api(method, url, body) {
+  const res = await fetch(url, { method, headers: { "x-app-token": TOKEN, "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  let data = {};
+  try { data = await res.json(); } catch (e) { data = {}; }
+  if (!res.ok) throw new Error(data.error || (data.log && data.log.join(" ")) || ("The app answered " + res.status));
+  return data;
+}
+
+function toast(text, ms) {
+  const t = $("toast");
+  t.textContent = text;
+  t.classList.add("on");
+  clearTimeout(toast.h);
+  toast.h = setTimeout(() => t.classList.remove("on"), ms || 4000);
+}
+
+/** Re-draw one part of the page only when its data changed, so typing, scrolling and open emails are kept. */
+function part(key, data, draw) {
+  const sig = JSON.stringify(data);
+  if (shown[key] === sig) return;
+  shown[key] = sig;
+  draw(data);
+}
+
+async function refresh() {
+  clearTimeout(timer);
+  try {
+    state = await api("GET", "/api/state");
+    render();
+  } catch (e) {
+    toast("Cannot reach the app: " + e.message + ". Is its black window still open?", 6000);
+  }
+  const running = Boolean(state && state.job && state.job.running);
+  timer = setTimeout(refresh, running ? 1500 : 15000);
+}
+
+const STEPS = [
+  { action: "find", title: "Find new businesses", text: "Downloads Florida's free contractor licence and business records and keeps the ones in your areas. Takes a few minutes." },
+  { action: "emails", title: "Find emails", text: "Looks for a contact email on each business's own website and checks it can receive mail." },
+  { action: "score", title: "Score businesses", text: "Ranks who is most likely to sell, so the best fits are emailed first." },
+  { action: "preview", title: "Prepare today's emails", text: "Shows today's emails below for you to read. Nothing is saved or sent." },
+  { action: "drafts", title: "Approve and create Gmail drafts", text: "Puts the emails below into Gmail Drafts. You press send in Gmail." },
+  { action: "replies", title: "Check replies", text: "Reads replies, handles opt-outs, drafts answers and writes a note for every warm seller." },
+];
+
+function render() {
+  const s = state;
+  $("today").textContent = new Date(s.today + "T12:00:00").toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+  const pill = $("modePill");
+  pill.className = "pill " + s.mode;
+  pill.textContent = s.mode === "sample" ? "Sample data" : "Your data";
+  part("modeButtons", [s.mode, busy()], () => {
+    $("modeButtons").innerHTML = s.mode === "sample"
+      ? '<button class="btn primary" data-act="mode" data-mode="live"' + dis() + '>Use my real data</button>'
+      : '<button class="btn" data-act="run" data-action="sample"' + dis() + '>Show me with sample data</button>';
+  });
+  $("warmCount").textContent = (s.warm || []).filter((l) => l.stage_key === "warm" || l.stage_key === "handed_off").length;
+  part("sampleNote", s.mode, () => {
+    $("sampleNote").innerHTML = s.mode === "sample"
+      ? '<div class="alert sample"><strong>This is fictional sample data</strong> (made-up Tampa Bay businesses, dated ' + esc(s.today) + '). Press any button to see what it does: nothing is sent and nothing goes online. Press <strong>Use my real data</strong> at the top when you are ready.</div>'
+      : "";
+  });
+  renderSetup(s);
+  renderTiles(s);
+  renderSteps(s);
+  renderJob(s);
+  renderEmails(s);
+  part("funnel", s.funnel, renderFunnel);
+  part("activity", s.activity, renderActivity);
+  part("warmTable", [s.warm, busy()], () => leadTable("warmTable", s.warm, ["note", "meeting", "listed", "nurture", "lost"], "No warm sellers yet. They appear here when an owner who replied answers the size, timeline and motivation questions."));
+  part("laterTable", s.later, () => leadTable("laterTable", s.later, ["lost"], "Nobody to check back with."));
+  part("talkingTable", s.talking, () => leadTable("talkingTable", s.talking, ["nurture", "lost"], "Nobody in conversation right now."));
+  part("repliesTable", s.replies, renderReplies);
+  part("allTable", [s.businesses, view], renderAll);
+  part("mailboxTable", s.mailboxes, renderMailboxes);
+  $("dataDir").textContent = s.dataDir ? "Everything is kept in the folder " + s.dataDir + " on this computer." : "";
+}
+
+function busy() { return Boolean(state && state.job && state.job.running); }
+function dis(extra) { return busy() || extra ? " disabled" : ""; }
+
+function renderSetup(s) {
+  const failing = (s.setup || []).filter((i) => !i.ok);
+  part("setup", [s.setup, s.configured, s.mode, busy()], () => {
+    const list = (s.setup || []).map((i) => '<div class="check"><span class="mark ' + (i.ok ? "ok" : "bad") + '">' + (i.ok ? "&#10003;" : "&#10007;") + '</span><div><strong>' + esc(i.check) + '</strong><div class="muted">' + esc(i.detail) + "</div></div></div>").join("");
+    $("setupList").innerHTML = list || '<p class="muted">Nothing to check.</p>';
+    $("setupButtons").innerHTML = s.configured
+      ? '<button class="btn" data-act="open" data-what="settings">Open the settings file</button> <span class="muted">' + esc(s.configFile) + "</span>"
+      : '<button class="btn primary" data-act="run" data-action="setup"' + dis() + ">Create the settings file</button>";
+    if (s.mode === "sample" || !failing.length) { $("setupAlert").innerHTML = ""; return; }
+    $("setupAlert").innerHTML = '<div class="alert warn"><strong>Finish the settings before any email goes out.</strong> You can find and score businesses now; drafts wait until these are done:'
+      + "<ul>" + failing.map((i) => "<li><strong>" + esc(i.check) + "</strong>: " + esc(i.detail) + "</li>").join("") + "</ul>"
+      + (s.configured ? '<button class="btn" data-act="open" data-what="settings">Open the settings file</button>' : '<button class="btn primary" data-act="run" data-action="setup"' + dis() + ">Create the settings file</button>")
+      + ' <span class="muted">The licensing sign-off and postal address come from AMB and its counsel.</span></div>';
+  });
+}
+
+function renderTiles(s) {
+  const sum = Object.fromEntries((s.summary || []).map((x) => [x.metric, x]));
+  const found = (s.funnel || [])[0];
+  const tiles = [
+    { n: found ? found.count : 0, l: "Businesses found", d: found ? found.definition : "" },
+    sum.ready && { n: sum.ready.value, l: "Ready to email", d: sum.ready.definition },
+    sum.contacted && { n: sum.contacted.value, l: "Emailed", d: sum.contacted.definition },
+    sum.replied && { n: sum.replied.value, l: "Replied", d: sum.replied.definition },
+    sum.in_conversation && { n: sum.in_conversation.value, l: "In conversation", d: sum.in_conversation.definition },
+    sum.warm && { n: sum.warm.value, l: "Warm sellers", d: sum.warm.definition, hot: true },
+  ].filter(Boolean);
+  part("tiles", tiles, () => {
+    $("tiles").innerHTML = tiles.map((t) => '<div class="tile' + (t.hot ? " hot" : "") + '" title="' + esc(t.d) + '"><div class="n">' + esc(t.n.toLocaleString()) + '</div><div class="l">' + esc(t.l) + "</div></div>").join("");
+  });
+}
+
+function renderSteps(s) {
+  part("steps", [s.mode, s.configured, s.ready_to_send, s.mode_is, s.transport, busy()], () => {
+    $("steps").innerHTML = STEPS.map((st, i) => {
+      let why = "";
+      if (!s.configured) why = "Create the settings file first (Settings tab).";
+      else if (s.mode === "sample" && (st.action === "find" || st.action === "emails")) why = "Off in the sample: it never goes online.";
+      else if (st.action === "drafts" && !s.ready_to_send) why = "Waits for the settings above.";
+      let title = st.title, text = st.text;
+      if (st.action === "drafts" && s.mode_is === "send") { title = "Approve and send today's emails"; text = "Sends the emails below from your mailboxes."; }
+      if (st.action === "drafts" && s.transport === "outbox" && s.mode !== "sample") text += " With your current settings they are saved to the outbox folder and Claude's Gmail connection puts them in Gmail (RUNBOOK step 3).";
+      const primary = st.action === "preview" || st.action === "drafts";
+      return '<div class="step"><div class="t"><span class="num">' + (i + 1) + "</span>" + esc(title) + '</div><div class="d">' + esc(text) + "</div>"
+        + (why ? '<div class="why">' + esc(why) + "</div>" : "")
+        + '<div><button class="btn' + (primary ? " primary" : "") + '" data-act="run" data-action="' + st.action + '"' + dis(Boolean(why)) + ">" + esc(title) + "</button></div></div>";
+    }).join("")
+      + '<div class="step"><div class="t">Weekly report</div><div class="d">Writes the week\'s numbers to the reports folder.</div><div><button class="btn" data-act="run" data-action="report"' + dis(!s.configured) + '>Write the weekly report</button> <button class="btn quiet" data-act="open" data-what="reports">Open folder</button></div></div>';
+  });
+}
+
+function renderJob(s) {
+  const j = s.job;
+  if (lastJobRunning && j && !j.running) {
+    toast(j.code === 0 ? j.label + ": done." : j.label + ": finished with problems. Read the log under the steps.", 6000);
+  }
+  lastJobRunning = Boolean(j && j.running);
+  part("job", j, () => {
+    if (!j) { $("job").innerHTML = ""; return; }
+    const status = j.running ? '<span class="spin"></span> Running' : j.code === 0 ? '<span class="ok">&#10003; Done</span>' : '<span class="bad">Finished with problems: read the lines below</span>';
+    $("job").innerHTML = '<div class="job"><div class="head"><strong>' + esc(j.label) + "</strong>" + status + '<div class="grow"></div><span class="muted">started ' + esc(j.startedAt ? new Date(j.startedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : '') + '</span></div><pre id="jobLog">' + esc(j.log.join("\n")) + "</pre></div>";
+    const pre = $("jobLog");
+    pre.scrollTop = pre.scrollHeight;
+  });
+}
+
+function nameOf(id) {
+  const b = (state.businesses || []).find((x) => x.prospect_id === id);
+  return b ? b.business : id;
+}
+
+function renderEmails(s) {
+  part("emails", [s.previews, busy(), s.mode_is, s.ready_to_send], () => {
+    const p = s.previews;
+    let html = "<h2>Today's emails <small>Read them before you approve. Skip any business you do not want to email.</small></h2>";
+    if (!p) {
+      html += '<p class="muted">Press <strong>Prepare today\'s emails</strong> to see them here.</p>';
+    } else {
+      const r = p.report;
+      if (!r.sendDay) html += '<p class="warn">Today is not a sending day: ' + esc(r.reason || "") + "</p>";
+      if (r.window) html += '<p class="warn">Drafts can only be created inside the sending window: ' + esc(r.window) + ".</p>";
+      html += r.previews.length
+        ? "<p>" + r.previews.length + " email(s) ready. Approving puts them in Gmail Drafts; nothing is sent until a person presses send.</p>"
+        : '<p class="muted">No emails for today.</p>';
+      html += r.previews.map((e) => '<div class="email"><div class="row"><div class="grow"><div class="meta">Email ' + e.step + " of 3 to " + esc(e.to) + " (" + esc(nameOf(e.prospectId)) + ") from " + esc(e.mailbox) + '</div><div class="subj">' + esc(e.subject) + "</div></div>"
+        + (e.step === 1 ? '<button class="btn small" data-act="skip" data-id="' + esc(e.prospectId) + '"' + dis() + ">Skip this business</button>" : "")
+        + "</div><details><summary>Read the email</summary><pre>" + esc(e.body) + "</pre></details></div>").join("");
+      if (r.skipped.length) {
+        html += "<details><summary>" + r.skipped.length + " left out today, and why</summary><ul>" + r.skipped.map((b) => "<li><strong>" + esc(nameOf(b.prospectId)) + "</strong>: " + esc(b.reason) + "</li>").join("") + "</ul></details>";
+      }
+      if (r.blocked.length) {
+        html += "<details><summary>" + r.blocked.length + " held back by the compliance checks</summary><ul>" + r.blocked.map((b) => "<li><strong>" + esc(nameOf(b.prospectId)) + "</strong>: " + esc(b.reasons.join("; ")) + "</li>").join("") + "</ul></details>";
+      }
+      if (r.previews.length) {
+        const label = s.mode_is === "send" ? "Approve and send these" : "Approve and create Gmail drafts";
+        html += '<div style="margin-top:10px"><button class="btn primary" data-act="run" data-action="drafts"' + dis(!s.ready_to_send) + ">" + label + "</button>"
+          + (s.ready_to_send ? "" : ' <span class="warn">Finish the settings first.</span>') + "</div>";
+      }
+    }
+    $("emails").innerHTML = html;
+  });
+}
+
+function renderFunnel(rows) {
+  const max = Math.max(1, ...(rows || []).map((r) => r.count));
+  $("funnel").innerHTML = '<div class="bars">' + (rows || []).map((r) => '<div title="' + esc(r.definition) + '">' + esc(r.step) + '</div><div><div class="b" style="width:' + Math.max(0.5, (100 * r.count) / max).toFixed(1) + '%"></div></div><div class="v">' + esc(r.count.toLocaleString()) + "</div>").join("") + "</div>";
+}
+
+function renderActivity(rows) {
+  const last = (rows || []).slice(-14);
+  if (!last.length) { $("activity").innerHTML = '<p class="muted">No emails or replies yet.</p>'; return; }
+  $("activity").innerHTML = '<table><tr><th>Day</th><th class="num">Emails</th><th class="num">Replies</th><th class="num">Opt-outs</th><th class="num">Bounces</th></tr>'
+    + last.slice().reverse().map((a) => "<tr><td>" + esc(a.date) + '</td><td class="num">' + a.emails + '</td><td class="num">' + a.replies + '</td><td class="num">' + a.opt_outs + '</td><td class="num">' + a.bounces + "</td></tr>").join("") + "</table>";
+}
+
+const LEAD_ACTS = {
+  note: (l) => l.has_note ? '<button class="btn small primary" data-act="note" data-id="' + esc(l.prospect_id) + '" data-name="' + esc(l.business) + '">Open note</button>' : "",
+  meeting: (l) => l.stage_key === "meeting" || l.stage_key === "listed" ? "" : '<button class="btn small" data-act="stage" data-stage="meeting" data-id="' + esc(l.prospect_id) + '">Meeting booked</button>',
+  listed: (l) => l.stage_key === "listed" ? "" : '<button class="btn small" data-act="stage" data-stage="listed" data-id="' + esc(l.prospect_id) + '">Listing signed</button>',
+  nurture: (l) => '<button class="btn small" data-act="stage" data-stage="nurture" data-id="' + esc(l.prospect_id) + '">Check back later</button>',
+  lost: (l) => '<button class="btn small quiet" data-act="stage" data-stage="lost" data-id="' + esc(l.prospect_id) + '">Not a fit</button>',
+};
+
+function leadTable(id, rows, acts, empty) {
+  if (!rows || !rows.length) { $(id).innerHTML = '<p class="muted">' + esc(empty) + "</p>"; return; }
+  $(id).innerHTML = "<table><tr><th>Business</th><th>Owner</th><th>City</th><th>Stage</th><th>Size</th><th>Timeline</th><th>Why selling</th><th>Next step</th><th></th></tr>"
+    + rows.map((l) => "<tr><td><strong>" + esc(l.business) + "</strong></td><td>" + esc(l.owner) + "</td><td>" + esc(l.city) + '</td><td><span class="tag' + (l.stage_key === "warm" ? " hot" : "") + '">' + esc(l.stage) + "</span></td><td>" + esc(l.size) + "</td><td>" + esc(l.timeline) + "</td><td>" + esc(l.motivation) + "</td><td>" + esc(l.next_action) + '</td><td><div class="acts">' + acts.map((a) => LEAD_ACTS[a](l)).join("") + "</div></td></tr>").join("")
+    + "</table>";
+}
+
+function renderReplies(rows) {
+  if (!rows || !rows.length) { $("repliesTable").innerHTML = '<p class="muted">No replies yet. Press <strong>Check replies</strong> after emails have gone out.</p>'; return; }
+  $("repliesTable").innerHTML = "<table><tr><th>Received</th><th>Business</th><th>Kind</th><th>What they wrote</th><th>Answer</th></tr>"
+    + rows.map((r) => "<tr><td style=\"white-space:nowrap\">" + esc(r.received) + "</td><td>" + esc(r.business) + '</td><td><span class="tag' + (r.kind === "interested" ? " hot" : "") + '">' + esc(r.kind) + "</span></td><td>" + esc(r.text) + "</td><td>" + esc(r.answer) + "</td></tr>").join("") + "</table>";
+}
+
+const COLS = [
+  { key: "business", label: "Business" },
+  { key: "city", label: "City" },
+  { key: "vertical", label: "Trade" },
+  { key: "tier", label: "Tier" },
+  { key: "score", label: "Score", num: true },
+  { key: "status", label: "Status" },
+  { key: "emails_so_far", label: "Emails", num: true },
+  { key: "next_email", label: "Next email" },
+  { key: "why", label: "Why it scored" },
+];
+
+function renderAll(data) {
+  const rows = data[0] || [];
+  const statuses = [...new Set(rows.map((r) => r.status))].sort();
+  const sel = $("statusFilter");
+  const keep = sel.value;
+  sel.innerHTML = '<option value="">Every status</option>' + statuses.map((x) => '<option' + (x === keep ? " selected" : "") + ">" + esc(x) + "</option>").join("");
+  const q = view.search.trim().toLowerCase();
+  let list = rows.filter((r) => (!view.status || r.status === view.status) && (!q || [r.business, r.city, r.vertical, r.status, r.why].join(" ").toLowerCase().includes(q)));
+  const k = view.sort;
+  list = list.slice().sort((a, b) => {
+    const x = a[k], y = b[k];
+    if (x == null && y == null) return 0;
+    if (x == null || x === "") return 1;
+    if (y == null || y === "") return -1;
+    return (typeof x === "number" ? x - y : String(x).localeCompare(String(y))) * view.dir;
+  });
+  $("allCount").textContent = rows.length ? list.length.toLocaleString() + " of " + rows.length.toLocaleString() + (list.length > 500 ? " (first 500 shown; search to narrow)" : "") : "";
+  if (!rows.length) { $("allTable").innerHTML = '<p class="muted">No businesses yet. Press <strong>Find new businesses</strong> on the Today tab, or <strong>Show me with sample data</strong>.</p>'; return; }
+  $("allTable").innerHTML = "<table><tr>" + COLS.map((c) => '<th class="sort' + (c.num ? " num" : "") + '" data-act="sort" data-key="' + c.key + '">' + esc(c.label) + (view.sort === c.key ? (view.dir > 0 ? " &#9650;" : " &#9660;") : "") + "</th>").join("") + "</tr>"
+    + list.slice(0, 500).map((r) => "<tr>" + COLS.map((c) => '<td' + (c.num ? ' class="num"' : "") + ">" + esc(r[c.key] == null ? "" : r[c.key]) + "</td>").join("") + "</tr>").join("") + "</table>";
+}
+
+function renderMailboxes(rows) {
+  if (!rows || !rows.length) { $("mailboxTable").innerHTML = '<p class="muted">No mailboxes in the settings yet.</p>'; return; }
+  $("mailboxTable").innerHTML = '<table><tr><th>Mailbox</th><th>State</th><th class="num">Today</th><th class="num">Last 14 days</th><th class="num">Bounce rate</th><th class="num">Complaints</th><th>Why</th></tr>'
+    + rows.map((m) => "<tr><td>" + esc(m.mailbox) + '</td><td><span class="tag">' + esc(m.state) + '</span></td><td class="num">' + m.used_today + " of " + m.cap_today + '</td><td class="num">' + m.sends_14d + '</td><td class="num">' + (100 * m.bounce_rate).toFixed(1) + '%</td><td class="num">' + m.complaints + "</td><td>" + esc(m.reason) + "</td></tr>").join("") + "</table>";
+}
+
+function showTab(name) {
+  document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === name));
+  document.querySelectorAll("section.tab").forEach((x) => x.classList.toggle("on", x.id === "tab-" + name));
+  try { sessionStorage.setItem("tab", name); } catch (e) { /* not kept; fine */ }
+}
+
+async function act(el) {
+  const a = el.dataset.act;
+  try {
+    if (a === "tab") return showTab(el.dataset.tab);
+    if (a === "close") return $("modal").classList.remove("on");
+    if (a === "sort") {
+      view.dir = view.sort === el.dataset.key ? -view.dir : el.dataset.key === "score" || el.dataset.key === "emails_so_far" ? -1 : 1;
+      view.sort = el.dataset.key;
+      return part("allTable", [state.businesses, view], renderAll);
+    }
+    if (a === "run") {
+      await api("POST", "/api/action", { action: el.dataset.action });
+      showTab("today");
+    } else if (a === "mode") {
+      await api("POST", "/api/mode", { mode: el.dataset.mode });
+      toast(el.dataset.mode === "live" ? "Showing your real data." : "Showing the sample.");
+    } else if (a === "stage") {
+      const stage = el.dataset.stage;
+      if (stage === "lost" && !confirm("Close this lead as not a fit? It stays on record and is not emailed again.")) return;
+      await api("POST", "/api/stage", { prospectId: el.dataset.id, stage });
+      toast("Updated.");
+    } else if (a === "skip") {
+      await api("POST", "/api/skip", { prospectId: el.dataset.id });
+      toast("Skipped: that business is put on hold and left out of today's emails.");
+    } else if (a === "note") {
+      const r = await api("GET", "/api/note?prospect=" + encodeURIComponent(el.dataset.id));
+      $("modalTitle").textContent = "Handoff note: " + el.dataset.name;
+      $("modalBody").textContent = r.text;
+      $("modal").classList.add("on");
+      return;
+    } else if (a === "open") {
+      const r = await api("POST", "/api/open", { what: el.dataset.what });
+      toast("Opened " + r.path);
+      return;
+    }
+    refresh();
+  } catch (e) {
+    toast(e.message, 7000);
+  }
+}
+
+document.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-act]");
+  if (el && !el.disabled) act(el);
+});
+$("modal").addEventListener("click", (e) => { if (e.target === $("modal")) $("modal").classList.remove("on"); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("modal").classList.remove("on"); });
+$("search").addEventListener("input", (e) => { view.search = e.target.value; if (state) part("allTable", [state.businesses, view], renderAll); });
+$("statusFilter").addEventListener("change", (e) => { view.status = e.target.value; if (state) part("allTable", [state.businesses, view], renderAll); });
+$("suppressForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const email = $("suppressEmail").value.trim();
+  if (!email || !confirm("Never email " + email + " again? This cannot be undone.")) return;
+  try {
+    await api("POST", "/api/suppress", { email });
+    $("suppressEmail").value = "";
+    toast(email + " is on the do-not-contact list.");
+    refresh();
+  } catch (err) { toast(err.message, 7000); }
+});
+try { const t = sessionStorage.getItem("tab"); if (t) showTab(t); } catch (e) { /* first visit */ }
+refresh();
+</script>
+</body>
+</html>

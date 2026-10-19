@@ -41,6 +41,41 @@ blocks the send instead of warning. It produces:
  Mondays ─► report (data/reports/)
 ```
 
+## The app: no commands needed
+
+One window on your own computer with a button for every step and tables
+that track every business, email, reply and warm seller. It runs on your
+PC, so it can download Florida's records itself (a cloud session's network
+usually cannot reach them).
+
+1. Once: double-click `setup.bat` in the folder above (installs Node.js
+   packages and runs the demo).
+2. Every day: double-click **`AMB Seller Leads.bat`** (on a Mac,
+   `AMB Seller Leads.command`). A black window opens and stays open while
+   the app runs; the app opens in its own window (Edge or Chrome app mode,
+   no address bar). Close the black window to stop.
+3. First time, press **Show me with sample data** at the top: fictional
+   Tampa Bay businesses, offline, so every button can be tried safely. Press
+   **Use my real data** when ready.
+
+| Tab | What it shows |
+|---|---|
+| Today | Headline counts, the steps in order (Find new businesses, Find emails, Score businesses, Prepare today's emails, Approve and create Gmail drafts, Check replies, Weekly report), the log of the step running, today's emails to read and skip before approving, the pipeline and the last 14 days |
+| Warm sellers | Qualified owners with size, timeline and motivation, the advisor's handoff note, and buttons for Meeting booked, Listing signed, Check back later and Not a fit |
+| Replies | Owners in conversation and every reply with its kind and whether an answer was drafted |
+| All businesses | Every business, searchable and sortable: score, status, emails so far, next email, why it scored |
+| Settings and mailboxes | What still blocks the first email (postal address, licensing sign-off and the rest), the settings file, mailbox health, a "never email this address" box, and the data folders |
+
+The buttons run the same commands as below, so every compliance gate, cap,
+suppression check and draft-only rule applies unchanged. "Prepare today's
+emails" is a dry run: nothing is saved or sent. With the default `outbox`
+transport, approved emails go to `data/outbox/` and the Claude Gmail routine
+puts them in Gmail Drafts; with `gmail_api` they go straight to Gmail
+Drafts. The app listens on 127.0.0.1 only and every request needs the random
+key in the address it opens, so no web page or other computer can drive it.
+`npm run engine -- app` starts it from a terminal (`--no-open` to print the
+address only, `--port N` to pick the port).
+
 ## Quick start
 
 Requires Node 20 or later (developed on Node 22).

@@ -5,6 +5,7 @@ node_modules/
 # the suppression list, outboxes, replies and handoffs. Only the fictional
 # sample is tracked.
 data/
+data-sample/
 output/
 .gmail-tokens.json
 

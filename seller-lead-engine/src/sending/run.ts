@@ -57,6 +57,8 @@ export interface SendReport {
   dryRun: boolean;
   /** Prospects marked completed (step 3 went out and its gap passed with no reply). */
   completed: string[];
+  /** A dry run's gated messages, exactly as they would go out, for a person to read first. */
+  previews: { prospectId: string; step: number; mailbox: string; to: string; subject: string; body: string }[];
 }
 
 /** sha256 of a body: touches.csv keeps the hash, the outbox or mailbox keeps the text. */
@@ -159,7 +161,7 @@ export async function runSend(stores: Stores, config: EngineConfig, opts: { toda
   const mode = config.sending.mode;
   if (!dryRun) reconcileProspects(stores, config, { today, now });
   const plan = planDay(stores, config, { today });
-  const report: SendReport = { date: today, mode, transport: transport.name, delivered: [], blocked: [], failed: [], plan, dryRun, completed: [] };
+  const report: SendReport = { date: today, mode, transport: transport.name, delivered: [], blocked: [], failed: [], plan, dryRun, completed: [], previews: [] };
   const stamp = isoStamp(now);
   const holidays = noSendDates(config, today);
 
@@ -279,6 +281,7 @@ export async function runSend(stores: Stores, config: EngineConfig, opts: { toda
     }
     if (dryRun) {
       report.delivered.push({ touchId, prospectId: p.prospect_id, step: item.step, mailbox: mailbox.email });
+      report.previews.push({ prospectId: p.prospect_id, step: item.step, mailbox: mailbox.email, to: msg.to, subject: msg.subject, body: msg.body });
       continue;
     }
 

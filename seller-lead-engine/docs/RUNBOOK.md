@@ -11,6 +11,10 @@ This runbook covers the launch week by week, the DNS records, the gates for
 moving from drafts to sending, and the Claude scheduled tasks that replace
 the plan's "Grok Bot".
 
+Every step below that names a command also has a button in the desktop app
+(double-click `AMB Seller Leads.bat`; see the README). Use whichever is
+easier: the app runs the same commands with the same checks.
+
 ## 1. Decide before week 0
 
 A person at AMB Advisory decides each of these. The engine cannot.

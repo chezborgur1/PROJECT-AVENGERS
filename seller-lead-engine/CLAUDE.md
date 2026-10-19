@@ -16,11 +16,12 @@ and hands warm sellers to the advisor. Owned by AMB Advisory Services
 - `npm test`: vitest, all offline and deterministic
 - `npm run typecheck`
 - `npm run demo`: the whole loop on `samples/tampa-bay/` in a temp folder, in-memory transport, canned replies
-- `npm run engine -- <command>`: `init`, `preflight`, `download florida [--import] [--dbpr-only | --sunbiz-only]`, `import sunbiz|dbpr|csv:<preset> <file> [--snapshot YYYY-MM-DD] [--metro-only]`, `build`, `enrich [--discover] [--no-verify]`, `verify <prospectId> <valid|invalid> --by <name>`, `score [--places]`, `plan [--date]`, `send [--date] [--dry-run]`, `record <touchId> <drafted|sent|failed> [--draft-id] [--message-id] [--thread-id] [--error]`, `sync [--since ISO]`, `qualify`, `check <prospectId>`, `handoff`, `report [--date]`, `stage <prospectId> <meeting|listed|lost|nurture> [--until YYYY-MM-DD]`, `suppress <email|domain> [--reason <suppression reason>]`, `clear-pause <mailbox> --by <name>`, `export <partner> <prospectId...> --out <file>`, `daily [--date]`, `status`, `dashboard [--date]`, `demo`
+- `npm run engine -- <command>`: `init`, `preflight`, `download florida [--import] [--dbpr-only | --sunbiz-only]`, `import sunbiz|dbpr|csv:<preset> <file> [--snapshot YYYY-MM-DD] [--metro-only]`, `build`, `enrich [--discover] [--no-verify]`, `verify <prospectId> <valid|invalid> --by <name>`, `score [--places]`, `plan [--date]`, `send [--date] [--dry-run]`, `record <touchId> <drafted|sent|failed> [--draft-id] [--message-id] [--thread-id] [--error]`, `sync [--since ISO]`, `qualify`, `check <prospectId>`, `handoff`, `report [--date]`, `stage <prospectId> <meeting|listed|lost|nurture> [--until YYYY-MM-DD]`, `suppress <email|domain> [--reason <suppression reason>]`, `clear-pause <mailbox> --by <name>`, `export <partner> <prospectId...> --out <file>`, `daily [--date]`, `status`, `dashboard [--date]`, `demo`, `app [--no-open] [--port N]`
 
 ## Layout
 - `src/cli.ts`: the CLI, the only place that reads the clock; it passes `today` / `now` into every module. Paths come from `engineEnv(process.cwd())`
 - `src/demo.ts`: the offline demo
+- `src/app/`: the desktop app (`AMB Seller Leads.bat`): `server.ts` (loopback-only HTTP server with a per-start key; the buttons run the CLI commands in process) and `ui.html` (the one page, plain JS, no outside files). The sample mode works in `data-sample/` (git-ignored)
 - `src/config.ts`: `EngineConfig` (config/engine.config.json, from config/engine.config.example.json), `engineEnv`
 - `src/domain/`: CSV row schemas and enums (`schema.ts`), message shapes (`messages.ts`)
 - `src/store/`: `CsvTable` and `openStores(dataDir)`: every table under `data/`
