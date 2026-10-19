@@ -138,8 +138,19 @@ npm run engine -- suppress owner@example.com --reason do_not_contact   # add to 
 npm run engine -- clear-pause frank@ambadvisory-mail.example --by "Frank"
 npm run engine -- export <partner> P-00012 P-00031 --out leads.csv   # refused unless lead sales are enabled with a legal review reference
 npm run engine -- status                     # counts by status, tier and stage, mailbox health, caps today
+npm run engine -- dashboard                  # write data/dashboard/*.json for the pipeline dashboard (no owner names or contact details)
 npm run typecheck                            # tsc --noEmit
 ```
+
+### The dashboard
+
+A Claude dashboard shows the pipeline at a glance: headline numbers, the
+funnel from state records to a signed listing, owners to act on, activity by
+day, mailbox health and every business with its score. It starts with the
+fictional demo data. To show real numbers, run `npm run engine -- dashboard`
+(it writes six JSON files to `data/dashboard/`, leaving out owner names,
+email addresses, phone numbers and age estimates) and ask Claude to refresh
+the dashboard from them. The weekly report task can do the same each Monday.
 
 ## How it works
 

@@ -16,6 +16,7 @@
 //   check <prospectId>                     write the exit-readiness check and draft it as a reply
 //   handoff                                write warm-seller summaries (data/handoffs/)
 //   report [--date YYYY-MM-DD]             weekly report (data/reports/)
+//   dashboard [--date YYYY-MM-DD]          dashboard data files (data/dashboard/)
 //   stage <prospectId> <meeting|listed|lost|nurture> [--until YYYY-MM-DD]
 //   suppress <email|domain> [--reason <reason>]
 //   clear-pause <mailbox> --by <name>
@@ -54,6 +55,7 @@ import { processInbox } from "./replies/process.ts";
 import { replySubject, shortBusinessName } from "./replies/respond.ts";
 import { exportLeads } from "./report/exportLeads.ts";
 import { weeklyReport } from "./report/weekly.ts";
+import { dashboardData, writeDashboardData } from "./report/dashboard.ts";
 import { PlacesClient } from "./score/places.ts";
 import { scoreAll } from "./score/score.ts";
 import { clearPause, mailboxHealth, touchDay } from "./sending/health.ts";
@@ -623,6 +625,16 @@ export const cmdReport: Command = async (args, deps) => {
   return 0;
 };
 
+/** Write the dashboard's data files (data/dashboard/*.json) from the tables. */
+export const cmdDashboard: Command = async (args, deps) => {
+  const config = configOf(deps);
+  const stores = storesOf(deps);
+  const files = writeDashboardData(stores, dashboardData(stores, config, { today: dateFlag(args, deps) }));
+  deps.log(`Wrote ${files.length} dashboard files to ${shown(deps, path.dirname(files[0]!))}: ${files.map((f) => path.basename(f)).join(", ")}.`);
+  deps.log("No owner names, emails, phones or age estimates are in them. Ask Claude to refresh the dashboard from these files.");
+  return 0;
+};
+
 /** Stages an advisor sets by hand, with the next action each implies. */
 export const ADVISOR_STAGES: Readonly<Record<string, string>> = {
   meeting: "Advisor meeting booked",
@@ -791,6 +803,7 @@ export const USAGE = `lead-engine: AMB Advisory seller lead engine (npm run engi
   check <prospectId>                     write the exit-readiness check (data/checks/) and draft it as a reply
   handoff                                write warm-seller summaries (data/handoffs/)
   report [--date YYYY-MM-DD]             weekly report (data/reports/)
+  dashboard [--date YYYY-MM-DD]          dashboard data files (data/dashboard/): no owner names or contact details
   stage <prospectId> <meeting|listed|lost|nurture> [--until YYYY-MM-DD]
   suppress <email|domain> [--reason opt_out|bounce|complaint|do_not_contact|client|legal|wrong_person]
   clear-pause <mailbox> --by <name>
@@ -823,6 +836,7 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
   check: cmdCheck,
   handoff: cmdHandoff,
   report: cmdReport,
+  dashboard: cmdDashboard,
   stage: cmdStage,
   suppress: cmdSuppress,
   "clear-pause": cmdClearPause,
