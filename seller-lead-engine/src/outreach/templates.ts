@@ -79,10 +79,11 @@ const ENTITY_SUFFIX = /[\s,]+(inc|incorporated|llc|l\.l\.c|lc|corp|corporation|c
 /** Words kept lower case inside a title-cased name. */
 const SMALL_WORDS = new Set(["of", "and", "the", "in", "at", "on", "for", "by", "a", "an", "to"]);
 /** Upper-case words kept as written: trade acronyms and common initialisms. */
-const KEEP_CAPS = new Set(["HVAC", "AC", "A/C", "USA", "US", "ABC", "AAA", "DDS", "DMD", "CPA", "MD", "TV", "LP", "II", "III", "IV"]);
+const KEEP_CAPS = new Set(["HVAC", "AC", "A/C", "USA", "US", "ABC", "AAA", "DDS", "DMD", "CPA", "IT", "HR", "PA", "PLLC", "MD", "TV", "LP", "II", "III", "IV"]);
 
 function titleWord(word: string, first: boolean): string {
   if (KEEP_CAPS.has(word)) return word;
+  if (word === "CPAS") return "CPAs";
   const lower = word.toLowerCase();
   if (!first && SMALL_WORDS.has(lower)) return lower;
   // Short tokens with no vowel are initials ("JRS", "TNT"); digits mark a model or unit ("A1").

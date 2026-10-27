@@ -106,7 +106,7 @@ describe("init", () => {
     expect(config.firm.postal_address).toBe("");
     expect(config.sending.mode).toBe("draft");
     expect(config.lead_sales.enabled).toBe(false);
-    expect(Object.keys(config.verticals)).toEqual(["association_management", "bookkeeping", "hvac", "plumbing", "electrical", "landscaping", "pest_control", "dental"]);
+    expect(Object.keys(config.verticals)).toEqual(["association_management", "bookkeeping", "accounting", "insurance_agency", "it_services", "staffing", "marketing_agency", "engineering", "architecture", "hvac", "plumbing", "electrical", "landscaping", "pest_control", "dental"]);
     const keys = new Set(loadMultiples(path.join(REPO, "reference/multiples.json")).map((r) => r.key));
     for (const v of Object.values(config.verticals)) expect(keys.has(v.multiples_key)).toBe(true);
     expect(config.metros.tampa_bay!.counties).toEqual(["Hillsborough", "Pinellas", "Pasco", "Polk", "Manatee", "Sarasota"]);

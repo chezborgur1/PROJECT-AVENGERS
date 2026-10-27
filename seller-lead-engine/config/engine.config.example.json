@@ -12,6 +12,7 @@
     "verticals": "Kinds of business the engine targets. noun is the plain words used in emails. keywords are matched as whole words against licence types, entity names and POI categories. license_codes are licence class codes or licence-number prefixes that decide the vertical whatever the name says. prior (0-10) is the vertical prior in the score. multiples_key is a key in reference/multiples.json for the readiness check's rough range. key_person_items (optional) is step 2's readiness item, what a buyer checks still works without the owner; without it, the trades wording about quoting the work and the license.",
     "verticals.association_management": "Community association (HOA and condo) management companies. Florida licenses every firm that manages associations of more than 10 units or a $100,000 budget (Fla. Stat. 468.432); the DBPR Regulatory Council of Community Association Managers publishes the licensee file free, and download florida fetches it when a vertical lists CAB. CAB is the firm licence (individual managers hold CAM licences and are not businesses, so CAM is deliberately not listed). multiples_key uses BizBuySell's property management benchmarks, the nearest published (association management is a subset). prior 7 is a starting judgment (owner-run firms, steady buyer interest from regional and national managers): adjust it with AMB's own experience.",
     "verticals.bookkeeping": "Bookkeeping firms. Florida does not license bookkeepers, so they are found by name in the Sunbiz corporate file (desktop app) and in contacts or open POI imports. The keywords are kept to bookkeeping words so the email never calls a CPA or tax practice a bookkeeping firm; add words such as \"accounting services\" to widen it, and change noun to match. multiples_key uses BizBuySell's accounting and tax practice benchmarks, the nearest published. prior 6 is a starting judgment: adjust it.",
+    "verticals.professional_services": "accounting, insurance_agency, it_services, staffing, marketing_agency, engineering and architecture are found by name in the Sunbiz corporate file (desktop app) and in contacts or open POI imports: none has a licence file the engine downloads yet. They come before the trades so that, for example, a name with both \"mechanical\" and \"engineering\" counts as an engineering firm. A matching name can still be another kind of business (\"Precision Engineering and Machine\"); a person reviews the list before emails go out. Florida requires CPA firms to be majority-owned by CPAs, which limits buyers of CPA practices. Law firms are left out on purpose: The Florida Bar's rules on selling a law practice and sharing fees with non-lawyers need counsel first. multiples_key points each to BizBuySell's sold-deal benchmarks; marketing_agency's row is not verified (only asking prices were found), so its check gives no range until it is. prior values are starting judgments: adjust them.",
     "verticals.hvac.license_codes": "Florida DBPR Construction Industry Licensing Board classes: CAC certified air conditioning contractor, CMC certified mechanical contractor, RA registered air conditioning contractor.",
     "verticals.plumbing.license_codes": "Florida DBPR CILB classes: CFC certified plumbing contractor, RF registered plumbing contractor.",
     "verticals.electrical.license_codes": "Florida DBPR Electrical Contractors' Licensing Board: EC certified electrical contractor, ER registered electrical contractor.",
@@ -81,6 +82,62 @@
       "multiples_key": "accounting",
       "key_person_items": "who does and reviews the monthly client work, who holds the client relationships, and who the clients call with questions"
     },
+    "accounting": {
+      "noun": "accounting practice",
+      "keywords": ["accounting", "accountant", "accountants", "cpa", "cpas", "tax service", "tax services", "tax preparation"],
+      "license_codes": [],
+      "prior": 6,
+      "multiples_key": "accounting",
+      "key_person_items": "who reviews and signs off on the client work, who holds the client relationships, and who the clients expect to see each tax season"
+    },
+    "insurance_agency": {
+      "noun": "insurance agency",
+      "keywords": ["insurance agency", "insurance agencies", "insurance services", "insurance group", "insurance agents", "insurance brokers"],
+      "license_codes": [],
+      "prior": 7,
+      "multiples_key": "insurance_agency",
+      "key_person_items": "who services the accounts, who holds the client relationships, and whose license and carrier appointments the book is written under"
+    },
+    "it_services": {
+      "noun": "IT services company",
+      "keywords": ["it services", "it solutions", "it support", "it consulting", "managed services", "managed it", "network services", "computer services", "technology services", "tech services"],
+      "license_codes": [],
+      "prior": 7,
+      "multiples_key": "it_services",
+      "key_person_items": "who handles the client systems day to day, who holds the client relationships, and who the clients call when something breaks"
+    },
+    "staffing": {
+      "noun": "staffing agency",
+      "keywords": ["staffing", "staffing agency", "staffing services", "employment agency", "recruiting", "recruiters", "temporary services"],
+      "license_codes": [],
+      "prior": 6,
+      "multiples_key": "staffing",
+      "key_person_items": "who wins and keeps the client accounts, who recruits and places the workers, and who the clients call when a shift goes unfilled"
+    },
+    "marketing_agency": {
+      "noun": "marketing agency",
+      "keywords": ["marketing agency", "advertising agency", "digital marketing", "marketing group", "marketing solutions", "advertising group", "creative agency"],
+      "license_codes": [],
+      "prior": 5,
+      "multiples_key": "marketing_agency",
+      "key_person_items": "who wins and keeps the client accounts, who leads the client work, and who the clients deal with week to week"
+    },
+    "engineering": {
+      "noun": "engineering firm",
+      "keywords": ["engineering", "engineers"],
+      "license_codes": [],
+      "prior": 6,
+      "multiples_key": "architecture_engineering",
+      "key_person_items": "who signs and seals the drawings, who holds the client relationships, and who wins the next project"
+    },
+    "architecture": {
+      "noun": "architecture firm",
+      "keywords": ["architects", "architect", "architecture"],
+      "license_codes": [],
+      "prior": 6,
+      "multiples_key": "architecture_engineering",
+      "key_person_items": "who signs and seals the drawings, who holds the client relationships, and who wins the next project"
+    },
     "hvac": {
       "noun": "HVAC company",
       "keywords": ["air conditioning", "hvac", "heating", "cooling", "refrigeration", "mechanical"],
@@ -141,6 +198,20 @@
     "exclude_name_patterns": [
       "associa",
       "firstservice residential",
+      "h&r block",
+      "jackson hewitt",
+      "liberty tax",
+      "state farm",
+      "brown & brown",
+      "hub international",
+      "acrisure",
+      "goosehead",
+      "robert half",
+      "adecco",
+      "manpower",
+      "kelly services",
+      "express employment",
+      "peopleready",
       "one hour heating",
       "service experts",
       "aire serv",

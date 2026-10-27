@@ -44,7 +44,8 @@ describe("reference/multiples.json", () => {
   it("gives every verified row a source URL, a period and a note on how it was checked", () => {
     for (const r of rows.filter((x) => x.verified)) {
       expect(r.source_url).toMatch(/^https:\/\/www\.bizbuysell\.com\/learning-center\/valuation-benchmarks\//);
-      expect(r.verified_by).toMatch(/2026-10-18/);
+      // Each check starts with the date it was made.
+      expect(r.verified_by).toMatch(/^\d{4}-\d{2}-\d{2}: /);
       expect(r.as_of).not.toBe("");
       expect(r.low).toBeLessThan(r.high);
     }

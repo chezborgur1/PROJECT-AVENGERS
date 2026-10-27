@@ -58,9 +58,12 @@ usually cannot reach them).
    Tampa Bay businesses, offline, so every button can be tried safely. Press
    **Use my real data** when ready.
 
-The example settings target association management companies and
-bookkeeping firms first, then the trades (HVAC, plumbing, electrical,
-landscaping, pest control, dental). Edit the list on the Settings tab.
+The example settings target professional services first: association
+management companies, bookkeeping firms, accounting practices, insurance
+agencies, IT services companies, staffing agencies, marketing agencies, and
+engineering and architecture firms. Then the trades (HVAC, plumbing,
+electrical, landscaping, pest control, dental). Edit the list on the
+Settings tab.
 
 | Tab | What it shows |
 |---|---|

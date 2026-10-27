@@ -220,3 +220,11 @@ describe("readiness item by vertical", () => {
     expect(lintTemplates(TEMPLATES_DIR, risky, { today: "2026-10-27" })).toContainEqual(expect.stringMatching(/step 2 body \(full record bookkeeping\).*retirement/));
   });
 });
+
+describe("names of professional firms", () => {
+  it("keeps IT, CPA and HR in capitals and writes CPAs as owners do", () => {
+    expect(displayCase("TAMPA IT SOLUTIONS LLC")).toBe("Tampa IT Solutions LLC");
+    expect(displayCase("JONES CPAS PLLC")).toBe("Jones CPAs PLLC");
+    expect(displayCase("BAY HR PARTNERS INC")).toBe("Bay HR Partners Inc");
+  });
+});

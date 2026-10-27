@@ -5,6 +5,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { loadConfig } from "../src/config.ts";
+import { EXAMPLE_CONFIG } from "../src/cli.ts";
 import type { LicenseRow, ProspectRow } from "../src/domain/schema.ts";
 import { importCsv } from "../src/sources/csvImport.ts";
 import { importDbpr } from "../src/sources/dbpr.ts";
@@ -262,5 +264,30 @@ describe("buildProspects owner rules on hand-made records", () => {
 
   it("does nothing on empty imports", () => {
     expect(buildProspects(tempStores(), testConfig(), { now: NOW })).toEqual({ created: 0, updated: 0, unchanged: 0, skipped: [] });
+  });
+});
+
+describe("professional services in the example settings", () => {
+  const config = loadConfig(EXAMPLE_CONFIG);
+  const kind = (name: string) => assignVertical([name], [], config);
+
+  it("sorts professional service firms by name, ahead of the trades", () => {
+    expect(kind("SMITH CPA PA")).toBe("accounting");
+    expect(kind("BAYSIDE BOOKKEEPING & TAX LLC")).toBe("bookkeeping");
+    expect(kind("TAMPA IT SOLUTIONS LLC")).toBe("it_services");
+    expect(kind("GULF INSURANCE AGENCY INC")).toBe("insurance_agency");
+    expect(kind("SUNCOAST STAFFING SERVICES LLC")).toBe("staffing");
+    expect(kind("BLUE WAVE DIGITAL MARKETING LLC")).toBe("marketing_agency");
+    expect(kind("SMITH ARCHITECTS PA")).toBe("architecture");
+    // Engineering is tried before HVAC's "mechanical"; a plain mechanical contractor is still HVAC.
+    expect(kind("COASTAL MECHANICAL ENGINEERING INC")).toBe("engineering");
+    expect(kind("GULF COAST MECHANICAL INC")).toBe("hvac");
+  });
+
+  it("does not take a near-miss name or an association itself for a firm", () => {
+    expect(kind("ARCHITECTURAL GLASS INC")).toBe("");
+    expect(kind("HOMEOWNERS ASSOCIATION OF PALM LAKES INC")).toBe("");
+    expect(assignVertical(["Community Association Manager"], ["CAM0005678"], config)).toBe("");
+    expect(assignVertical(["Community Association Management Firm"], ["CAB0001234"], config)).toBe("association_management");
   });
 });
