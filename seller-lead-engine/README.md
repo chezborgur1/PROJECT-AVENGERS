@@ -58,6 +58,10 @@ usually cannot reach them).
    Tampa Bay businesses, offline, so every button can be tried safely. Press
    **Use my real data** when ready.
 
+The example settings target association management companies and
+bookkeeping firms first, then the trades (HVAC, plumbing, electrical,
+landscaping, pest control, dental). Edit the list on the Settings tab.
+
 | Tab | What it shows |
 |---|---|
 | Today | Headline counts, the steps in order (Find new businesses, Find emails, Score businesses, Prepare today's emails, Approve and create Gmail drafts, Check replies, Weekly report), the log of the step running, today's emails to read and skip before approving, the pipeline and the last 14 days |

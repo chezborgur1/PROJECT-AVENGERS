@@ -18,6 +18,8 @@ gives the original license date, and the two join on business name and ZIP.
 | State | Vertical | Files | Import command | Notes |
 |---|---|---|---|---|
 | Florida | HVAC, plumbing, other construction trades | Sunbiz quarterly cordata (entities, up to 6 officers) + DBPR Construction Industry Licensing Board licensee CSVs | `import sunbiz <file> --snapshot <date> --metro-only` and `import dbpr <file> --snapshot <date>` | The best pilot. A CILB license is issued to the qualifier, who may be a hired employee, so the owner comes from Sunbiz officers unless the licensee is a self-proprietor |
+| Florida | Association (HOA and condo) management companies | DBPR Regulatory Council of Community Association Managers licensee file (www2.myfloridalicense.com/community-association-managers-and-firms/public-records/) | `download florida --import` (fetched when a vertical lists `CAB`), or `import dbpr <file>` | Every firm managing associations of more than 10 units or a $100,000 budget must hold a CAM firm licence (Fla. Stat. 468.432; licence numbers start CAB). Individual managers (CAM) are people, not businesses, and are left out. The file's column layout could not be checked while this was built: if `import dbpr` stops on unknown headers, it names them |
+| Florida | Bookkeeping firms | Sunbiz entities filtered by name keyword ("bookkeeping", "bookkeeper"), plus contacts or open POI rows | `download florida --import` on the desktop app, or `import sunbiz ...` | Florida does not license bookkeepers, so the name is the only signal and tenure comes from the formation date. The hosted app cannot hold the Sunbiz file, so these come from the desktop app for now |
 | Florida | Landscaping, cleaning, property management | Sunbiz entities filtered by name keyword, plus open POI rows | `import sunbiz ...`, `import csv:overture` or `csv:foursquare` | Mostly no trade license; tenure comes from the formation date. Property managers may appear in DBPR real-estate files |
 | Florida | Dental | Department of Health (MQA) data download | `import csv:licenses` after mapping to canonical headers | Dentists are licensed by DOH, not DBPR; whether the MQA download includes dentistry is unverified |
 | Texas | HVAC | TDLR "Airconditioning Contractors" CSV (daily) | `import csv:tdlr <file>` | The license belongs to an individual who may be an employee; the file may have no original issue date. No free Texas file names officers |
@@ -29,6 +31,12 @@ gives the original license date, and the two join on business name and ZIP.
 
 Never import voter files, data-broker age or birth-date appends, LinkedIn
 data, or anything from a Google Maps scraper (Apify, Outscraper and similar).
+Never scrape listing sites such as BizBuySell: their terms forbid it, and
+BizBuySell's owner, CoStar Group, has sued other sites over copied listings.
+For market figures, BizBuySell publishes free quarterly Insight Report data
+tables (listing counts, median asking price, revenue and cash flow by
+metro), and its valuation benchmark pages are where reference/multiples.json
+comes from.
 Before ingesting any source, check its terms page for "no solicitation" or
 commercial-use limits.
 
@@ -37,8 +45,10 @@ commercial-use limits.
 **The quick way: one command.** `npm run engine -- download florida --import`
 (on Windows, double-click `download-florida.bat`) does both downloads below,
 then imports the businesses in your metros and builds the prospect list. It
-reads the DBPR public-records page and downloads every licensee file linked
-there (applicant files left out), and logs in to the Sunbiz SFTP server with
+reads the DBPR public-records page of each board a configured vertical needs
+(construction for the trades, community association managers for `CAB`) and
+downloads every licensee file linked there (applicant and continuing-education
+files left out), and logs in to the Sunbiz SFTP server with
 the public login you copy into `.env` (`SUNBIZ_SFTP_USER`,
 `SUNBIZ_SFTP_PASSWORD`) to find the quarterly `cordata` files by name. Files
 land in `data/downloads/<date>/`. Neither site's file names could be checked

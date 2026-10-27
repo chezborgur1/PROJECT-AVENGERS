@@ -70,7 +70,7 @@ import { GmailApiTransport, OutboxTransport, type Transport } from "./sending/tr
 import { importCsv } from "./sources/csvImport.ts";
 import { importDbpr } from "./sources/dbpr.ts";
 import { assignMetro, buildProspects } from "./sources/merge.ts";
-import { downloadDbpr, downloadSunbiz, SUNBIZ_DOWNLOADS_PAGE, type Downloaded, type SftpLike } from "./sources/download.ts";
+import { boardsFor, DBPR_BOARDS, downloadDbpr, downloadSunbiz, SUNBIZ_DOWNLOADS_PAGE, type Downloaded, type SftpLike } from "./sources/download.ts";
 import { entityInMetro, importSunbiz } from "./sources/sunbiz.ts";
 import { openStores, type Stores } from "./store/index.ts";
 import { nextId } from "./store/csvTable.ts";
@@ -287,14 +287,28 @@ export const cmdDownload: Command = async (args, deps) => {
   let failures = 0;
 
   if (!sunbizOnly) {
-    deps.log("Downloading DBPR construction licensee files...");
+    // Only the boards whose licences a configured vertical uses (construction for the trades, community association management for CAB).
+    // Without settings yet, the construction board, as before the boards were chosen by vertical.
+    let codes: string[] | undefined;
     try {
-      const got = await downloadDbpr({ dir: path.join(dir, "dbpr"), ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}), log: deps.log });
-      files.push(...got);
-      deps.log(`DBPR: ${got.length} file(s) in ${shown(deps, path.join(dir, "dbpr"))}.`);
-    } catch (err) {
-      failures++;
-      deps.log(`DBPR download failed: ${(err as Error).message}`);
+      codes = Object.values(configOf(deps).verticals).flatMap((v) => v.license_codes);
+    } catch {
+      codes = undefined;
+    }
+    const boards = codes ? boardsFor(codes) : DBPR_BOARDS.filter((b) => b.key === "construction");
+    if (!boards.length) deps.log("DBPR skipped: no vertical in the settings uses a DBPR licence code.");
+    for (const board of boards) {
+      deps.log(`Downloading DBPR ${board.name} licensee files...`);
+      // Each board in its own folder, so two boards' files of the same name never overwrite each other.
+      const into = path.join(dir, "dbpr", board.key);
+      try {
+        const got = await downloadDbpr({ dir: into, pageUrl: board.page, ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}), log: deps.log });
+        files.push(...got);
+        deps.log(`DBPR ${board.name}: ${got.length} file(s) in ${shown(deps, into)}.`);
+      } catch (err) {
+        failures++;
+        deps.log(`DBPR ${board.name} download failed: ${(err as Error).message}`);
+      }
     }
   }
   if (!dbprOnly) {

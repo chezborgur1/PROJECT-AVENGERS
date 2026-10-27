@@ -19,6 +19,34 @@ import yauzl from "yauzl";
 
 /** The DBPR Construction Industry Licensing Board public-records page. */
 export const DBPR_PUBLIC_RECORDS = "https://www2.myfloridalicense.com/construction-industry/public-records/";
+/** The DBPR Regulatory Council of Community Association Managers public-records page (managers and firms). */
+export const DBPR_CAM_PUBLIC_RECORDS = "https://www2.myfloridalicense.com/community-association-managers-and-firms/public-records/";
+
+/** A DBPR board whose licensee files download florida fetches. */
+export interface DbprBoard {
+  key: string;
+  name: string;
+  page: string;
+  /** The licence codes this board issues; the board is fetched only when a configured vertical lists one. */
+  codes: readonly string[];
+}
+
+/** The DBPR boards the engine knows. Codes are licence classes or licence-number prefixes (src/sources/dbpr.ts). */
+export const DBPR_BOARDS: readonly DbprBoard[] = [
+  {
+    key: "construction",
+    name: "construction contractor",
+    page: DBPR_PUBLIC_RECORDS,
+    codes: ["CAC", "RA", "CMC", "RM", "CFC", "RF", "CGC", "RG", "CBC", "RB", "CRC", "RR", "CCC", "RC", "CPC", "RP", "CUC", "CSC"],
+  },
+  { key: "cam", name: "community association management", page: DBPR_CAM_PUBLIC_RECORDS, codes: ["CAB"] },
+];
+
+/** The boards whose files the configured verticals need, in DBPR_BOARDS order. */
+export function boardsFor(licenseCodes: Iterable<string>): DbprBoard[] {
+  const wanted = new Set([...licenseCodes].map((c) => c.trim().toUpperCase()));
+  return DBPR_BOARDS.filter((b) => b.codes.some((c) => wanted.has(c)));
+}
 /** The Division of Corporations' public SFTP server; the login is published on the Sunbiz data-downloads page. */
 export const SUNBIZ_SFTP_HOST = "sftp.floridados.gov";
 export const SUNBIZ_DOWNLOADS_PAGE = "https://dos.fl.gov/sunbiz/other-services/data-downloads/";
@@ -42,8 +70,9 @@ const DATA_EXT = /\.(csv|txt|zip)(\?.*)?$/i;
 
 /**
  * The data files a public-records page links to: hrefs ending in .csv, .txt
- * or .zip on the same site, applicant files left out (an applicant is not a
- * licensed business), each once.
+ * or .zip on the same site, each once. Applicant files (an applicant is not a
+ * licensed business) and continuing-education files (course records, not
+ * licensees) are left out.
  */
 export function findDataLinks(html: string, pageUrl: string): DataLink[] {
   const page = new URL(pageUrl);
@@ -62,7 +91,7 @@ export function findDataLinks(html: string, pageUrl: string): DataLink[] {
     if (url.protocol !== "https:" && url.protocol !== "http:") continue;
     if (!url.hostname.endsWith(site)) continue;
     const text = (m[4] ?? "").replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
-    if (/applicant/i.test(`${href} ${text}`)) continue;
+    if (/applicant|continuing|education|\bCE\b/i.test(`${href} ${text}`)) continue;
     if (seen.has(url.href)) continue;
     seen.add(url.href);
     out.push({ url: url.href, text });
@@ -129,7 +158,7 @@ export function extractZip(zipFile: string, dir: string): Promise<string[]> {
   });
 }
 
-/** Download every DBPR construction licensee file linked from the public-records page into `dir`, unzipping as needed. */
+/** Download every licensee file linked from a DBPR public-records page (construction by default) into `dir`, unzipping as needed. */
 export async function downloadDbpr(opts: { dir: string; fetchImpl?: typeof fetch; pageUrl?: string; log?: (line: string) => void }): Promise<Downloaded[]> {
   const fetchImpl = opts.fetchImpl ?? fetch;
   const pageUrl = opts.pageUrl ?? DBPR_PUBLIC_RECORDS;

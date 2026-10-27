@@ -86,6 +86,9 @@ export const DBPR_CLASS_NAMES: Record<string, string> = {
   CSC: "Certified Sheet Metal Contractor",
   EC: "Certified Electrical Contractor",
   ER: "Registered Electrical Contractor",
+  // Regulatory Council of Community Association Managers: the firm licence and the individual manager's.
+  CAB: "Community Association Management Firm",
+  CAM: "Community Association Manager",
 };
 
 /**

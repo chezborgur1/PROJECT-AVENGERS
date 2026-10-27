@@ -3,7 +3,8 @@ import path from "node:path";
 import zlib from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { cmdDownload } from "../src/cli.ts";
-import { downloadDbpr, downloadSunbiz, findDataLinks, isCordata, safeName, type SftpLike } from "../src/sources/download.ts";
+import { boardsFor, DBPR_CAM_PUBLIC_RECORDS, downloadDbpr, downloadSunbiz, findDataLinks, isCordata, safeName, type SftpLike } from "../src/sources/download.ts";
+import { openStores } from "../src/store/index.ts";
 import { REPO, testConfig, tmpDir } from "./helpers.ts";
 
 // The Florida downloader against a fake DBPR page, a fake Sunbiz SFTP
@@ -165,11 +166,13 @@ describe("download florida", () => {
       fetchImpl: fakeFetch().impl,
       sftp: () => fakeSftp(),
     });
-    expect(lines.join("\n")).toMatch(/DBPR: 2 file\(s\)/);
+    expect(lines.join("\n")).toMatch(/DBPR construction contractor: 2 file\(s\)/);
     expect(lines.join("\n")).toMatch(/Sunbiz: 1 file\(s\)/);
     expect(lines.join("\n")).toMatch(/Prospects: \d+ new/);
     expect(code).toBe(0);
-    expect(fs.existsSync(path.join(dataDir, "downloads", "2026-10-19", "dbpr", "CILB_certified.csv"))).toBe(true);
+    expect(fs.existsSync(path.join(dataDir, "downloads", "2026-10-19", "dbpr", "construction", "CILB_certified.csv"))).toBe(true);
+    // No vertical in this config uses a CAM firm licence, so that board is not fetched.
+    expect(lines.join("\n")).not.toMatch(/community association/);
     const prospects = fs.readFileSync(path.join(dataDir, "prospects.csv"), "utf8").trim().split("\n");
     expect(prospects.length).toBeGreaterThan(5);
   });
@@ -182,5 +185,62 @@ describe("download florida", () => {
     const sunbiz: string[] = [];
     await cmdDownload(["florida", "--sunbiz-only"], { cwd: root, env: { LEAD_ENGINE_DATA_DIR: path.join(root, "data") }, today: "2026-10-19", now: new Date(), log: (l) => sunbiz.push(l) });
     expect(sunbiz.join("\n")).toMatch(/SUNBIZ_SFTP_USER and SUNBIZ_SFTP_PASSWORD/);
+  });
+});
+
+describe("the community association management board", () => {
+  it("is fetched only for a vertical that lists the CAM firm licence, and skips course files", () => {
+    expect(boardsFor(["CAC", "CFC"]).map((b) => b.key)).toEqual(["construction"]);
+    expect(boardsFor(["cab"]).map((b) => b.key)).toEqual(["cam"]);
+    expect(boardsFor([]).map((b) => b.key)).toEqual([]);
+    const html = `<a href="/sto/file_download/extracts/CAM_licensees.csv">Licensees</a>
+      <a href="/sto/file_download/extracts/cam_ce.csv">Continuing Education</a>
+      <a href="/sto/file_download/extracts/cam_applicants.csv">Applicants</a>`;
+    expect(findDataLinks(html, DBPR_CAM_PUBLIC_RECORDS).map((l) => l.text)).toEqual(["Licensees"]);
+  });
+
+  it("downloads and imports CAM firms as association management companies, leaving individual managers out", async () => {
+    const root = tmpDir();
+    const dataDir = path.join(root, "data");
+    const configFile = path.join(root, "engine.config.json");
+    const config = testConfig({
+      verticals: {
+        association_management: { noun: "association management company", keywords: ["association management", "community management"], license_codes: ["CAB"], prior: 7, multiples_key: "property_management" },
+      },
+    });
+    fs.writeFileSync(configFile, JSON.stringify(config));
+    const header = "Board Number,Occupation Code,Licensee Name,DBA Name,Rank,Address Line 1,City,State,Zip,County Name,License Number,Primary Status,Secondary Status,Original Licensure Date,License Expiration Date";
+    const csv = [
+      header,
+      '"06","5501","GULF COAST COMMUNITY MANAGEMENT INC","","CAB","100 Example Ave","Tampa","FL","33602","Hillsborough","CAB0001234","Current","Active","05/01/2004","09/30/2027"',
+      '"06","5502","SAMPLE, JANE Q","","CAM","200 Example St","Tampa","FL","33603","Hillsborough","CAM0005678","Current","Active","03/15/1999","09/30/2027"',
+      '"06","5501","ORLANDO HOA PARTNERS LLC","","CAB","300 Example Rd","Orlando","FL","32801","Orange","CAB0009999","Current","Active","01/10/2001","09/30/2027"',
+    ].join("\n");
+    const urls: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = String(input);
+      urls.push(url);
+      if (url === DBPR_CAM_PUBLIC_RECORDS) return new Response('<a href="/sto/file_download/extracts/CAM_licensees.csv">Licensees</a>', { status: 200 });
+      if (url.endsWith("CAM_licensees.csv")) return new Response(csv, { status: 200 });
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+    const lines: string[] = [];
+    const code = await cmdDownload(["florida", "--import", "--dbpr-only"], {
+      cwd: root,
+      env: { LEAD_ENGINE_DATA_DIR: dataDir, LEAD_ENGINE_CONFIG: configFile },
+      today: "2026-10-27",
+      now: new Date("2026-10-27T12:00:00Z"),
+      log: (l) => lines.push(l),
+      fetchImpl,
+    });
+    expect(code, lines.join("\n")).toBe(0);
+    // Only the board a vertical needs: no construction page was asked for.
+    expect(urls.some((u) => u.includes("construction-industry"))).toBe(false);
+    const prospects = openStores(dataDir).prospects.rows();
+    const tampa = prospects.find((p) => /gulf coast/i.test(p.business_name));
+    expect(tampa).toMatchObject({ vertical: "association_management", license_issue_date: "2004-05-01" });
+    // The individual manager is a person, not a business, and Orlando is outside the metro.
+    expect(prospects.some((p) => /sample|jane/i.test(p.business_name) && p.vertical === "association_management")).toBe(false);
+    expect(prospects.some((p) => /orlando/i.test(p.business_name))).toBe(false);
   });
 });

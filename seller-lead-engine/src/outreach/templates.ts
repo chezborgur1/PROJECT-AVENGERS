@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { EngineConfig, Mailbox } from "../config.ts";
+import { DEFAULT_KEY_PERSON_ITEMS, type EngineConfig, type Mailbox } from "../config.ts";
 import { ProspectRowSchema, type ProspectRow } from "../domain/schema.ts";
 import { lintBody, lintSubject } from "../compliance/lint.ts";
 import { yearsSince } from "../util/dates.ts";
@@ -40,6 +40,7 @@ export const TEMPLATE_TOKENS: readonly string[] = [
   "since_year",
   "years",
   "license_phrase",
+  "key_person_items",
   "sender_first_name",
   "sender_name",
   "firm_name",
@@ -156,6 +157,7 @@ export function tokenValues(p: ProspectRow, config: EngineConfig, mailbox: Mailb
     since_year: since.year ? String(since.year) : undefined,
     years: years !== undefined && years >= 0 ? String(years) : undefined,
     license_phrase: since.phrase,
+    key_person_items: config.verticals[p.vertical]?.key_person_items,
     sender_first_name: mailbox.sender_name.trim().split(/\s+/)[0] || undefined,
     sender_name: mailbox.sender_name.trim() || undefined,
     firm_name: config.firm.name.trim() || undefined,
@@ -169,6 +171,7 @@ export function tokenValues(p: ProspectRow, config: EngineConfig, mailbox: Mailb
     vertical_noun: "business",
     // Without a licence or filing date, the city is the one record fact left.
     license_phrase: fallbackCity ? `is based in ${fallbackCity}` : undefined,
+    key_person_items: DEFAULT_KEY_PERSON_ITEMS,
   };
   return { values, fallbacks };
 }
@@ -266,10 +269,15 @@ export function lintTemplates(dir: string, config: EngineConfig, opts: { today?:
     return [(err as Error).message];
   }
   const mailbox: Mailbox = config.mailboxes[0] ?? { email: "sample@example.com", sender_name: "Sample Sender", sender_title: "", warmup_started: "2026-01-01", paused: false };
-  const full = sampleProspect(config);
-  const bare = sampleProspect(config, { owner_first_name: "", license_issue_date: "", formation_date: "", dba_name: "" });
+  // Every vertical renders its own wording (key_person_items), so each one is linted.
+  const samples: [string, ProspectRow][] = [];
+  for (const vertical of Object.keys(config.verticals).length ? Object.keys(config.verticals) : [""]) {
+    const named = vertical ? ` ${vertical}` : "";
+    samples.push([`full record${named}`, sampleProspect(config, { vertical })]);
+    samples.push([`sparse record${named}`, sampleProspect(config, { vertical, owner_first_name: "", license_issue_date: "", formation_date: "", dba_name: "" })]);
+  }
   for (const step of STEPS) {
-    for (const [label, p] of [["full record", full], ["sparse record", bare]] as const) {
+    for (const [label, p] of samples) {
       let r: Rendered;
       try {
         r = renderStep(step, p, config, mailbox, { templatesDir: dir, today: opts.today ?? SAMPLE_TODAY });

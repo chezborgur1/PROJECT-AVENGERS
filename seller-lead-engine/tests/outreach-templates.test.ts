@@ -2,8 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { lintBody, lintSubject, SENSITIVE_PATTERNS, wordCount } from "../src/compliance/lint.ts";
-import { displayCase, lintTemplates, loadTemplates, parseTemplate, renderStep, shortBusinessName, TEMPLATE_TOKENS } from "../src/outreach/templates.ts";
+import { displayCase, lintTemplates, loadTemplates, parseTemplate, renderStep, sampleProspect, shortBusinessName, TEMPLATE_TOKENS } from "../src/outreach/templates.ts";
 import { makeProspect, REPO, testConfig, tmpDir } from "./helpers.ts";
+
+const TEMPLATES_DIR = path.join(REPO, "templates/sequence");
 
 const TEMPLATES = path.join(REPO, "templates/sequence");
 const TODAY = "2026-10-20";
@@ -188,10 +190,33 @@ describe("template lint", () => {
 
   it("reports a token that cannot render instead of throwing", () => {
     const dir = templateDir({ 2: "subject: Re: Exit-readiness check for {short_business_name}\n\nHi {first_name}, since {since_year}." });
-    expect(lintTemplates(dir, config)).toContainEqual(expect.stringMatching(/step 2 \(sparse record\).*no value for \{since_year\}/));
+    expect(lintTemplates(dir, config)).toContainEqual(expect.stringMatching(/step 2 \(sparse record[^)]*\).*no value for \{since_year\}/));
   });
 
   it("reports a missing template folder", () => {
     expect(lintTemplates(path.join(tmpDir(), "nope"), config)[0]).toMatch(/Template not found/);
+  });
+});
+
+describe("readiness item by vertical", () => {
+  it("uses each vertical's own step 2 item, and the trades wording when a vertical has none", () => {
+    const withItems = testConfig({
+      verticals: {
+        bookkeeping: { noun: "bookkeeping firm", keywords: ["bookkeeping"], license_codes: [], prior: 6, multiples_key: "accounting", key_person_items: "who does and reviews the monthly client work, who holds the client relationships, and who the clients call with questions" },
+        hvac: { noun: "HVAC company", keywords: ["hvac"], license_codes: ["CAC"], prior: 7, multiples_key: "hvac" },
+      },
+    });
+    const mailbox = withItems.mailboxes[0]!;
+    const books = renderStep(2, sampleProspect(withItems, { vertical: "bookkeeping", business_name: "BAYSIDE BOOKKEEPING LLC" }), withItems, mailbox, { templatesDir: TEMPLATES_DIR, today: "2026-10-27" });
+    expect(books.body).toContain("who the clients call with questions");
+    expect(books.body).not.toContain("license");
+    const trade = renderStep(2, sampleProspect(withItems, { vertical: "hvac" }), withItems, mailbox, { templatesDir: TEMPLATES_DIR, today: "2026-10-27" });
+    expect(trade.body).toContain("who quotes the work, who holds the customer relationships, and whose name is on the license");
+    expect(lintTemplates(TEMPLATES_DIR, withItems, { today: "2026-10-27" })).toEqual([]);
+  });
+
+  it("lints each vertical's wording like the rest of the copy", () => {
+    const risky = testConfig({ verticals: { bookkeeping: { noun: "bookkeeping firm", keywords: ["bookkeeping"], prior: 6, multiples_key: "accounting", key_person_items: "who takes over when you retire" } } });
+    expect(lintTemplates(TEMPLATES_DIR, risky, { today: "2026-10-27" })).toContainEqual(expect.stringMatching(/step 2 body \(full record bookkeeping\).*retirement/));
   });
 });

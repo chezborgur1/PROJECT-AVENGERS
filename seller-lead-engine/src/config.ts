@@ -28,6 +28,9 @@ export const MailboxSchema = z.object({
 });
 export type Mailbox = z.infer<typeof MailboxSchema>;
 
+/** Step 2's readiness item for a trade with a licence: the wording the templates were written with. */
+export const DEFAULT_KEY_PERSON_ITEMS = "who quotes the work, who holds the customer relationships, and whose name is on the license";
+
 export const VerticalSchema = z.object({
   /** Plain-English noun for emails: "HVAC company", "dental practice". */
   noun: z.string().min(1),
@@ -39,6 +42,8 @@ export const VerticalSchema = z.object({
   prior: z.number().min(0).max(10).default(5),
   /** Key into reference/multiples.json for the readiness check's rough range. */
   multiples_key: z.string(),
+  /** Step 2's readiness item for this kind of business: what a buyer checks still works without the owner. */
+  key_person_items: z.string().min(1).default(DEFAULT_KEY_PERSON_ITEMS),
 });
 export type Vertical = z.infer<typeof VerticalSchema>;
 

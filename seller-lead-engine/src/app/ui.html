@@ -277,7 +277,7 @@ async function refresh() {
 }
 
 const STEPS = [
-  { action: "find", title: "Find new businesses", text: "Downloads Florida's free contractor licence and business records and keeps the ones in your areas. Takes a few minutes." },
+  { action: "find", title: "Find new businesses", text: "Downloads Florida's free licence records (contractors and association management firms) and business records, and keeps the ones in your areas. Takes a few minutes." },
   { action: "emails", title: "Find emails", text: "Looks for a contact email on each business's own website and checks it can receive mail." },
   { action: "score", title: "Score businesses", text: "Ranks who is most likely to sell, so the best fits are emailed first." },
   { action: "preview", title: "Prepare today's emails", text: "Shows today's emails below for you to read. Nothing is saved or sent." },
@@ -288,7 +288,7 @@ const STEPS = [
 /** Step wording that depends on where the app runs. */
 function stepText(st, s) {
   if (!s.hosted) return st.text;
-  if (st.action === "find") return "Downloads Florida's free contractor licence records (DBPR) and keeps the businesses in your areas. Takes a few minutes.";
+  if (st.action === "find") return "Downloads Florida's free licence records (contractors and association management firms) and keeps the businesses in your areas. Bookkeeping firms come from the business records, which need the desktop app. Takes a few minutes.";
   if (st.action === "emails") return st.text + " A long list takes a few presses: each one carries on where the last stopped.";
   if (st.action === "replies") return st.text + " Handles 12 new replies per press; press again if more are waiting.";
   return st.text;
