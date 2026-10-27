@@ -432,7 +432,7 @@ describe("copy and the kit", () => {
     expect(new Set(kit.map((k) => k.link)).size).toBe(kit.length);
     expect(kit.find((k) => k.channel === "linkedin")?.text).toContain("https://ambrain.example/join?src=linkedin");
     expect(kit[0]!.text).toContain("Reference AMB-2026-014.");
-    expect(kit.map((k) => k.text).join(" ")).not.toMatch(/—|!/);
+    expect(kit.map((k) => k.text).join(" ")).not.toMatch(/\u2014|!/);
   });
 
   it("lists the buyer steps in the command help", async () => {
