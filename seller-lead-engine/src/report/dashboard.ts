@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { EngineConfig } from "../config.ts";
 import { normalizeEmail, splitList, type LeadRow, type ProspectRow } from "../domain/schema.ts";
+import { staffLabel } from "../contacts/staff.ts";
 import { isSendableVerification } from "../contacts/verify.ts";
 import { coldWeek, mailboxDailyCap } from "../sending/ramp.ts";
 import { mailboxHealth, touchDay } from "../sending/health.ts";
@@ -51,6 +52,10 @@ export interface ProspectView {
   tier: string;
   score: number | null;
   status: string;
+  /** Estimated headcount, for sorting (null when unknown). */
+  staff: number | null;
+  /** The headcount as shown: "25", or "8+" when counted from a team page (a floor). */
+  staff_label: string;
   emails_so_far: number;
   next_email: string;
   why: string;
@@ -221,6 +226,8 @@ export function dashboardData(stores: Stores, config: EngineConfig, opts: { toda
       tier: p.tier,
       score: p.score ?? null,
       status: STATUS_WORDS[p.status],
+      staff: p.staff_count ?? null,
+      staff_label: staffLabel(p),
       emails_so_far: emailsBy.get(p.prospect_id) ?? 0,
       next_email: p.status === "in_sequence" ? p.next_touch_date : "",
       why: p.status === "excluded" || p.status === "hold" ? p.exclude_reason || reasonsOf(p)[0] || "" : reasonsOf(p).slice(0, 2).join("; "),

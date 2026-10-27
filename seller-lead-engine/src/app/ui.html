@@ -489,6 +489,7 @@ const COLS = [
   { key: "vertical", label: "Trade" },
   { key: "tier", label: "Tier" },
   { key: "score", label: "Score", num: true },
+  { key: "staff", label: "Staff", num: true, show: "staff_label", tip: "Estimated headcount from the firm's own website or an imported list. 8+ means at least 8 people are listed on its team page." },
   { key: "status", label: "Status" },
   { key: "emails_so_far", label: "Emails", num: true },
   { key: "next_email", label: "Next email" },
@@ -513,8 +514,8 @@ function renderAll(data) {
   });
   $("allCount").textContent = rows.length ? list.length.toLocaleString() + " of " + rows.length.toLocaleString() + (list.length > 500 ? " (first 500 shown; search to narrow)" : "") : "";
   if (!rows.length) { $("allTable").innerHTML = '<p class="muted">No businesses yet. Press <strong>Find new businesses</strong> on the Today tab, or <strong>Show me with sample data</strong>.</p>'; return; }
-  $("allTable").innerHTML = "<table><tr>" + COLS.map((c) => '<th class="sort' + (c.num ? " num" : "") + '" data-act="sort" data-key="' + c.key + '">' + esc(c.label) + (view.sort === c.key ? (view.dir > 0 ? " &#9650;" : " &#9660;") : "") + "</th>").join("") + "</tr>"
-    + list.slice(0, 500).map((r) => "<tr>" + COLS.map((c) => '<td' + (c.num ? ' class="num"' : "") + ">" + esc(r[c.key] == null ? "" : r[c.key]) + "</td>").join("") + "</tr>").join("") + "</table>";
+  $("allTable").innerHTML = "<table><tr>" + COLS.map((c) => '<th class="sort' + (c.num ? " num" : "") + '" data-act="sort" data-key="' + c.key + '"' + (c.tip ? ' title="' + esc(c.tip) + '"' : "") + ">" + esc(c.label) + (view.sort === c.key ? (view.dir > 0 ? " &#9650;" : " &#9660;") : "") + "</th>").join("") + "</tr>"
+    + list.slice(0, 500).map((r) => "<tr>" + COLS.map((c) => { const v = r[c.show || c.key]; return '<td' + (c.num ? ' class="num"' : "") + ">" + esc(v == null ? "" : v) + "</td>"; }).join("") + "</tr>").join("") + "</table>";
 }
 
 function renderMailboxes(rows) {
@@ -563,7 +564,7 @@ async function act(el) {
       return;
     }
     if (a === "sort") {
-      view.dir = view.sort === el.dataset.key ? -view.dir : el.dataset.key === "score" || el.dataset.key === "emails_so_far" ? -1 : 1;
+      view.dir = view.sort === el.dataset.key ? -view.dir : ["score", "staff", "emails_so_far"].includes(el.dataset.key) ? -1 : 1;
       view.sort = el.dataset.key;
       return part("allTable", [state.businesses, view], renderAll);
     }

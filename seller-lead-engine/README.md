@@ -70,7 +70,7 @@ Settings tab.
 | Today | Headline counts, the steps in order (Find new businesses, Find emails, Score businesses, Prepare today's emails, Approve and create Gmail drafts, Check replies, Weekly report), the log of the step running, today's emails to read and skip before approving, the pipeline and the last 14 days |
 | Warm sellers | Qualified owners with size, timeline and motivation, the advisor's handoff note, and buttons for Meeting booked, Listing signed, Check back later and Not a fit |
 | Replies | Owners in conversation and every reply with its kind and whether an answer was drafted |
-| All businesses | Every business, searchable and sortable: score, status, emails so far, next email, why it scored |
+| All businesses | Every business, searchable and sortable: score, estimated staff (from its own website or an imported list; "8+" means at least 8 listed on its team page), status, emails so far, next email, why it scored |
 | Settings and mailboxes | What still blocks the first email (postal address, licensing sign-off and the rest), the settings file, mailbox health, a "never email this address" box, and the data folders |
 
 The buttons run the same commands as below, so every compliance gate, cap,

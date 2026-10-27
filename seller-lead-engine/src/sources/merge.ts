@@ -10,6 +10,7 @@ import {
   type PoiRow,
   type ProspectRow,
 } from "../domain/schema.ts";
+import { betterStaff, importedStaff, type StaffEstimate } from "../contacts/staff.ts";
 import { idAllocator, toCells } from "../store/csvTable.ts";
 import type { Stores } from "../store/index.ts";
 import { isoStamp } from "../util/dates.ts";
@@ -371,6 +372,11 @@ export function buildProspects(stores: Stores, config: EngineConfig, opts: { now
     };
     const sourcePhone = poi?.phone || target.map((l) => l.phone).find(Boolean) || bizContacts.map((c) => c.phone).find(Boolean) || "";
     const sourceWebsite = poi?.website || bizContacts.map((c) => c.website).find(Boolean) || "";
+    // The largest employee figure any imported list gives (staff.ts): a list names one business, so the figures should agree.
+    const imported = bizContacts
+      .map((c) => importedStaff(c.employees ?? ""))
+      .filter((e): e is StaffEstimate => e !== undefined)
+      .sort((a, b) => b.count - a.count)[0];
 
     if (!prior) {
       const cells: Record<string, string> = Object.fromEntries(COLUMNS.map((c) => [c, ""]));
@@ -383,6 +389,7 @@ export function buildProspects(stores: Stores, config: EngineConfig, opts: { now
         email_source: contact?.email_source ?? "",
         email_source_url: contact?.email_source_url ?? "",
         email_verification: "unverified",
+        ...(imported ? { staff_count: String(imported.count), staff_source: imported.source, staff_basis: imported.basis } : {}),
         tier: "",
         created_at: stamp,
         updated_at: stamp,
@@ -401,6 +408,8 @@ export function buildProspects(stores: Stores, config: EngineConfig, opts: { now
     const after: Record<string, string> = { ...before, ...facts };
     after.phone = sourcePhone || before.phone || "";
     after.website = sourceWebsite || before.website || "";
+    // A website's stated figure stays; an import replaces a counted team page or an older import.
+    if (imported && betterStaff(imported, prior)) Object.assign(after, { staff_count: String(imported.count), staff_source: imported.source, staff_basis: imported.basis });
     // Never replace an email a later step found or verified; only fill a blank.
     if (!before.email && contact) {
       after.email = normalizeEmail(contact.email);

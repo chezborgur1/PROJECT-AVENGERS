@@ -1,4 +1,5 @@
 import { normalizeEmail } from "../domain/schema.ts";
+import { estimateFromPages, teamLinks, type StaffEstimate } from "./staff.ts";
 import { isValidEmailSyntax } from "./verify.ts";
 
 // Finds the addresses a business publishes on its own website: the home
@@ -171,8 +172,22 @@ const bareHost = (host: string) => host.toLowerCase().replace(/^www\./, "");
 
 /** The addresses the business's own site publishes, with the page each was found on. */
 export async function discoverEmails(website: string, opts: { fetchImpl?: typeof fetch; maxPages?: number }): Promise<{ email: string; url: string }[]> {
+  return (await discoverSite(website, { ...opts, teamPages: 0 })).emails;
+}
+
+/**
+ * One visit to the business's own site: the addresses it publishes, and a
+ * headcount from what it says about its people (staff.ts). Up to
+ * `teamPages` (default 2) team or about pages linked from the pages read
+ * are visited too, under the same robots.txt and "do not harvest" rules.
+ */
+export async function discoverSite(
+  website: string,
+  opts: { fetchImpl?: typeof fetch; maxPages?: number; teamPages?: number },
+): Promise<{ emails: { email: string; url: string }[]; staff: StaffEstimate | undefined }> {
+  const none = { emails: [], staff: undefined };
   const site = siteUrl(website);
-  if (!site) return [];
+  if (!site) return none;
   const fetchImpl = opts.fetchImpl ?? fetch;
   const origin = site.origin;
   const host = bareHost(site.hostname);
@@ -181,17 +196,25 @@ export async function discoverEmails(website: string, opts: { fetchImpl?: typeof
   let rules: RobotsRule[];
   try {
     const res = await fetchImpl(`${origin}/robots.txt`, { headers });
-    if (res.status >= 500) return []; // unreachable rules: complete disallow (RFC 9309 2.3.1.4)
+    if (res.status >= 500) return none; // unreachable rules: complete disallow (RFC 9309 2.3.1.4)
     rules = res.ok ? parseRobots(await res.text()) : [];
   } catch {
-    return [];
+    return none;
   }
 
   const results: { email: string; url: string }[] = [];
+  const pages: { url: string; html: string; text: string }[] = [];
   const maxPages = Math.max(0, opts.maxPages ?? DISCOVERY_PATHS.length);
-  for (const p of DISCOVERY_PATHS.slice(0, maxPages)) {
+  const queue = DISCOVERY_PATHS.slice(0, maxPages).map((p) => `${origin}${p}`);
+  let extra = Math.max(0, opts.teamPages ?? 2);
+  const seen = new Set<string>();
+  while (queue.length) {
+    const url = queue.shift()!;
+    const target = new URL(url);
+    const p = `${target.pathname}${target.search}`;
+    if (seen.has(p)) continue;
+    seen.add(p);
     if (!robotsAllows(rules, p)) continue;
-    const url = `${origin}${p}`;
     let html: string;
     try {
       const res = await fetchImpl(url, { headers });
@@ -204,8 +227,20 @@ export async function discoverEmails(website: string, opts: { fetchImpl?: typeof
     } catch {
       continue;
     }
-    if (hasNoHarvestNotice(html)) return [];
+    // The notice speaks for the whole site: nothing from it is used, the headcount included.
+    if (hasNoHarvestNotice(html)) return none;
     for (const email of extractEmails(html, host)) if (!results.some((r) => r.email === email)) results.push({ email, url });
+    pages.push({ url, html, text: visibleText(html) });
+    // Team pages linked from the home and about pages, a couple at most.
+    if (extra > 0) {
+      for (const link of teamLinks(html, url, extra)) {
+        const lp = new URL(link);
+        if (!seen.has(`${lp.pathname}${lp.search}`) && !queue.includes(link)) {
+          queue.push(link);
+          extra--;
+        }
+      }
+    }
   }
-  return results;
+  return { emails: results, staff: estimateFromPages(pages) };
 }

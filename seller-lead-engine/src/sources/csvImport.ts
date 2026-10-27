@@ -61,7 +61,12 @@ const identity = (keys: string[]) => Object.fromEntries(keys.map((k) => [k, [k]]
 export const CSV_PRESETS: Record<string, { kind: "entities" | "licenses" | "contacts" | "open_poi"; columns: Record<string, string[]>; defaults?: Record<string, string> }> = {
   entities: { kind: "entities", columns: identity(Object.keys(EntityRowSchema.shape)), defaults: { source: "csv" } },
   licenses: { kind: "licenses", columns: identity(Object.keys(LicenseRowSchema.shape)), defaults: { source: "csv", person_role: "unknown" } },
-  contacts: { kind: "contacts", columns: identity(Object.keys(ContactRowSchema.shape)), defaults: { source: "csv", email_source: "import" } },
+  contacts: {
+    kind: "contacts",
+    // Bought or exported lists name the headcount many ways.
+    columns: { ...identity(Object.keys(ContactRowSchema.shape)), employees: ["employees", "employee_count", "number of employees", "num employees", "# employees", "employee size", "company size", "headcount", "staff"] },
+    defaults: { source: "csv", email_source: "import" },
+  },
   open_poi: {
     kind: "open_poi",
     columns: { ...identity(Object.keys(PoiRowSchema.shape)), source_record_id: ["source_record_id", "poi_id"], data_license: ["data_license", "license"] },

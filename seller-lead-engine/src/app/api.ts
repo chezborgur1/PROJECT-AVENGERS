@@ -4,6 +4,7 @@ import { ConfigError, engineEnv, loadConfig, parseConfig, type EngineConfig } fr
 import type { LeadRow, ReplyClass } from "../domain/schema.ts";
 import { runCli, engineTimeZone, EXAMPLE_CONFIG, SEND_BLOCKING_CHECKS, sendWindowBlock, TEMPLATES_DIR, type CliDeps } from "../cli.ts";
 import { DEMO_DAYS, runDemo } from "../demo.ts";
+import { staffLabel } from "../contacts/staff.ts";
 import { dashboardData, STAGE_WORDS } from "../report/dashboard.ts";
 import { preflight } from "../sending/preflight.ts";
 import { runSend, type SendReport } from "../sending/run.ts";
@@ -268,7 +269,7 @@ async function state(host: ApiHost, s: Space) {
       city: pr?.city ?? "",
       stage: STAGE_WORDS[l.stage].label,
       stage_key: l.stage,
-      size: view?.size ?? "",
+      size: view?.size || (pr?.staff_count !== undefined ? `${staffLabel(pr)} staff` : ""),
       timeline: view?.timeline ?? "",
       motivation: view?.motivation ?? "",
       next_action: l.next_action,

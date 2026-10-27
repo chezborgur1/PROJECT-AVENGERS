@@ -177,10 +177,15 @@ export const ContactRowSchema = z.object({
   email_source_url: z.string(),
   website: z.string(),
   phone: z.string(),
+  /** Employee count from the list, as written ("18", "11-50", "50+"); blank or missing when the list has none. */
+  employees: z.string().optional(),
 });
 export type ContactRow = z.infer<typeof ContactRowSchema>;
 
 // ---------------------------------------------------------------- the pipeline tables
+
+/** Where a headcount estimate came from, strongest first (src/contacts/staff.ts). */
+export const STAFF_SOURCES = ["website_stated", "import", "website_listed"] as const;
 
 /** One business: the merged, scored record the sequence works from (`prospects.csv`). */
 export const ProspectRowSchema = z.object({
@@ -208,6 +213,10 @@ export const ProspectRowSchema = z.object({
   year_graduated: optInt,
   officer_count: optInt,
   officers: z.string(), // list of "Name (TITLE)"
+  // Headcount (src/contacts/staff.ts): the size signal AMB trusts most. Internal: never in an email.
+  staff_count: optInt,
+  staff_source: z.enum([...STAFF_SOURCES, ""]),
+  staff_basis: z.string(),
   owner_name: z.string(),
   owner_first_name: z.string(),
   owner_last_name: z.string(),

@@ -396,6 +396,7 @@ export const cmdEnrich: Command = async (args, deps) => {
   });
   if (startAfter) deps.log(`Continuing after ${startAfter}.`);
   deps.log(`Emails: ${r.found} found, ${r.verified} verified. By status: ${counts(r.byStatus)}`);
+  if (r.staffed) deps.log(`Headcount: read for ${r.staffed} business(es) from their own websites.`);
   if (r.stoppedAfter) {
     fs.mkdirSync(stores.dir.cache, { recursive: true });
     fs.writeFileSync(cursorFile, `${JSON.stringify({ after: r.stoppedAfter })}\n`);

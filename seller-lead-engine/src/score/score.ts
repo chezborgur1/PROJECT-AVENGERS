@@ -13,7 +13,7 @@ import { MIN_MATCH_CONFIDENCE, PlaceNotFound, type PlacesClient, type PlacesDeta
 // points are logged on the prospect so they can be refitted once about 50
 // replies are labelled (data.md §9).
 //
-//   owner age 30 | tenure 20 | no apparent successor 15 | size fit 15 |
+//   owner age 30 | tenure 20 | no apparent successor 15 | size fit 15 (headcount first) |
 //   fatigue signals 10 | vertical prior 10
 //
 // Knock-outs score 0 and set status `excluded`: suppressed, inactive entity
@@ -363,12 +363,32 @@ export function reviewBandPoints(count: number): number {
   return 4;
 }
 
+/**
+ * Headcount bands (src/contacts/staff.ts), the most direct size signal. At
+ * roughly $100K to $200K of revenue per person in services, AMB's $500K to
+ * $10M range is about 4 to 60 people: a solo practice scores low, 10 to 49
+ * scores highest, and 100 or more reads as over the range. Uncalibrated;
+ * refit with outcomes.
+ */
+export function staffBandPoints(count: number): number {
+  if (count <= 1) return 2;
+  if (count <= 3) return 5;
+  if (count <= 9) return 11;
+  if (count <= 49) return 14;
+  if (count <= 99) return 10;
+  return 4;
+}
+
 function sizePoints(p: ProspectRow, places: PlacesDetails | null | undefined): { points: number; reasons: string[] } {
   const licences = splitList(p.license_numbers).length;
   const reasons: string[] = [];
   let points: number;
   const reviews = places?.userRatingCount;
-  if (reviews !== undefined) {
+  if (p.staff_count !== undefined) {
+    // A headcount beats review volume and licence counts: it measures the business, not its visibility.
+    points = staffBandPoints(p.staff_count);
+    reasons.push(`Headcount: ${(p.staff_basis || `about ${p.staff_count} staff`).replace(/;/g, ",")}`);
+  } else if (reviews !== undefined) {
     points = reviewBandPoints(reviews);
     // Describe the band, never the count: review counts are Maps content (ToS 3.2.3).
     const read =

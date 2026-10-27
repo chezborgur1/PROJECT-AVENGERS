@@ -124,8 +124,11 @@ and a business, person or DBA name.
 
 **contacts** (`data/imports/contacts.csv`): `source, source_record_id,
 business_name, zip, first_name, last_name, role, email, email_source,
-email_source_url, website, phone`, with `email_source` one of website,
+email_source_url, website, phone, employees`, with `email_source` one of website,
 import, hunter, snov, apollo, manual, reply. Required: `business_name`.
+`employees` is optional, as the list writes it ("18", "11-50", "50+"); the
+`csv:contacts` preset also reads it from headers such as "Employee Count",
+"Number of Employees", "Company Size" or "Headcount".
 
 **open_poi** (`data/imports/open_poi.csv`): `source, source_record_id, name,
 basic_category, website, phone, street, city, state, zip, date_refreshed,
@@ -189,6 +192,26 @@ tools can be imported with `csv:contacts` and the matching `email_source`.
 None of them supplies owner age, and most Main Street owner emails come from
 the business's own website or the owner's reply.
 
+## Headcount (the size signal)
+
+Public records carry no headcount, so the engine estimates it, strongest
+source first:
+
+1. **What the firm's own website says** ("a team of 25", "40 employees",
+   "employs 12"), read on the same visit that finds its email
+   (`enrich --discover`, the app's Find emails).
+2. **An imported list's employee column** (`employees` in a contacts CSV,
+   from a list AMB is licensed to use). A range counts from its low end.
+3. **The people a team or about page lists** (names in headings, or
+   schema.org Person entries), at least two. Team pages often show only the
+   principals, so this is a floor and the app shows it as "8+".
+
+The site visit follows at most two team or about links from the home and
+about pages, under the same robots.txt and "do not harvest" rules as email
+discovery. A business with no known website gets no headcount until a list
+with one is imported. The count is internal: it feeds the size score and
+the app's Staff column, and no email mentions it.
+
 ## The scoring model
 
 The likely-to-sell score runs from 0 to 100 (`src/score/score.ts`). The
@@ -201,7 +224,7 @@ wins nor zeroes a prospect.
 | Estimated owner age | 30 | From graduation year (+25 to 27), else original license year (licensed at 25 to 32), else formation year (founded at 28 to 40). Band midpoint under 45: 0; 45 to 54: 10; 55 to 59: 20; 60 to 64: 27; 65 and over: 30. Internal only: reasons say "License issued 1994, which suggests a senior owner" | 8 |
 | Tenure | 20 | Years since the earliest formation or original license date. Under 10: 0; 10 to 14: 6; 15 to 19: 12; 20 to 24: 16; 25 and over: 20. Weighted below age because the odds of sale fall with tenure at first (Holmes and Schmitz, 1996) | 4 |
 | No apparent successor | 15 | Sole officer with 10 or more years on record: 15; sole officer: 10; several officers, none sharing the owner's surname: 8; an officer with the owner's surname and another first name or a JR or II suffix: 0 | 5 |
-| Size fit | 15 | Places review volume bands (under 5: 3, under 25: 6, under 75: 10, under 500: 13, under 1,500: 9, more: 4), plus 2 for 2 or more licenses; without Places, 3 or more licenses: 10, 2: 9 | 7 |
+| Size fit | 15 | Headcount first (src/contacts/staff.ts): 1 person: 2, 2 to 3: 5, 4 to 9: 11, 10 to 49: 14, 50 to 99: 10, 100 or more: 4. Without a headcount, Places review volume bands (under 5: 3, under 25: 6, under 75: 10, under 500: 13, under 1,500: 9, more: 4), plus 2 for 2 or more licenses; without Places, 3 or more licenses: 10, 2: 9 | 7 |
 | Fatigue signals | 10 | A missed or late Florida annual report, a license expired or expiring within 60 days without renewal, no website, listed as temporarily closed | 1 per unknown check |
 | Vertical prior | 10 | `verticals.<key>.prior` in the config, set from the share of owners 55 and over and buyer demand | none |
 

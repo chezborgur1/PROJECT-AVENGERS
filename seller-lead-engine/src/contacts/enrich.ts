@@ -5,7 +5,8 @@ import { matchKey } from "../sources/normalize.ts";
 import type { Stores } from "../store/index.ts";
 import { isoDate, isoStamp } from "../util/dates.ts";
 import { Suppression } from "../compliance/suppression.ts";
-import { discoverEmails } from "./discover.ts";
+import { discoverSite } from "./discover.ts";
+import { betterStaff, staffFields, type StaffEstimate } from "./staff.ts";
 import { emailLocal, isRoleBased, isSendableVerification, verifyEmail, type Verification } from "./verify.ts";
 
 // Picks and verifies one email per prospect, before scoring decides who
@@ -95,7 +96,7 @@ export async function enrichContacts(
     /** Asked before each prospect after the first; true stops the run, keeping what is done (a time budget). */
     shouldStop?: () => boolean;
   },
-): Promise<{ found: number; verified: number; byStatus: Record<string, number>; stoppedAfter?: string; remaining?: number }> {
+): Promise<{ found: number; verified: number; byStatus: Record<string, number>; staffed?: number; stoppedAfter?: string; remaining?: number }> {
   const stamp = isoStamp(opts.now);
   const suppression = new Suppression(stores.suppression);
   const contactsByKey = new Map<string, ContactRow[]>();
@@ -104,7 +105,7 @@ export async function enrichContacts(
     contactsByKey.set(k, [...(contactsByKey.get(k) ?? []), c]);
   }
 
-  const result: { found: number; verified: number; byStatus: Record<string, number>; stoppedAfter?: string; remaining?: number } = { found: 0, verified: 0, byStatus: {} };
+  const result: { found: number; verified: number; byStatus: Record<string, number>; staffed?: number; stoppedAfter?: string; remaining?: number } = { found: 0, verified: 0, byStatus: {} };
   const updates: ProspectRow[] = [];
   // In id order, so a run that stops early can continue after the last id it finished.
   const after = opts.startAfter ? idNumber(opts.startAfter) : -1;
@@ -125,6 +126,8 @@ export async function enrichContacts(
     if (suppression.check("", p.prospect_id)) continue;
     const owner = { first: p.owner_first_name, last: p.owner_last_name };
     const candidates: Candidate[] = [];
+    // The headcount read on the same visit to the business's site (staff.ts).
+    let staff: StaffEstimate | undefined;
     const addCandidate = (raw: string, source: EmailSource | "", url: string, existing = false) => {
       const email = normalizeEmail(raw);
       if (!email.includes("@") || candidates.some((c) => c.email === email)) return;
@@ -140,7 +143,9 @@ export async function enrichContacts(
     for (const k of keys) for (const c of contactsByKey.get(k) ?? []) addCandidate(c.email, c.email_source, c.email_source_url);
     if (opts.discover && p.website) {
       try {
-        for (const d of await discoverEmails(p.website, { ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}) })) addCandidate(d.email, "website", d.url);
+        const site = await discoverSite(p.website, { ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}) });
+        for (const d of site.emails) addCandidate(d.email, "website", d.url);
+        staff = site.staff;
       } catch {
         // A site that cannot be read adds no candidates; the rest of the run goes on.
       }
@@ -215,8 +220,15 @@ export async function enrichContacts(
         updated_at: stamp,
       };
       if (changed) result.found++;
-      if (JSON.stringify(next) !== JSON.stringify(p)) updates.push(next);
     }
+    if (staff && betterStaff(staff, p)) {
+      const fields = staffFields(staff);
+      if (fields.staff_count !== p.staff_count || fields.staff_basis !== p.staff_basis) {
+        next = { ...next, ...fields, updated_at: stamp };
+        result.staffed = (result.staffed ?? 0) + 1;
+      }
+    }
+    if (JSON.stringify(next) !== JSON.stringify(p)) updates.push(next);
     const status = next.email ? next.email_verification : "no_email";
     result.byStatus[status] = (result.byStatus[status] ?? 0) + 1;
   }
