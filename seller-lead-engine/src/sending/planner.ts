@@ -27,7 +27,8 @@ import { mailboxDailyCap } from "./ramp.ts";
 //    pilot a small share); each goes to the least-loaded healthy mailbox.
 //
 // Caps: each mailbox gets its ramp cap (src/sending/ramp.ts) minus the
-// outreach already planned, drafted or sent today; each sending domain gets
+// outreach already planned, drafted or sent today, buyer invitations from
+// the same mailbox included (src/buyers: one cap per mailbox, both sides); each sending domain gets
 // `max_per_domain_per_day` across its mailboxes, far below Gmail's 5,000 a
 // day bulk-sender line, which once crossed is permanent (deliverability.md
 // section 1). Drafted replies to owners are a person's correspondence and
@@ -106,6 +107,14 @@ export function planDay(stores: Stores, config: EngineConfig, opts: { today: str
   const replies = stores.replies.rows();
   const log = stores.mailboxLog.rows();
   const suppression = new Suppression(stores.suppression);
+  // Buyer invitations share each mailbox's cap; a business invited as a buyer is the buyer side's (src/buyers/sources.ts).
+  const buyerTouches = stores.buyerTouches.rows().filter((t) => t.status !== "failed" && t.status !== "cancelled" && t.created_at.slice(0, 10) === today);
+  const invitedAsBuyer = new Map(
+    stores.buyerLeads
+      .rows()
+      .filter((l) => l.prospect_id && !["new", "needs_email", "review", "excluded"].includes(l.status))
+      .map((l) => [l.prospect_id, l.lead_id]),
+  );
 
   // Mailboxes: health, caps, pauses.
   const boxes: Box[] = config.mailboxes.map((m) => {
@@ -115,7 +124,7 @@ export function planDay(stores: Stores, config: EngineConfig, opts: { today: str
     if (m.paused) paused.push("paused in config");
     if (health.pause) paused.push(...health.reasons);
     const newPaused = !health.pause && health.pauseNew ? health.reasons : [];
-    const used = touches.filter((t) => occupies(t) && normalizeEmail(t.mailbox) === key && touchDay(t) === today).length;
+    const used = touches.filter((t) => occupies(t) && normalizeEmail(t.mailbox) === key && touchDay(t) === today).length + buyerTouches.filter((t) => normalizeEmail(t.mailbox) === key).length;
     return { mailbox: m, key, domain: mailboxDomain(m.email), cap: 0, used, health, paused, newPaused };
   });
   // A spam complaint is a reputation event for the whole sending operation: pause everything until a person clears it.
@@ -130,7 +139,7 @@ export function planDay(stores: Stores, config: EngineConfig, opts: { today: str
   }
   const domains = new Map<string, { cap: number; used: number }>();
   for (const d of new Set(boxes.map((b) => b.domain))) {
-    const used = touches.filter((t) => occupies(t) && mailboxDomain(t.mailbox) === d && touchDay(t) === today).length;
+    const used = touches.filter((t) => occupies(t) && mailboxDomain(t.mailbox) === d && touchDay(t) === today).length + buyerTouches.filter((t) => mailboxDomain(t.mailbox) === d).length;
     domains.set(d, { cap: config.sending.max_per_domain_per_day, used });
   }
   const room = (b: Box) => Math.min(b.cap - b.used, domains.get(b.domain)!.cap - domains.get(b.domain)!.used);
@@ -199,6 +208,11 @@ export function planDay(stores: Stores, config: EngineConfig, opts: { today: str
     }
     if (!p.email.trim()) {
       skip("no email address");
+      continue;
+    }
+    const buyerLead = invitedAsBuyer.get(p.prospect_id);
+    if (buyerLead) {
+      skip(`invited as a buyer (${buyerLead}): one owner hears from one side`);
       continue;
     }
     if (!isSendableVerification(p.email_verification)) {

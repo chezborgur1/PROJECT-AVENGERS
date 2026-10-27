@@ -77,6 +77,9 @@ const VIEWS: Record<string, string> = {
   amb_replies: "data/replies.csv",
   amb_leads: "data/leads.csv",
   amb_do_not_contact: "data/suppression.csv",
+  amb_buyers: "data/buyers/leads.csv",
+  amb_buyer_emails: "data/buyers/touches.csv",
+  amb_buyer_partners: "data/buyers/partners.csv",
 };
 
 /** Raw state downloads, half-written files and temp files never go to the database. */

@@ -4,7 +4,7 @@ import type http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { ACTIONS, api, ApiError, jobLogger, newJob, runCommands, saveLastJob, spaceNow, type ApiHost, type AppDeps, type AppMode, type JobSpec, type JobView, type Space } from "../app/api.ts";
-import { CSP, pageHtml, readBody, send } from "../app/server.ts";
+import { bodyLimit, CSP, pageHtml, readBody, send } from "../app/server.ts";
 import type { Db } from "./db.ts";
 import { Mirror, MirrorRefused, type Layout, type Snapshot } from "./mirror.ts";
 
@@ -237,7 +237,7 @@ export function createHostedHandler(opts: HostedOptions): Handler {
       if (!same(String(req.headers["x-app-token"] ?? ""), pageKey(exp))) return send(res, 403, "application/json", JSON.stringify({ error: "Missing or wrong page key: reload the page." }));
 
       const mode: AppMode = cookies(req).amb_mode === "sample" ? "sample" : "live";
-      const body = method === "POST" ? await readBody(req) : {};
+      const body = method === "POST" ? await readBody(req, bodyLimit(pathname)) : {};
       const r = await api(hostFor(mode), method, pathname, url.searchParams, body);
       return send(res, r.status, "application/json", JSON.stringify(r.body), r.headers);
     } catch (err) {

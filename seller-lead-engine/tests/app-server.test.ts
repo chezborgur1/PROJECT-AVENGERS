@@ -201,3 +201,42 @@ describe("jobs", () => {
     expect((await call("POST", "/api/action", { action: "nonsense" })).status).toBe(400);
   });
 });
+
+describe("the Buyers tab", () => {
+  it("takes a buyer list upload, shows the funnel, previews invitations and lets a person approve a correspondent", async () => {
+    const root = tmpDir();
+    fs.mkdirSync(path.join(root, "config"), { recursive: true });
+    const config = testConfig({ buyers: { signup_url: "https://ambrain.example/join", mailbox: { email: "deals@ambadvisory.example", sender_name: "Frank Example", sender_title: "Principal" } } });
+    fs.writeFileSync(path.join(root, "config", "engine.config.json"), JSON.stringify(config));
+    app = await startApp({ root, port: 0, env: {}, clock: CLOCK, token: TOKEN });
+
+    const bad = await call("POST", "/api/buyers/upload", { what: "list", name: "x.csv", text: "Name,Email\nA,a@a.example\n", kind: "past_bidder", source: "" });
+    expect(bad.status).toBe(400);
+    const up = await call("POST", "/api/buyers/upload", { what: "list", name: "bidders.csv", text: "Name,Email\nJane Buyer,jane@buyer.example\n", kind: "past_bidder", source: "past-bidders" });
+    expect(up.status, JSON.stringify(up.data)).toBe(200);
+    expect(fs.readdirSync(path.join(root, "data", "uploads"))).toEqual(["2026-10-20-bidders.csv"]);
+
+    let s = await state();
+    expect(s.buyers.funnel.totals.found).toBe(1);
+    expect(s.buyers.kit.length).toBeGreaterThan(3);
+
+    const job = await run("buyers_preview");
+    expect(job.code, job.log.join("\n")).toBe(0);
+    s = await state();
+    expect(s.buyers.previews.report.previews[0].to).toBe("jane@buyer.example");
+    expect(s.buyers.previews.report.previews[0].body).toContain("https://ambrain.example/join?ref=b-00001-");
+
+    // A correspondent waits for a person; approving puts them in line.
+    const add = await call("POST", "/api/buyers/add", { email: "pat@fund.example", name: "Pat Buyer", kind: "correspondent", source: "mailbox" });
+    expect(add.status).toBe(200);
+    const leads = path.join(root, "data", "buyers", "leads.csv");
+    fs.writeFileSync(leads, fs.readFileSync(leads, "utf8").replace(/^(B-00002),new,/m, "$1,review,"));
+    expect((await state()).buyers.review.map((l: State) => l.lead_id)).toEqual(["B-00002"]);
+    expect((await call("POST", "/api/buyers/review", { leadId: "B-00002", verdict: "approve" })).status).toBe(200);
+    expect((await state()).buyers.review).toEqual([]);
+
+    const partner = await call("POST", "/api/buyers/partner", { kind: "sba_lender", name: "First Example Bank" });
+    expect(partner.status).toBe(200);
+    expect((await state()).buyers.partners[0].link).toMatch(/src=partner-/);
+  });
+});

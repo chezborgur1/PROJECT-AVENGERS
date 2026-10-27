@@ -44,6 +44,10 @@ export interface RunningApp {
 /** The app's one page. */
 export const UI_FILE = path.join(import.meta.dirname, "ui.html");
 const MAX_BODY = 64 * 1024;
+/** A buyer list uploaded from the Buyers tab may be larger; 4 MB stays under the hosting platform's request limit. */
+export const MAX_UPLOAD = 4 * 1024 * 1024;
+/** The body limit for a request path. */
+export const bodyLimit = (pathname: string) => (pathname === "/api/buyers/upload" ? MAX_UPLOAD : MAX_BODY);
 /** The page's Content-Security-Policy: its own inline script and style, and calls back to where it came from. */
 export const CSP = "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; form-action 'self'; frame-ancestors 'none'";
 
@@ -120,7 +124,7 @@ export async function startApp(opts: AppOptions = {}): Promise<RunningApp> {
     if (!url.pathname.startsWith("/api/")) return send(res, 404, "text/plain", "Not found");
     if (req.headers["x-app-token"] !== token) return send(res, 403, "application/json", JSON.stringify({ error: "Missing or wrong app key" }));
     try {
-      const body = req.method === "POST" ? await readBody(req) : {};
+      const body = req.method === "POST" ? await readBody(req, bodyLimit(url.pathname)) : {};
       const r = await api(host, req.method ?? "GET", url.pathname, url.searchParams, body);
       return send(res, r.status, "application/json", JSON.stringify(r.body), r.headers);
     } catch (err) {
@@ -146,14 +150,14 @@ export function send(res: http.ServerResponse, status: number, type: string, bod
   res.end(body);
 }
 
-/** Read a request body of at most 64 KB: JSON, or a form (the hosted sign-in). */
-export function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+/** Read a request body of at most `max` bytes (64 KB unless given): JSON, or a form (the hosted sign-in). */
+export function readBody(req: http.IncomingMessage, max = MAX_BODY): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks: Buffer[] = [];
     req.on("data", (c: Buffer) => {
       size += c.length;
-      if (size > MAX_BODY) {
+      if (size > max) {
         reject(new ApiError(413, "Request too large"));
         req.destroy();
       } else chunks.push(c);

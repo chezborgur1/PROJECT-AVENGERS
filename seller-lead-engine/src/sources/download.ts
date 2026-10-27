@@ -111,9 +111,9 @@ export function safeName(name: string): string {
  * blocked or offline network gives Node's bare "fetch failed", which names
  * neither the host nor the fix.
  */
-async function reach(fetchImpl: typeof fetch, url: string): Promise<Response> {
+export async function reach(fetchImpl: typeof fetch, url: string, init?: RequestInit): Promise<Response> {
   try {
-    return await fetchImpl(url);
+    return await (init ? fetchImpl(url, init) : fetchImpl(url));
   } catch (err) {
     const cause = (err as { cause?: { message?: string; code?: string } }).cause;
     const why = [cause?.code, cause?.message].filter(Boolean).join(" ") || (err as Error).message;
@@ -122,8 +122,8 @@ async function reach(fetchImpl: typeof fetch, url: string): Promise<Response> {
 }
 
 /** Stream a URL's body to `file`; returns the bytes written. */
-async function fetchToFile(fetchImpl: typeof fetch, url: string, file: string): Promise<number> {
-  const res = await reach(fetchImpl, url);
+export async function fetchToFile(fetchImpl: typeof fetch, url: string, file: string, init?: RequestInit): Promise<number> {
+  const res = await reach(fetchImpl, url, init);
   if (!res.ok || !res.body) throw new Error(`Download failed for ${url}: HTTP ${res.status}`);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.part`;
@@ -132,8 +132,8 @@ async function fetchToFile(fetchImpl: typeof fetch, url: string, file: string): 
   return fs.statSync(file).size;
 }
 
-/** Extract the .csv and .txt entries of a zip next to it (streamed, so a large file never sits in memory); returns their paths. */
-export function extractZip(zipFile: string, dir: string): Promise<string[]> {
+/** Extract the .csv and .txt entries (or those `keep` matches) of a zip next to it (streamed, so a large file never sits in memory); returns their paths. */
+export function extractZip(zipFile: string, dir: string, keep: RegExp = /\.(csv|txt)$/i): Promise<string[]> {
   return new Promise((resolve, reject) => {
     yauzl.open(zipFile, { lazyEntries: true }, (err, zip) => {
       if (err || !zip) return reject(err ?? new Error(`Cannot open ${zipFile}`));
@@ -141,7 +141,7 @@ export function extractZip(zipFile: string, dir: string): Promise<string[]> {
       zip.on("error", reject);
       zip.on("end", () => resolve(out));
       zip.on("entry", (entry: yauzl.Entry) => {
-        if (/\/$/.test(entry.fileName) || !/\.(csv|txt)$/i.test(entry.fileName)) return zip.readEntry();
+        if (/\/$/.test(entry.fileName) || !keep.test(entry.fileName)) return zip.readEntry();
         const target = path.join(dir, safeName(entry.fileName));
         zip.openReadStream(entry, (e, stream) => {
           if (e || !stream) return reject(e ?? new Error(`Cannot read ${entry.fileName} in ${zipFile}`));

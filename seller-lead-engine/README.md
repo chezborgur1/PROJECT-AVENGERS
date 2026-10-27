@@ -26,6 +26,12 @@ blocks the send instead of warning. It produces:
   advisor, with every fact marked "per owner" or "per state records".
 - **`data/reports/<ISO week>.md`**: the weekly report (sent, reply rate,
   qualified sellers, meetings, listings signed, mailbox health, alarms).
+- **`data/buyers/`**: the buyer side. Possible buyers from listing-site
+  inquiries, AMB's mailbox history and lists, larger businesses in AMB's
+  industries, SEC Form D funds, fund advisers and SBA lending data, each
+  invited to register on AMBrain with a personal tracked link, and a funnel
+  that says which channel brings registrations. See
+  [docs/BUYERS.md](docs/BUYERS.md).
 
 ```
  Sunbiz cordata (fixed width) ─┐
@@ -279,6 +285,7 @@ the dashboard from them. The weekly report task can do the same each Monday.
 | Check | `src/readiness/check.ts`, `multiples.ts` | 8 drivers and 25 checklist items from the owner's words and state records; a range only from a verified multiples row and an SDE the owner stated |
 | Handoff | `src/handoff/handoff.ts` | Writes the check and a summary for each warm lead, then marks it `handed_off` |
 | Report | `src/report/weekly.ts` | The 7 days ending today plus the cumulative funnel; rates over outreach sent or drafted, the same basis as the circuit breakers |
+| Buyers | `src/buyers/` | Finds buyers (inquiries, mailbox history, lists, strategic add-ons, Form D, Form ADV, SBA 7(a)), enriches and scores them, and invites each to AMBrain with their own `ref` and `src` link through `assertBuyerSendable`. Cold invitations share each sending mailbox's cap with seller email; one owner never hears from both sides. [docs/BUYERS.md](docs/BUYERS.md) |
 | Export | `src/report/exportLeads.ts` | Lead sales to partner brokers: refused unless enabled with a legal review reference; flat fee only; never a suppressed or `dnc` prospect, the age estimate or the score |
 
 ### Confidentiality

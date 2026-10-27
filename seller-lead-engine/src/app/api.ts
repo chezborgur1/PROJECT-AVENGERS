@@ -4,6 +4,10 @@ import { ConfigError, engineEnv, loadConfig, parseConfig, type EngineConfig } fr
 import type { LeadRow, ReplyClass } from "../domain/schema.ts";
 import { runCli, engineTimeZone, EXAMPLE_CONFIG, SEND_BLOCKING_CHECKS, sendWindowBlock, TEMPLATES_DIR, type CliDeps } from "../cli.ts";
 import { DEMO_DAYS, runDemo } from "../demo.ts";
+import { warmMailbox } from "../buyers/core.ts";
+import { buyerFunnel, partnerKit, postingKit } from "../buyers/funnel.ts";
+import { runBuyerInvites, scoreBuyers, type BuyerSendReport } from "../buyers/invite.ts";
+import { BUYER_KINDS, PARTNER_KINDS } from "../buyers/schema.ts";
 import { staffLabel } from "../contacts/staff.ts";
 import { dashboardData, STAGE_WORDS } from "../report/dashboard.ts";
 import { preflight } from "../sending/preflight.ts";
@@ -102,9 +106,19 @@ export const ACTIONS: Readonly<Record<string, { label: string; commands: string[
   drafts: { label: "Create today's Gmail drafts", commands: [["send"]] },
   replies: { label: "Check replies", commands: [["sync"], ["qualify"], ["handoff"]], hosted: [["sync"], ["qualify", "--limit", "12"], ["handoff"]] },
   report: { label: "Weekly report", commands: [["report"]] },
+  // The buyer side (src/buyers, docs/BUYERS.md).
+  buyers_inbox: { label: "Check buyer inquiries", commands: [["buyers", "sync"]] },
+  buyers_find: { label: "Find buyers", commands: [["buyers", "strategic"], ["buyers", "download", "form-d", "--import"]], hosted: [["buyers", "strategic"], ["buyers", "download", "form-d", "--quarters", "1", "--import"]] },
+  // SBA's loan file runs to hundreds of megabytes: more than a hosted step can hold.
+  buyers_sba: { label: "Find SBA lenders and acquirers", commands: [["buyers", "download", "sba", "--import"]], hosted: [] },
+  buyers_emails: { label: "Find buyer emails", commands: [["buyers", "enrich", "--discover"]], hosted: [["buyers", "enrich", "--discover", "--max-seconds", "200", "--resume"]] },
+  buyers_send: { label: "Create buyer invitations", commands: [["buyers", "score"], ["buyers", "send"]] },
 };
 
-const OTHER_LABELS: Record<string, string> = { preview: "Prepare today's emails", sample: "Build the sample" };
+/** Steps that go online: never run on the fictional sample. */
+const ONLINE_ACTIONS = new Set(["find", "emails", "buyers_find", "buyers_sba", "buyers_emails"]);
+
+const OTHER_LABELS: Record<string, string> = { preview: "Prepare today's emails", sample: "Build the sample", buyers_preview: "Prepare today's buyer invitations" };
 
 /** Reply kinds in plain words. */
 const REPLY_WORDS: Record<ReplyClass, string> = {
@@ -227,6 +241,62 @@ async function preview(s: Space, log: Log): Promise<number> {
   return 0;
 }
 
+type BuyerPreviews = { at: string; report: Pick<BuyerSendReport, "date" | "previews" | "blocked" | "failed"> & { skipped: { leadId: string; reason: string }[]; reason?: string } };
+
+/** Today's buyer invitations as they would go out (scored first; a dry run sends and records nothing). */
+async function buyerPreview(s: Space, log: Log): Promise<number> {
+  const { config: c, error } = spaceSettings(s);
+  if (!c) {
+    log(error ?? 'Settings are missing: press "Create the settings file" first.');
+    return 1;
+  }
+  const p = spacePaths(s);
+  const stores = openStores(p.dataDir);
+  const today = spaceToday(s);
+  scoreBuyers(stores, c, { today, now: s.now });
+  const r = await runBuyerInvites(stores, c, { today, now: s.now, transport: new MemoryTransport(), dryRun: true });
+  const saved: BuyerPreviews = { at: isoStamp(s.now), report: { date: r.date, previews: r.previews, blocked: r.blocked, failed: r.failed, skipped: r.plan.skipped, ...(r.plan.reason ? { reason: r.plan.reason } : {}) } };
+  writeJson(appFile(p.dataDir, "buyer-previews.json"), saved);
+  log(r.plan.reason ? `No buyer invitations today: ${r.plan.reason}.` : `${r.previews.length} buyer email(s) ready, ${r.blocked.length} held back by the compliance checks, ${r.plan.skipped.length} left out.`);
+  return 0;
+}
+
+/** The Buyers tab: the funnel by channel, who waits for a person, the newest leads, partners and their links. */
+function buyersState(s: Space, c: EngineConfig, stores: ReturnType<typeof openStores>, today: string) {
+  const leads = stores.buyerLeads.rows();
+  const view = (l: (typeof leads)[number]) => ({
+    lead_id: l.lead_id,
+    status: l.status,
+    kind: l.kind.replace(/_/g, " "),
+    name: l.name,
+    company: l.company,
+    email: l.email,
+    phone: l.phone,
+    state: l.state,
+    source: l.source,
+    detail: l.source_detail,
+    interest: l.interest,
+    score: l.score ?? "",
+    updated: l.updated_at.slice(0, 10),
+  });
+  const signupOk = /^https?:\/\//i.test(c.buyers.signup_url.trim());
+  const kit = signupOk ? postingKit(c) : [];
+  const saved = readJson<BuyerPreviews>(appFile(spacePaths(s).dataDir, "buyer-previews.json"));
+  return {
+    signup_url: c.buyers.signup_url,
+    mailbox: warmMailbox(c)?.email ?? "",
+    funnel: buyerFunnel(stores, today),
+    review: leads.filter((l) => l.status === "review").slice(0, 60).map(view),
+    replied: leads.filter((l) => l.status === "replied").sort((a, b) => b.replied_at.localeCompare(a.replied_at)).slice(0, 60).map(view),
+    leads: [...leads].sort((a, b) => b.updated_at.localeCompare(a.updated_at) || (b.score ?? 0) - (a.score ?? 0)).slice(0, 400).map(view),
+    partners: stores.partners.rows().map((p) => ({ ...p, ...(signupOk ? partnerKit(c, p) : { link: "", note: "" }) })),
+    kit,
+    kinds: BUYER_KINDS,
+    partner_kinds: PARTNER_KINDS,
+    previews: saved && saved.report.date === today ? saved : null,
+  };
+}
+
 /** Record a finished step in its space, so the page shows it after a reload. */
 export function saveLastJob(s: Space, j: JobView): void {
   writeJson(appFile(spacePaths(s).dataDir, "last-job.json"), { ...j, log: j.log.slice(-400) });
@@ -308,6 +378,7 @@ async function state(host: ApiHost, s: Space) {
     mailboxes: data.mailboxes,
     activity: data.activity,
     previews: previews && previews.report.date === today ? previews : null,
+    buyers: buyersState(s, c, stores, today),
   };
 }
 
@@ -346,6 +417,7 @@ export async function api(host: ApiHost, method: string, pathname: string, query
     const action = String(body.action ?? "");
     const mode = host.mode();
     if (action === "preview") return send(await host.job({ action, label: OTHER_LABELS.preview!, run: preview }));
+    if (action === "buyers_preview") return send(await host.job({ action, label: OTHER_LABELS.buyers_preview!, run: buyerPreview }));
     if (action === "sample") {
       return send(
         await host.job({
@@ -363,8 +435,9 @@ export async function api(host: ApiHost, method: string, pathname: string, query
     const a = ACTIONS[action];
     if (!a) throw new ApiError(400, `Unknown action "${action}"`);
     // The sample is fictional and offline: nothing in it goes looking on the internet.
-    if (mode === "sample" && (action === "find" || action === "emails")) throw new ApiError(400, "Switch to your real data first: the sample never goes online.");
+    if (mode === "sample" && ONLINE_ACTIONS.has(action)) throw new ApiError(400, "Switch to your real data first: the sample never goes online.");
     const commands = (host.hosted && a.hosted) || a.commands;
+    if (!commands.length) throw new ApiError(400, `${a.label} needs the desktop app: its download is too large for a hosted step. Run it there, or on any computer with: npm run engine -- ${a.commands[0]!.join(" ")}`);
     return send(
       await host.job({
         action,
@@ -372,6 +445,7 @@ export async function api(host: ApiHost, method: string, pathname: string, query
         run: async (s, log) => {
           // Creating the drafts makes the preview out of date.
           if (action === "drafts") fs.rmSync(appFile(spacePaths(s).dataDir, "previews.json"), { force: true });
+          if (action === "buyers_send") fs.rmSync(appFile(spacePaths(s).dataDir, "buyer-previews.json"), { force: true });
           return runCommands(commands)(s, log);
         },
       }),
@@ -414,6 +488,61 @@ export async function api(host: ApiHost, method: string, pathname: string, query
     const lines: string[] = [];
     const code = await host.write((s) => runCli(["suppress", email, "--reason", "do_not_contact"], cliDeps(s, (l) => lines.push(l))));
     return ok({ ok: !code, log: lines }, code ? 400 : 200);
+  }
+  if (pathname === "/api/buyers/upload") {
+    // A list a person picked on their computer: kept under data/uploads/ and imported by the CLI's own command.
+    const what = String(body.what ?? "");
+    const text = String(body.text ?? "");
+    if (!["list", "registrations", "adv"].includes(what)) throw new ApiError(400, "Pick what the file is.");
+    if (!text.trim()) throw new ApiError(400, "The file is empty.");
+    const name = String(body.name ?? `${what}.csv`).replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 80) || `${what}.csv`;
+    const extra: string[] = [];
+    if (what === "list") {
+      const kind = String(body.kind ?? "");
+      const source = String(body.source ?? "").trim();
+      if (!(BUYER_KINDS as readonly string[]).includes(kind)) throw new ApiError(400, "Pick who is on the list.");
+      if (!source) throw new ApiError(400, "Name the list (the channel it is counted under), for example past-bidders.");
+      extra.push("--kind", kind, "--source", source);
+    }
+    const lines: string[] = [];
+    const code = await host.write(async (s) => {
+      const file = path.join(spacePaths(s).dataDir, "uploads", `${spaceToday(s)}-${name}`);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, text);
+      return runCli(["buyers", "import", what, file, ...extra], cliDeps(s, (l) => lines.push(l)));
+    });
+    return ok({ ok: !code, log: lines }, code ? 400 : 200);
+  }
+  if (pathname === "/api/buyers/review") {
+    const id = String(body.leadId ?? "");
+    const verdict = String(body.verdict ?? "");
+    if (!/^B-\d{5,}$/.test(id) || !["approve", "exclude"].includes(verdict)) throw new ApiError(400, "Pick a buyer and approve or exclude.");
+    const lines: string[] = [];
+    const code = await host.write((s) => runCli(["buyers", "review", id, verdict, "--reason", "decided in the app"], cliDeps(s, (l) => lines.push(l))));
+    return ok({ ok: !code, log: lines }, code ? 400 : 200);
+  }
+  if (pathname === "/api/buyers/add" || pathname === "/api/buyers/partner") {
+    const field = (k: string) => String(body[k] ?? "").trim();
+    const argv =
+      pathname === "/api/buyers/add"
+        ? ["buyers", "add", ...(["email", "name", "company", "kind", "source", "phone", "state"] as const).flatMap((k) => (field(k) ? [`--${k}`, field(k)] : []))]
+        : ["buyers", "partner", "add", ...(["kind", "name", "contact", "email", "phone", "city", "state"] as const).flatMap((k) => (field(k) ? [`--${k}`, field(k)] : []))];
+    const lines: string[] = [];
+    const code = await host.write((s) => runCli(argv, cliDeps(s, (l) => lines.push(l))).catch((err) => {
+      lines.push((err as Error).message);
+      return 1;
+    }));
+    return ok({ ok: !code, log: lines }, code ? 400 : 200);
+  }
+  if (pathname === "/api/buyers/kit") {
+    const { config: c } = spaceSettings(await host.read());
+    if (!c) throw new ApiError(400, "Create the settings file first.");
+    if (!/^https?:\/\//i.test(c.buyers.signup_url.trim())) throw new ApiError(400, "Set buyers.signup_url (AMBrain's registration page) in the settings first.");
+    const str = (k: string) => (typeof body[k] === "string" && (body[k] as string).trim() ? (body[k] as string).trim() : undefined);
+    const ref = str("ref");
+    const headline = str("headline");
+    const facts = str("facts");
+    return ok({ kit: postingKit(c, { ...(ref ? { ref } : {}), ...(headline ? { headline } : {}), ...(facts ? { facts } : {}) }) });
   }
   if (pathname === "/api/settings") {
     // A person edits the settings here; nothing is filled in for them. Bad JSON or a bad field is refused, naming it.

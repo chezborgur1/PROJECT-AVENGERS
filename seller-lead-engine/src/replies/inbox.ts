@@ -174,12 +174,16 @@ export class GmailApiInbox {
     return (await res.json()) as T;
   }
 
-  /** Inbox messages received at or after `sinceIso`, oldest first, excluding mail the mailbox sent itself. */
-  async fetchSince(mailbox: string, sinceIso: string): Promise<InboundMessage[]> {
+  /**
+   * Inbox messages received at or after `sinceIso`, oldest first, excluding
+   * mail the mailbox sent itself. `scope` replaces "in:inbox" (the buyer
+   * inbox's history search reads archived mail too: "-in:sent -in:chats").
+   */
+  async fetchSince(mailbox: string, sinceIso: string, scope = "in:inbox"): Promise<InboundMessage[]> {
     const since = Date.parse(sinceIso);
     if (!Number.isFinite(since)) throw new Error(`Not an ISO date or timestamp: "${sinceIso}"`);
     // Gmail's after: takes epoch seconds; -from:me leaves out the engine's own sends in the same threads.
-    const q = `in:inbox after:${Math.floor(since / 1000)} -from:me`;
+    const q = `${scope} after:${Math.floor(since / 1000)} -from:me`.trim();
     const base = "https://gmail.googleapis.com/gmail/v1/users/me/messages";
     const ids: { id: string; threadId: string }[] = [];
     let pageToken: string | undefined;

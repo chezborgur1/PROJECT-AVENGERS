@@ -44,7 +44,18 @@
     "qualify": "The revenue and owner-earnings range AMB serves, the qualification score at which a lead is warm and handed off, and the timeline horizon in months. auto_send_replies is always false: AI-drafted replies are drafts for a person.",
     "readiness": "include_range adds a rough value range to the exit-readiness check, only from verified rows in reference/multiples.json and only below max_sde_for_range.",
     "lead_sales": "Selling leads to partner brokers. Off until counsel signs off (docs/COMPLIANCE.md): export refuses unless enabled is true and legal_review_ref names the review. flat_fee is a flat dollar amount per lead, never a share of a sale.",
-    "handoff": "The AMB advisor who receives warm sellers; the name goes on each handoff summary."
+    "handoff": "The AMB advisor who receives warm sellers; the name goes on each handoff summary.",
+    "buyers": "The buyer sourcing engine (docs/BUYERS.md): it finds possible buyers and invites each to register on AMBrain with a personal tracking link. Nothing is invited until signup_url is AMBrain's registration page and the licensing sign-off above is in place.",
+    "buyers.signup_url": "AMBrain's buyer registration page. Every link adds ref_param (the buyer's own code) and source_param (the channel), so AMBrain can say which source brought each buyer. AMBrain must keep both values with the account and include them in its registrations export.",
+    "buyers.listing_url": "Optional: a deal's page on AMBrain with {ref} where the deal reference goes, for the posting kit. Blank: kit links go to signup_url.",
+    "buyers.mailbox": "AMB's own mailbox (not a cold sending domain): it receives listing-site inquiries and sends to people who already dealt with AMB. sender_name is the real AMB person who answers it. Blank: the first sending mailbox.",
+    "buyers.inquiry_senders": "Listing sites whose inquiry notifications the buyer inbox reads as buyer inquiries.",
+    "buyers.max_invites_per_day": "Most buyer emails a day, all sources together, follow-ups included. Cold invitations also count against each sending mailbox's ramp cap, shared with seller email.",
+    "buyers.invite_steps": "Emails per buyer: the invitation and up to two follow-ups, follow_up_days apart.",
+    "buyers.strategic_min_staff": "Businesses in AMB's industries with at least this many staff (from the seller side's headcount) become strategic add-on buyers, unless they are in the seller sequence.",
+    "buyers.fund_types": "Form D fund types kept as buyers, and fund_max_offering the largest offering kept.",
+    "buyers.priority_states": "Two-letter states whose buyers score higher. Blank: the target metros' states.",
+    "buyers.sec_user_agent": "The SEC asks every automated download to name a company and a contact email, for example \"AMB Advisory Services ops@ambadvisoryservices.com\". Blank: the firm name and buyers.mailbox."
   },
   "firm": {
     "name": "AMB Advisory Services",
@@ -285,5 +296,27 @@
   "handoff": {
     "advisor_name": "",
     "advisor_email": ""
+  },
+  "buyers": {
+    "signup_url": "",
+    "listing_url": "",
+    "ref_param": "ref",
+    "source_param": "src",
+    "mailbox": {
+      "email": "",
+      "sender_name": "",
+      "sender_title": "",
+      "warmup_started": "2000-01-01",
+      "paused": false
+    },
+    "inquiry_senders": ["bizbuysell.com", "bizquest.com", "businessesforsale.com", "dealstream.com", "axial.net", "axial.com", "loopnet.com", "bizben.com", "businessbroker.net", "globalbx.com", "flippa.com"],
+    "max_invites_per_day": 40,
+    "invite_steps": 2,
+    "follow_up_days": 6,
+    "strategic_min_staff": 20,
+    "fund_types": ["Private Equity Fund", "Other Investment Fund"],
+    "fund_max_offering": 500000000,
+    "priority_states": [],
+    "sec_user_agent": ""
   }
 }

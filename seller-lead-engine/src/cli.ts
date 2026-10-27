@@ -27,6 +27,7 @@
 //   status                                 counts, mailbox health and today's caps
 //   demo                                   the whole loop offline on samples/tampa-bay in a temp folder
 //   app [--no-open] [--port N]             the desktop app: a window with a button for every step (src/app/)
+//   buyers <step>                          the buyer sourcing engine (src/buyers/, docs/BUYERS.md)
 //
 // The CLI is the only place that reads the clock: main() takes today and now
 // once and passes them into every module (DESIGN.md principle 1). Config and
@@ -43,6 +44,8 @@ import { fileURLToPath } from "node:url";
 import { engineEnv, loadConfig, type EngineConfig, type EngineEnv } from "./config.ts";
 import type { OutgoingMessage } from "./domain/messages.ts";
 import { normalizeEmail, SUPPRESSION_REASONS, type LeadRow, type LeadStage, type ProspectRow, type SuppressionRow, type TouchRow } from "./domain/schema.ts";
+import { BUYERS_USAGE, runBuyers } from "./buyers/commands.ts";
+import { recordBuyerDelivery } from "./buyers/invite.ts";
 import { aiDisclosure, buildFooter } from "./compliance/footer.ts";
 import { assertSendable, ComplianceError } from "./compliance/gate.ts";
 import { findMailbox } from "./compliance/lint.ts";
@@ -521,13 +524,14 @@ export const cmdRecord: Command = async (args, deps) => {
   const messageId = flag(args, "--message-id");
   const threadId = flag(args, "--thread-id");
   const error = flag(args, "--error");
-  recordDelivery(
-    storesOf(deps),
-    touchId,
-    { status: status as (typeof RECORD_STATUSES)[number], ...(draftId ? { draftId } : {}), ...(messageId ? { messageId } : {}), ...(threadId ? { threadId } : {}), ...(error ? { error } : {}) },
-    deps.now,
-    configOf(deps),
-  );
+  const result = { status: status as (typeof RECORD_STATUSES)[number], ...(draftId ? { draftId } : {}), ...(messageId ? { messageId } : {}), ...(threadId ? { threadId } : {}), ...(error ? { error } : {}) };
+  // Buyer emails (BT-) share the outbox and the routine's record command.
+  if (/^BT-/i.test(touchId)) {
+    recordBuyerDelivery(storesOf(deps), touchId.toUpperCase(), result, deps.now);
+    deps.log(`Recorded ${touchId} as ${status}.`);
+    return 0;
+  }
+  recordDelivery(storesOf(deps), touchId, result, deps.now, configOf(deps));
   deps.log(`Recorded ${touchId} as ${status}.`);
   return 0;
 };
@@ -871,6 +875,8 @@ export const cmdDaily: Command = async (args, deps) => {
     return 1;
   }
   await step("send", () => cmdSend(["--date", today], day));
+  // The buyer side runs once AMBrain's registration address is set; its own sync honours buyer opt-outs before its send.
+  if (config.buyers.signup_url.trim()) await step("buyers", () => cmdBuyers(["daily", "--date", today], day));
   return code;
 };
 
@@ -908,6 +914,32 @@ export const cmdDemo: Command = async (_args, deps) => {
   await runDemo({ log: deps.log, today: deps.today, now: deps.now });
   return 0;
 };
+
+/** The context the buyer commands run in: this CLI's clock, paths, transport and helpers. */
+function buyerContext(deps: CliDeps) {
+  return {
+    today: deps.today,
+    now: deps.now,
+    cwd: deps.cwd,
+    log: deps.log,
+    env: envOf(deps),
+    config: () => configOf(deps),
+    stores: () => storesOf(deps),
+    transport: (config: EngineConfig, stores: Stores, today: string) => transportFor(deps, config, stores, today),
+    ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+    ...(deps.resolveMx ? { resolveMx: deps.resolveMx } : {}),
+    flag,
+    has,
+    positionals,
+    shown: (file: string) => shown(deps, file),
+    sendBlockers,
+    sendWindowBlock,
+    usage: (message: string) => new UsageError(message),
+  };
+}
+
+/** The buyer sourcing engine: `buyers <step>` (src/buyers/commands.ts). */
+export const cmdBuyers: Command = async (args, deps) => runBuyers(args, buyerContext(deps));
 
 /** Open the desktop app: one window with a button for every step. Runs until its window is closed with Ctrl+C or the console window is closed. */
 export const cmdApp: Command = async (args, deps) => {
@@ -957,7 +989,8 @@ export const USAGE = `lead-engine: AMB Advisory seller lead engine (npm run engi
   daily [--date YYYY-MM-DD]              sync (gmail_api), qualify, handoff, send: the scheduled routine
   status                                 counts, mailbox health and today's caps
   demo                                   the whole loop offline on samples/tampa-bay in a temp folder
-  app [--no-open] [--port N]             open the desktop app: a window with a button for every step`;
+  app [--no-open] [--port N]             open the desktop app: a window with a button for every step
+${BUYERS_USAGE}`;
 
 /** Print the command list. */
 export const cmdHelp: Command = async (_args, deps) => {
@@ -992,6 +1025,7 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
   status: cmdStatus,
   demo: cmdDemo,
   app: cmdApp,
+  buyers: cmdBuyers,
   help: cmdHelp,
 };
 

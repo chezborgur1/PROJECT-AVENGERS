@@ -85,6 +85,10 @@
   td.num, th.num { text-align: right; }
   td .acts { display: flex; gap: 4px; flex-wrap: wrap; }
   .scroll { overflow-x: auto; }
+  .stack { display: flex; flex-direction: column; gap: 8px; }
+  .stack label { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--muted); }
+  .kit { border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; margin-top: 10px; }
+  .kit pre { white-space: pre-wrap; margin: 6px 0 0; font: inherit; }
   .tag { display: inline-block; padding: 1px 7px; border-radius: 5px; background: var(--bg); border: 1px solid var(--line); font-size: 12px; white-space: nowrap; }
   .tag.hot { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
   .email { border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; margin-bottom: 8px; }
@@ -132,6 +136,7 @@
     <button data-act="tab" data-tab="warm">Warm sellers <span class="count" id="warmCount">0</span></button>
     <button data-act="tab" data-tab="replies">Replies</button>
     <button data-act="tab" data-tab="all">All businesses</button>
+    <button data-act="tab" data-tab="buyers">Buyers <span class="count" id="buyerCount">0</span></button>
     <button data-act="tab" data-tab="settings">Settings and mailboxes</button>
   </nav>
 </header>
@@ -186,6 +191,72 @@
     </div>
   </section>
 
+  <section class="tab" id="tab-buyers">
+    <div id="buyerAlert"></div>
+    <div class="tiles" id="buyerTiles"></div>
+    <div class="card">
+      <h2>Buyer steps <small>Each one finds buyers or invites them to register on AMBrain with their own tracked link.</small></h2>
+      <div class="steps" id="buyerSteps"></div>
+      <div id="buyerJob"></div>
+    </div>
+    <div class="card" id="buyerEmails"></div>
+    <div class="two">
+      <div class="card">
+        <h2>Waiting for a person</h2>
+        <div class="scroll" id="buyerWaiting"></div>
+      </div>
+      <div class="card">
+        <h2>Add a buyer list <small>Past bidders, buy-side clients, a conference list, a listing site's lead export</small></h2>
+        <form id="buyerUpload" class="stack">
+          <label>File (CSV) <input type="file" id="buyerFile" accept=".csv,text/csv" required></label>
+          <label>What it is <select id="buyerWhat"><option value="list">A list of buyers</option><option value="registrations">AMBrain's registrations export</option><option value="adv">An SEC adviser list</option></select></label>
+          <label id="buyerKindRow">Who is on it <select id="buyerKind"></select></label>
+          <label id="buyerSourceRow">Name of the list <input type="text" id="buyerSource" placeholder="past-bidders"></label>
+          <div><button class="btn primary" type="submit">Add the list</button></div>
+        </form>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Where buyers come from <small>Registered as a share of invited, by channel</small></h2>
+      <div class="scroll" id="buyerFunnel"></div>
+    </div>
+    <div class="card">
+      <h2>Partners <small>Lenders, ETA clubs, CPAs and others who send buyers. Each has a link of their own.</small></h2>
+      <div class="scroll" id="partnerTable"></div>
+      <form id="partnerForm" class="filters" style="margin-top:10px">
+        <select id="partnerKind"></select>
+        <input type="text" id="partnerName" placeholder="Name" required>
+        <input type="text" id="partnerContact" placeholder="Contact person">
+        <input type="email" id="partnerEmail" placeholder="Email">
+        <input type="text" id="partnerCity" placeholder="City">
+        <button class="btn" type="submit">Add partner</button>
+      </form>
+    </div>
+    <div class="card">
+      <h2>Posting kit <small>Copy-ready text for the places AMB announces deals, each with its own tracked link</small></h2>
+      <form id="kitForm" class="filters">
+        <input type="text" id="kitRef" placeholder="Deal reference on AMBrain (optional)">
+        <input type="text" id="kitHeadline" placeholder="Headline (optional)">
+        <input type="text" id="kitFacts" placeholder="Facts line (optional)" style="flex:2">
+        <button class="btn" type="submit">Make the kit</button>
+      </form>
+      <div id="kit"></div>
+    </div>
+    <div class="card">
+      <h2>All buyers <small id="buyerAllCount"></small></h2>
+      <div class="filters"><input type="search" id="buyerSearch" placeholder="Search name, company, email, channel or status"></div>
+      <div class="scroll" id="buyerTable"></div>
+      <form id="buyerAddForm" class="filters" style="margin-top:10px">
+        <input type="email" id="addEmail" placeholder="buyer@firm.com">
+        <input type="text" id="addName" placeholder="Name">
+        <input type="text" id="addCompany" placeholder="Company">
+        <select id="addKind"></select>
+        <input type="text" id="addSource" placeholder="Channel (e.g. referral-jane)">
+        <button class="btn" type="submit">Add one buyer</button>
+      </form>
+    </div>
+  </section>
+
   <section class="tab" id="tab-settings">
     <div class="card">
       <h2>Before any email goes out</h2>
@@ -235,6 +306,7 @@ let lastJobRunning = false;
 let pending = null;
 const shown = {};
 const view = { sort: "score", dir: -1, search: "", status: "" };
+const buyerView = { search: "" };
 
 const $ = (id) => document.getElementById(id);
 const esc = (v) => String(v == null ? "" : v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -324,11 +396,12 @@ function render() {
   part("repliesTable", s.replies, renderReplies);
   part("allTable", [s.businesses, view], renderAll);
   part("mailboxTable", s.mailboxes, renderMailboxes);
+  renderBuyers(s);
   part("account", s.hosted, () => { $("account").innerHTML = s.hosted ? '<a href="/logout">Sign out</a>' : ""; });
   part("folders", s.hosted, () => {
     if (s.hosted) {
       $("foldersCard").querySelector("h2").textContent = "Where your data is";
-      $("dataDir").textContent = "Everything is saved in the app's database. In the database's own tools, the views amb_prospects, amb_leads, amb_replies, amb_emails and amb_do_not_contact show the main tables.";
+      $("dataDir").textContent = "Everything is saved in the app's database. In the database's own tools, the views amb_prospects, amb_leads, amb_replies, amb_emails, amb_do_not_contact, amb_buyers, amb_buyer_emails and amb_buyer_partners show the main tables.";
       $("folderButtons").innerHTML = "";
     } else $("dataDir").textContent = s.dataDir ? "Everything is kept in the folder " + s.dataDir + " on this computer." : "";
   });
@@ -400,14 +473,18 @@ function renderJob(s) {
   }
   lastJobRunning = Boolean(j && j.running);
   part("job", [j, pending], () => {
+    // Buyer steps show their log on the Buyers tab, the others on Today.
+    const buyer = Boolean((pending && pending.buyer) || (!pending && j && String(j.action).startsWith("buyers")));
+    const target = buyer ? "buyerJob" : "job";
+    $(buyer ? "job" : "buyerJob").innerHTML = "";
     if (pending) {
-      $("job").innerHTML = '<div class="job"><div class="head"><strong>' + esc(pending.label) + '</strong><span class="spin"></span> Working</div><pre>'
+      $(target).innerHTML = '<div class="job"><div class="head"><strong>' + esc(pending.label) + '</strong><span class="spin"></span> Working</div><pre>'
         + esc(s.hosted ? "Working on it. A step can take up to five minutes: keep this page open." : "Starting...") + "</pre></div>";
       return;
     }
-    if (!j) { $("job").innerHTML = ""; return; }
+    if (!j) { $(target).innerHTML = ""; return; }
     const status = j.running ? '<span class="spin"></span> Running' : j.code === 0 ? '<span class="ok">&#10003; Done</span>' : '<span class="bad">Finished with problems: read the lines below</span>';
-    $("job").innerHTML = '<div class="job"><div class="head"><strong>' + esc(j.label) + "</strong>" + status + '<div class="grow"></div><span class="muted">started ' + esc(j.startedAt ? new Date(j.startedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : '') + '</span></div><pre id="jobLog">' + esc(j.log.join("\n")) + "</pre></div>";
+    $(target).innerHTML = '<div class="job"><div class="head"><strong>' + esc(j.label) + "</strong>" + status + '<div class="grow"></div><span class="muted">started ' + esc(j.startedAt ? new Date(j.startedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : '') + '</span></div><pre id="jobLog">' + esc(j.log.join("\n")) + "</pre></div>";
     const pre = $("jobLog");
     pre.scrollTop = pre.scrollHeight;
   });
@@ -524,6 +601,98 @@ function renderMailboxes(rows) {
     + rows.map((m) => "<tr><td>" + esc(m.mailbox) + '</td><td><span class="tag">' + esc(m.state) + '</span></td><td class="num">' + m.used_today + " of " + m.cap_today + '</td><td class="num">' + m.sends_14d + '</td><td class="num">' + (100 * m.bounce_rate).toFixed(1) + '%</td><td class="num">' + m.complaints + "</td><td>" + esc(m.reason) + "</td></tr>").join("") + "</table>";
 }
 
+const BUYER_STEPS = [
+  { action: "buyers_inbox", title: "Check buyer inquiries", text: "Reads the buyer mailbox: listing-site inquiries become buyers, opt-outs are honoured, replies wait for a person." },
+  { action: "buyers_find", title: "Find buyers", text: "Larger businesses in your industries from the seller records (add-on buyers), and private equity and search funds from the SEC's Form D filings." },
+  { action: "buyers_sba", title: "Find SBA lenders and acquirers", text: "SBA's loan records: the lenders who finance the most business purchases in your states become partners, and the businesses they financed become buyers.", desktop: true },
+  { action: "buyers_emails", title: "Find buyer emails", text: "Looks for a published address on each firm's own website and checks it can receive mail." },
+  { action: "buyers_preview", title: "Prepare today's buyer invitations", text: "Shows today's invitations below for you to read. Nothing is saved or sent." },
+  { action: "buyers_send", title: "Create buyer invitations", text: "Puts today's invitations into Gmail Drafts, each with the buyer's own AMBrain link." },
+];
+
+function renderBuyers(s) {
+  const b = s.buyers;
+  $("buyerCount").textContent = b ? b.funnel.totals.registered : 0;
+  part("buyerAlert", [b && b.signup_url, s.configured], () => {
+    $("buyerAlert").innerHTML = !s.configured ? '<div class="alert warn">Create the settings file first (Settings tab).</div>'
+      : !b.signup_url ? '<div class="alert warn"><strong>Set AMBrain\'s registration address first.</strong> In the settings, fill in <code>buyers.signup_url</code> with AMBrain\'s buyer sign-up page. Every invitation links to it with the buyer\'s own code, so AMBrain can tell which channel brought each buyer. Buyers can be found before it is set; nobody is invited until it is.</div>' : "";
+  });
+  if (!b) return;
+  const f = b.funnel;
+  part("buyerTiles", f, () => {
+    const t = (n, l, hot) => '<div class="tile' + (hot ? " hot" : "") + '"><div class="n">' + esc(Number(n).toLocaleString()) + '</div><div class="l">' + esc(l) + "</div></div>";
+    $("buyerTiles").innerHTML = t(f.totals.found, "buyers found") + t(f.totals.reachable, "with an email") + t(f.totals.invited, "invited") + t(f.totals.registered, "registered on AMBrain", f.totals.registered > 0) + t(f.totals.verified, "verified") + t(f.attention.review + f.attention.replied, "waiting for a person", f.attention.review + f.attention.replied > 0);
+  });
+  part("buyerSteps", [busy(), s.hosted, s.configured, b.signup_url, s.mode], () => {
+    $("buyerSteps").innerHTML = BUYER_STEPS.map((st) => {
+      let why = "";
+      if (!s.configured) why = "Create the settings file first.";
+      else if ((st.action === "buyers_preview" || st.action === "buyers_send") && !b.signup_url) why = "Set buyers.signup_url first.";
+      else if (st.desktop && s.hosted) why = "Needs the desktop app: the file is too large for the hosted app.";
+      return '<div class="step"><div class="t">' + esc(st.title) + '</div><div class="d">' + esc(st.text) + "</div>" + (why ? '<div class="why">' + esc(why) + "</div>" : "")
+        + '<div><button class="btn' + (st.action === "buyers_send" ? " primary" : "") + '" data-act="run" data-action="' + st.action + '"' + dis(Boolean(why)) + ">" + esc(st.title) + "</button></div></div>";
+    }).join("");
+  });
+  part("buyerEmails", [b.previews, busy()], () => {
+    const p = b.previews;
+    let html = "<h2>Today's buyer invitations <small>Read them before you approve</small></h2>";
+    if (!p) html += '<p class="muted">Press <strong>Prepare today\'s buyer invitations</strong> to see them here.</p>';
+    else {
+      const r = p.report;
+      if (r.reason) html += '<p class="warn">No invitations today: ' + esc(r.reason) + "</p>";
+      html += r.previews.length ? "<p>" + r.previews.length + " email(s) ready. Approving puts them in Gmail Drafts.</p>" : r.reason ? "" : '<p class="muted">Nobody to invite today.</p>';
+      html += r.previews.map((e) => '<div class="email"><div class="meta">To ' + esc(e.to) + " from " + esc(e.mailbox) + '</div><div class="subj">' + esc(e.subject) + "</div><details><summary>Read the email</summary><pre>" + esc(e.body) + "</pre></details></div>").join("");
+      if (r.blocked.length) html += "<details><summary>" + r.blocked.length + " held back by the compliance checks</summary><ul>" + r.blocked.map((x) => "<li>" + esc(x.leadId) + ": " + esc(x.reasons.join("; ")) + "</li>").join("") + "</ul></details>";
+      if (r.skipped.length) html += "<details><summary>" + r.skipped.length + " left out today, and why</summary><ul>" + r.skipped.slice(0, 200).map((x) => "<li>" + esc(x.leadId) + ": " + esc(x.reason) + "</li>").join("") + "</ul></details>";
+      if (r.previews.length) html += '<div style="margin-top:10px"><button class="btn primary" data-act="run" data-action="buyers_send"' + dis(!s.ready_to_send) + ">Approve and create Gmail drafts</button>" + (s.ready_to_send ? "" : ' <span class="warn">Finish the settings first.</span>') + "</div>";
+    }
+    $("buyerEmails").innerHTML = html;
+  });
+  part("buyerWaiting", [b.review, b.replied, busy()], () => {
+    const rows = [...b.review.map((l) => ({ ...l, why: "Wrote about buying: invite?" })), ...b.replied.map((l) => ({ ...l, why: "Replied: answer them" }))];
+    if (!rows.length) { $("buyerWaiting").innerHTML = '<p class="muted">Nobody waiting.</p>'; return; }
+    $("buyerWaiting").innerHTML = "<table><tr><th>Who</th><th>Why</th><th>What we know</th><th></th></tr>" + rows.map((l) => "<tr><td>" + esc(l.name || l.email) + "<div class=\"muted\">" + esc([l.company, l.email].filter(Boolean).join(", ")) + "</div></td><td>" + esc(l.why) + "</td><td>" + esc(l.detail) + (l.interest ? "<div class=\"muted\">" + esc(l.interest) + "</div>" : "") + "</td><td>"
+      + (l.status === "review" ? '<button class="btn small primary" data-act="review" data-verdict="approve" data-id="' + esc(l.lead_id) + '"' + dis() + '>Invite</button> <button class="btn small quiet" data-act="review" data-verdict="exclude" data-id="' + esc(l.lead_id) + '"' + dis() + ">Leave out</button>" : "") + "</td></tr>").join("") + "</table>";
+  });
+  part("buyerFunnel", f, () => {
+    const pct = (r) => (r == null ? "" : Math.round(r * 100) + "%");
+    $("buyerFunnel").innerHTML = f.bySource.length
+      ? '<table><tr><th>Channel</th><th class="num">Found</th><th class="num">With email</th><th class="num">Invited</th><th class="num">Replied</th><th class="num">Registered</th><th class="num">Verified</th><th class="num">Rate</th></tr>'
+        + [...f.bySource, f.totals].map((r) => "<tr><td>" + esc(r.source === "all" ? "All channels" : r.source) + '</td><td class="num">' + r.found + '</td><td class="num">' + r.reachable + '</td><td class="num">' + r.invited + '</td><td class="num">' + r.replied + '</td><td class="num">' + r.registered + '</td><td class="num">' + r.verified + '</td><td class="num">' + pct(r.rate) + "</td></tr>").join("") + "</table>"
+        + '<p class="muted">Last 7 days: ' + f.invitedLast7 + " invited, " + f.registeredLast7 + " registered.</p>"
+      : '<p class="muted">No buyers yet. Press <strong>Check buyer inquiries</strong> or <strong>Find buyers</strong>, or add a list.</p>';
+  });
+  part("partnerTable", [b.partners, busy()], () => {
+    $("partnerTable").innerHTML = b.partners.length
+      ? "<table><tr><th>Partner</th><th>Why</th><th>Status</th><th>Their link</th></tr>" + b.partners.map((p) => "<tr><td>" + esc(p.name) + '<div class="muted">' + esc([p.kind.replace(/_/g, " "), p.contact_name, p.city].filter(Boolean).join(", ")) + "</div></td><td>" + esc(p.evidence) + '</td><td><span class="tag">' + esc(p.status) + "</span></td><td>"
+        + (p.link ? '<button class="btn small" data-act="copy" data-text="' + esc(p.link) + '">Copy link</button> <button class="btn small quiet" data-act="copy" data-text="' + esc(p.note) + '">Copy note</button>' : '<span class="muted">Set buyers.signup_url</span>') + "</td></tr>").join("") + "</table>"
+      : '<p class="muted">No partners yet. <strong>Find SBA lenders and acquirers</strong> lists the lenders who finance the most business purchases; add others below.</p>';
+  });
+  part("buyerSelects", [b.kinds, b.partner_kinds], () => {
+    const opts = (list) => list.map((k) => '<option value="' + esc(k) + '">' + esc(k.replace(/_/g, " ")) + "</option>").join("");
+    $("buyerKind").innerHTML = opts(b.kinds);
+    $("addKind").innerHTML = opts(b.kinds);
+    $("addKind").value = "referral";
+    $("partnerKind").innerHTML = opts(b.partner_kinds);
+  });
+  part("kitDefault", b.kit, () => renderKit(b.kit));
+  part("buyerTable", [b.leads, buyerView], () => {
+    const q = buyerView.search.trim().toLowerCase();
+    const rows = b.leads.filter((l) => !q || [l.name, l.company, l.email, l.source, l.status, l.kind, l.state].join(" ").toLowerCase().includes(q));
+    $("buyerAllCount").textContent = f.totals.found.toLocaleString() + " in all" + (b.leads.length < f.totals.found ? ", newest " + b.leads.length + " shown" : "");
+    $("buyerTable").innerHTML = rows.length
+      ? '<table><tr><th>Buyer</th><th>Company</th><th>Email</th><th>Kind</th><th>Channel</th><th>Status</th><th class="num">Score</th><th>Found</th></tr>'
+        + rows.map((l) => "<tr><td>" + esc(l.name) + "</td><td>" + esc(l.company) + "</td><td>" + esc(l.email) + "</td><td>" + esc(l.kind) + "</td><td>" + esc(l.source) + '</td><td><span class="tag">' + esc(l.status.replace(/_/g, " ")) + '</span></td><td class="num">' + esc(l.score) + '</td><td title="' + esc(l.detail) + '">' + esc(l.detail.slice(0, 60)) + "</td></tr>").join("") + "</table>"
+      : '<p class="muted">No buyers match.</p>';
+  });
+}
+
+function renderKit(kit) {
+  $("kit").innerHTML = (kit || []).length
+    ? kit.map((k) => '<div class="kit"><div class="row"><strong>' + esc(k.label) + '</strong> <span class="muted">' + esc(k.note) + '</span><div class="grow"></div><button class="btn small" data-act="copy" data-text="' + esc(k.text) + '">Copy</button></div><pre>' + esc(k.text) + "</pre></div>").join("")
+    : '<p class="muted">Set buyers.signup_url in the settings to make the kit.</p>';
+}
+
 function showTab(name) {
   document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === name));
   document.querySelectorAll("section.tab").forEach((x) => x.classList.toggle("on", x.id === "tab-" + name));
@@ -569,8 +738,9 @@ async function act(el) {
       return part("allTable", [state.businesses, view], renderAll);
     }
     if (a === "run") {
-      showTab("today");
-      pending = { label: el.textContent.trim() };
+      const buyer = el.dataset.action.startsWith("buyers");
+      showTab(buyer ? "buyers" : "today");
+      pending = { label: el.textContent.trim(), buyer };
       render();
       try {
         const r = await api("POST", "/api/action", { action: el.dataset.action });
@@ -595,6 +765,13 @@ async function act(el) {
       $("modalTitle").textContent = "Handoff note: " + el.dataset.name;
       $("modalBody").textContent = r.text;
       $("modal").classList.add("on");
+      return;
+    } else if (a === "review") {
+      if (el.dataset.verdict === "exclude" && !confirm("Leave this person out? They are never invited.")) return;
+      await api("POST", "/api/buyers/review", { leadId: el.dataset.id, verdict: el.dataset.verdict });
+      toast(el.dataset.verdict === "approve" ? "Approved: they are invited with the next batch." : "Left out.");
+    } else if (a === "copy") {
+      try { await navigator.clipboard.writeText(el.dataset.text); toast("Copied."); } catch (e) { toast("Select the text and copy it by hand.", 5000); }
       return;
     } else if (a === "open") {
       const r = await api("POST", "/api/open", { what: el.dataset.what });
@@ -625,6 +802,49 @@ $("suppressForm").addEventListener("submit", async (e) => {
     $("suppressEmail").value = "";
     toast(email + " is on the do-not-contact list.");
     refresh();
+  } catch (err) { toast(err.message, 7000); }
+});
+$("buyerSearch").addEventListener("input", (e) => { buyerView.search = e.target.value; if (state) renderBuyers(state); });
+$("buyerWhat").addEventListener("change", (e) => {
+  const list = e.target.value === "list";
+  $("buyerKindRow").style.display = list ? "" : "none";
+  $("buyerSourceRow").style.display = list ? "" : "none";
+});
+$("buyerUpload").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const file = $("buyerFile").files[0];
+  if (!file) return;
+  if (file.size > 4 * 1024 * 1024) { toast("That file is over 4 MB: import it with the command line (npm run engine -- buyers import ...).", 8000); return; }
+  try {
+    const r = await api("POST", "/api/buyers/upload", { what: $("buyerWhat").value, name: file.name, text: await file.text(), kind: $("buyerKind").value, source: $("buyerSource").value });
+    toast((r.log || []).join(" ") || "Added.", 8000);
+    $("buyerUpload").reset();
+    refresh();
+  } catch (err) { toast(err.message, 8000); }
+});
+$("partnerForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    await api("POST", "/api/buyers/partner", { kind: $("partnerKind").value, name: $("partnerName").value, contact: $("partnerContact").value, email: $("partnerEmail").value, city: $("partnerCity").value });
+    $("partnerForm").reset();
+    toast("Partner added. Copy their link from the table.");
+    refresh();
+  } catch (err) { toast(err.message, 7000); }
+});
+$("buyerAddForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    const r = await api("POST", "/api/buyers/add", { email: $("addEmail").value, name: $("addName").value, company: $("addCompany").value, kind: $("addKind").value, source: $("addSource").value });
+    $("buyerAddForm").reset();
+    toast((r.log || []).join(" ") || "Added.");
+    refresh();
+  } catch (err) { toast(err.message, 7000); }
+});
+$("kitForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    const r = await api("POST", "/api/buyers/kit", { ref: $("kitRef").value, headline: $("kitHeadline").value, facts: $("kitFacts").value });
+    renderKit(r.kit);
   } catch (err) { toast(err.message, 7000); }
 });
 try { const t = sessionStorage.getItem("tab"); if (t) showTab(t); } catch (e) { /* first visit */ }

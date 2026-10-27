@@ -159,6 +159,39 @@ export const EngineConfigSchema = z.object({
     legal_review_ref: z.string().default(""),
     flat_fee: z.number().default(0),
   }).prefault({}),
+  buyers: z.object({
+    /** AMBrain's buyer registration page. Invitations wait until it is set: every invitation links to it with the buyer's tracking code. */
+    signup_url: z.string().default(""),
+    /** Optional: a deal's page on AMBrain, with {ref} for the deal's reference, for the posting kit. Without it the kit links to signup_url. */
+    listing_url: z.string().default(""),
+    /** Query parameters AMBrain reads: the buyer's tracking code and the channel. */
+    ref_param: z.string().default("ref"),
+    source_param: z.string().default("src"),
+    /** AMB's own mailbox, which receives listing inquiries and sends warm invitations (people who already dealt with AMB). Blank: the first sending mailbox. */
+    mailbox: z.object({
+      email: z.string().default(""),
+      sender_name: z.string().default(""),
+      sender_title: z.string().default(""),
+      warmup_started: z.string().default("2000-01-01"),
+      paused: z.boolean().default(false),
+    }).prefault({}),
+    /** Listing sites whose inquiry notifications the buyer inbox reads (a sender at one of these domains is an inquiry). */
+    inquiry_senders: z.array(z.string()).default(["bizbuysell.com", "bizquest.com", "businessesforsale.com", "dealstream.com", "axial.net", "axial.com", "loopnet.com", "bizben.com", "businessbroker.net", "globalbx.com", "flippa.com"]),
+    /** New invitations a day, all sources together; follow-ups count too. Each mailbox's own cap (sending.ramp) still holds. */
+    max_invites_per_day: z.number().int().nonnegative().default(40),
+    /** Invitations per buyer (the first and its follow-up), and the days between them. */
+    invite_steps: z.number().int().min(1).max(3).default(2),
+    follow_up_days: z.number().int().positive().default(6),
+    /** Strategic buyers: businesses in an AMB industry with at least this many staff (headcount from the seller side). */
+    strategic_min_staff: z.number().int().positive().default(20),
+    /** Form D funds: the fund types kept, and the largest offering kept (a fund much larger rarely buys a $1M to $10M business). */
+    fund_types: z.array(z.string()).default(["Private Equity Fund", "Other Investment Fund"]),
+    fund_max_offering: z.number().default(500_000_000),
+    /** States buyers are wanted from first (two-letter codes). Blank: the states of the target metros. */
+    priority_states: z.array(z.string()).default([]),
+    /** The User-Agent the SEC asks every automated request to carry: a company name and a contact email. */
+    sec_user_agent: z.string().default(""),
+  }).prefault({}),
   handoff: z.object({
     /** Advisor who receives warm sellers. */
     advisor_name: z.string().default(""),
